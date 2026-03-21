@@ -6,15 +6,39 @@ Servidor de licencias propio para usar con un fork de Pangolin.
 
 Pangolin tiene la clave pública de Fossorial **hardcodeada** en el código. Sin la clave privada de Fossorial, no puedes generar JWTs válidos. Por eso necesitas:
 
-1. Tu propio par de claves RSA (incluidas en este directorio)
+1. Tu propio par de claves RSA (generadas automáticamente)
 2. Modificar Pangolin para usar tu clave pública
 3. Este servidor para responder a las solicitudes de licencia
 
 ## Instalación
 
+### Opción 1: Docker (Recomendado)
+
+```bash
+cd license-server
+
+# Construir y ejecutar
+docker compose up -d
+
+# Ver logs (incluye la public key que debes copiar)
+docker compose logs -f
+
+# Obtener la public key para parchear Pangolin
+docker compose exec license-server cat /app/keys/public.pem
+```
+
+### Opción 2: Node.js directo
+
 ```bash
 cd license-server
 npm install
+
+# Generar claves RSA (si no existen)
+openssl genrsa -out private.pem 2048
+openssl rsa -in private.pem -pubout -out public.pem
+
+# Iniciar servidor
+npm start
 ```
 
 ## Flujo de trabajo para el Fork
@@ -61,11 +85,57 @@ docker build -t mi-pangolin:latest .
 ### En tu servidor (donde correrá el license-server)
 
 ```bash
-cd license-server
+# Con Docker
+docker compose up -d
+
+# O con Node.js
 npm start
 ```
 
 El servidor correrá en el puerto 3456 (configurable via `PORT=XXXX`)
+
+### Docker Compose con SSL (Producción)
+
+Para producción, descomenta la sección de nginx en `docker-compose.yml` y crea los certificados:
+
+```bash
+# Crear directorio de certificados
+mkdir -p certs
+
+# Opción A: Certificado autofirmado (solo para testing)
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout certs/key.pem -out certs/cert.pem \
+  -subj "/CN=api.fossorial.io"
+
+# Opción B: Let's Encrypt (producción)
+# Usa certbot o tu método preferido
+```
+
+Crea `nginx.conf`:
+
+```nginx
+events {
+    worker_connections 1024;
+}
+
+http {
+    server {
+        listen 443 ssl;
+        server_name api.fossorial.io;
+
+        ssl_certificate /etc/nginx/certs/cert.pem;
+        ssl_certificate_key /etc/nginx/certs/key.pem;
+
+        location / {
+            proxy_pass http://license-server:3456;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+    }
+}
+```
 
 ### En el servidor de Pangolin
 
@@ -83,25 +153,7 @@ echo "IP_DE_TU_LICENSE_SERVER api.fossorial.io" >> /etc/hosts
 - Un certificado SSL válido para `api.fossorial.io` en tu servidor, O
 - Modificar el código para usar HTTP (no recomendado)
 
-### Opción con proxy reverso (recomendada)
 
-Usar nginx/traefik como proxy con SSL:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name api.fossorial.io;
-    
-    ssl_certificate /path/to/cert.pem;
-    ssl_certificate_key /path/to/key.pem;
-    
-    location / {
-        proxy_pass http://localhost:3456;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-}
-```
 
 ## Licencias Válidas por Defecto
 
@@ -171,4 +223,50 @@ El servidor genera tokens JWT con esta estructura:
   "iat": 1711036800,
   "exp": 1742572800
 }
+```
+
+## Arquitectura Docker
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     Tu Servidor                          │
+│                                                          │
+│  ┌─────────────┐      ┌──────────────────────────────┐  │
+│  │   Pangolin  │      │      License Server          │  │
+│  │  (Docker)   │─────▶│  ┌─────────┐  ┌──────────┐  │  │
+│  │             │      │  │ Express │  │ RSA Keys │  │  │
+│  │             │      │  │  :3456  │  │ (volume) │  │  │
+│  └─────────────┘      │  └─────────┘  └──────────┘  │  │
+│        │              └──────────────────────────────┘  │
+│        │                        ▲                        │
+│        │   api.fossorial.io     │                        │
+│        └────────────────────────┘                        │
+│           (DNS/hosts redirect)                           │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Comandos Docker Útiles
+
+```bash
+# Ver estado
+docker compose ps
+
+# Ver logs
+docker compose logs -f license-server
+
+# Reiniciar
+docker compose restart
+
+# Parar
+docker compose down
+
+# Reconstruir (después de cambios)
+docker compose up -d --build
+
+# Obtener public key para parchear Pangolin
+docker compose exec license-server cat /app/keys/public.pem
+
+# Backup de las claves RSA
+docker compose exec license-server cat /app/keys/private.pem > backup-private.pem
+docker compose exec license-server cat /app/keys/public.pem > backup-public.pem
 ```

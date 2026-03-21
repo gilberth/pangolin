@@ -1,0 +1,47 @@
+services:
+  license-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gytech/pangolin-license-server:latest
+    container_name: pangolin-license-server
+    restart: unless-stopped
+    ports:
+      - "3456:3456"
+    volumes:
+      # Persist RSA keys between restarts
+      - license-keys:/app/keys
+    environment:
+      - NODE_ENV=production
+      - PORT=3456
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3456/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - pangolin-network
+
+  # Optional: Nginx reverse proxy with SSL (uncomment to use)
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: pangolin-license-nginx
+  #   restart: unless-stopped
+  #   ports:
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./certs:/etc/nginx/certs:ro
+  #   depends_on:
+  #     - license-server
+  #   networks:
+  #     - pangolin-network
+
+volumes:
+  license-keys:
+    driver: local
+
+networks:
+  pangolin-network:
+    driver: bridge
