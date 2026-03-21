@@ -1,108 +1,245 @@
-<div align="center">
-    <h2>
-    <a href="https://pangolin.net/">
-        <picture>
-            <source media="(prefers-color-scheme: dark)" srcset="public/logo/word_mark_white.png">
-            <img alt="Pangolin Logo" src="public/logo/word_mark_black.png" width="350">
-        </picture>
-    </a>
-    </h2>
-</div>
+# Pangolin Self-Hosted (Custom License Server)
 
-<div align="center">
-  <h5>
-      <a href="https://pangolin.net/">
-        Website
-      </a>
-      <span> | </span>
-      <a href="https://docs.pangolin.net/">
-        Documentation
-      </a>
-      <span> | </span>
-      <a href="mailto:contact@pangolin.net">
-        Contact Us
-      </a>
-  </h5>
-</div>
+This repository is a fork of Pangolin prepared to run with a self-hosted Enterprise license server.
 
-<div align="center">
+Goal:
+- Keep your existing Pangolin config and data
+- Replace upstream license validation with your own license server
+- Build and deploy custom images from your fork
+- Update safely when upstream Pangolin releases new code
 
-[![Discord](https://img.shields.io/discord/1325658630518865980?logo=discord&style=flat-square)](https://discord.gg/HCJR8Xhme4)
-[![Slack](https://img.shields.io/badge/chat-slack-yellow?style=flat-square&logo=slack)](https://pangolin.net/slack)
-[![Docker](https://img.shields.io/docker/pulls/fosrl/pangolin?style=flat-square)](https://hub.docker.com/r/fosrl/pangolin)
-![Stars](https://img.shields.io/github/stars/fosrl/pangolin?style=flat-square)
-[![YouTube](https://img.shields.io/badge/YouTube-red?logo=youtube&logoColor=white&style=flat-square)](https://www.youtube.com/@pangolin-net)
+## Current environment
 
-</div>
+- Fork repo: `https://github.com/gilberth/pangolin`
+- Upstream repo: `https://github.com/fosrl/pangolin`
+- Production host: `ubuntu@10.0.1.96`
+- App directory on server: `/home/ubuntu`
+- Pangolin URL: `https://pangolin.gytech.com.pe/`
 
-<p align="center">
-    <a href="https://docs.pangolin.net/careers/join-us">
-        <img src="https://img.shields.io/badge/🚀_We're_Hiring!-Join_Our_Team-brightgreen?style=for-the-badge" alt="We're Hiring!" />
-    </a>
-</p>
+## Architecture
 
-<p align="center">
-    <strong>
-        Get started with Pangolin at <a href="https://app.pangolin.net/auth/signup">app.pangolin.net</a>
-    </strong>
-</p>
+Containers in production:
+- `pangolin` -> custom image built from this fork (`pangolin-custom:latest`)
+- `pangolin-license-server` -> local license API (`pangolin-license-server:latest`)
+- `gerbil` -> upstream image (`fosrl/gerbil:1.3.0`)
+- `traefik` -> upstream image (`traefik:v3.6`)
 
-Pangolin is an open-source, identity-based remote access platform built on WireGuard that enables secure, seamless connectivity to private and public resources. Pangolin combines reverse proxy and VPN capabilities into one platform, providing browser-based access to web applications and client-based access to any private resources, all with zero-trust security and granular access control.
+Important runtime setting:
+- `PANGOLIN_LICENSE_SERVER_URL=http://license-server:3456`
 
-## Installation
+Important persistence:
+- Keep `license-keys` volume to preserve RSA keys (`/app/keys`) used by license signing.
 
-- Check out the [quick install guide](https://docs.pangolin.net/self-host/quick-install) for how to install and set up Pangolin.
-- Install from the [DigitalOcean marketplace](https://marketplace.digitalocean.com/apps/pangolin-ce-1?refcode=edf0480eeb81) for a one-click pre-configured installer.
+## What was changed in code
 
-<img src="public/screenshots/hero.png" />
+Main license patch is in:
+- `server/private/license/license.ts`
 
-## Deployment Options
+Changes:
+- Enterprise license base URL now uses env var:
+  - `PANGOLIN_LICENSE_SERVER_URL` (default `http://license-server:3456`)
+- Embedded public key was replaced to match the active self-hosted license server key
 
-| <img width=500 /> | Description |
-|-----------------|--------------|
-| **Pangolin Cloud** | Fully managed service with instant setup and pay-as-you-go pricing — no infrastructure required. Or, self-host your own [remote node](https://docs.pangolin.net/manage/remote-node/understanding-nodes) and connect to our control plane. |
-| **Self-Host: Community Edition** | Free, open source, and licensed under AGPL-3. |
-| **Self-Host: Enterprise Edition** | Licensed under Fossorial Commercial License. Free for personal and hobbyist use, and for businesses earning under \$100K USD annually. |
+## License server
 
-## Key Features
+Project files:
+- `license-server/server.js`
+- `license-server/Dockerfile`
+- `license-server/docker-entrypoint.sh`
+- `license-server/docker-compose.yml`
+- `license-server/patch-license-key.sh`
 
-| <img width=500 />                                                                                                                                                                                                                                                                                                                                                                | <img width=500 />                                                  |
-|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
-| **Connect remote networks with sites**<br /><br />Pangolin's lightweight site connectors create secure tunnels from remote networks without requiring public IP addresses or open ports. Sites make any network anywhere available for authorized access.                                                                                                                                                                                   | <img src="public/screenshots/sites.png" width=500 /><tr></tr>               |
-| **Browser-based reverse proxy access**<br /><br />Expose web applications through identity and context-aware tunneled reverse proxies. Pangolin handles routing, load balancing, health checking, and automatic SSL certificates without exposing your network directly to the internet. Users access applications through any web browser with authentication and granular access control.                                                                                                  | <img src="public/clip.gif" width=500 /><tr></tr>          |
-| **Client-based private resource access**<br /><br />Access private resources like SSH servers, databases, RDP, and entire network ranges through Pangolin clients. Intelligent NAT traversal enables connections even through restrictive firewalls, while DNS aliases provide friendly names and fast connections to resources across all your sites.                                                                                                                                                                                                | <img src="public/screenshots/private-resources.png" width=500 /><tr></tr>               |
-| **Zero-trust granular access**<br /><br />Grant users access to specific resources, not entire networks. Unlike traditional VPNs that expose full network access, Pangolin's zero-trust model ensures users can only reach the applications and services you explicitly define, reducing security risk and attack surface.                                                                                                                                                                                    | <img src="public/screenshots/user-devices.png" width=500 /><tr></tr> |
+Supported test keys (default in server.js):
+- `PANGOLIN-ENTERPRISE-2024`
+- `TEST-LICENSE-KEY-001`
+- `GYTECH-PANGOLIN-001`
 
-## Download Clients
+## Deploy from scratch (server)
 
-Download the Pangolin client for your platform:
+### 1) Build Pangolin custom image
 
-- [Mac](https://pangolin.net/downloads/mac)
-- [Windows](https://pangolin.net/downloads/windows)
-- [Linux](https://pangolin.net/downloads/linux)
-- [iOS](https://pangolin.net/downloads/ios)
-- [Android](https://pangolin.net/downloads/android)
+Run on your server:
 
-## Get Started
+```bash
+docker build --build-arg BUILD=enterprise -t pangolin-custom:latest \
+  https://github.com/gilberth/pangolin.git#main
+```
 
-### Sign up now
+### 2) Build license-server image
 
-Create an account at [app.pangolin.net](https://app.pangolin.net) to get started with Pangolin Cloud. A generous free tier is available.
+If needed, copy `license-server/` to server and then:
 
-### Check out the docs
+```bash
+cd ~/license-server-complete
+docker build -t pangolin-license-server:latest .
+```
 
-We encourage everyone to read the full documentation first, which is
-available at [docs.pangolin.net](https://docs.pangolin.net). This README provides only a very brief subset of
-the docs to illustrate some basic ideas.
+### 3) Use this compose file (`/home/ubuntu/docker-compose.yml`)
 
-## Licensing
+```yaml
+name: pangolin
+services:
+  license-server:
+    image: pangolin-license-server:latest
+    container_name: pangolin-license-server
+    restart: unless-stopped
+    volumes:
+      - license-keys:/app/keys
+    environment:
+      - NODE_ENV=production
+      - PORT=3456
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3456/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
-Pangolin is dual licensed under the AGPL-3 and the [Fossorial Commercial License](https://pangolin.net/fcl.html). For inquiries about commercial licensing, please contact us at [contact@pangolin.net](mailto:contact@pangolin.net).
+  pangolin:
+    image: pangolin-custom:latest
+    container_name: pangolin
+    restart: unless-stopped
+    depends_on:
+      license-server:
+        condition: service_healthy
+    environment:
+      - PANGOLIN_LICENSE_SERVER_URL=http://license-server:3456
+    volumes:
+      - ./config:/app/config
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/v1/"]
+      interval: "10s"
+      timeout: "10s"
+      retries: 15
 
-## Contributions
+  gerbil:
+    image: docker.io/fosrl/gerbil:1.3.0
+    container_name: gerbil
+    restart: unless-stopped
+    depends_on:
+      pangolin:
+        condition: service_healthy
+    command:
+      - --reachableAt=http://gerbil:3004
+      - --generateAndSaveKeyTo=/var/config/key
+      - --remoteConfig=http://pangolin:3001/api/v1/
+    volumes:
+      - ./config/:/var/config
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    ports:
+      - 51820:51820/udp
+      - 21820:21820/udp
+      - 443:443
+      - 80:80
 
-Please see [CONTRIBUTING](./CONTRIBUTING.md) in the repository for guidelines and best practices.
+  traefik:
+    image: docker.io/traefik:v3.6
+    container_name: traefik
+    restart: unless-stopped
+    network_mode: service:gerbil
+    depends_on:
+      pangolin:
+        condition: service_healthy
+    command:
+      - --configFile=/etc/traefik/traefik_config.yml
+    volumes:
+      - ./config/traefik:/etc/traefik:ro
+      - ./config/letsencrypt:/letsencrypt
+      - ./config/traefik/logs:/var/log/traefik
 
----
+volumes:
+  license-keys:
+    driver: local
+```
 
-WireGuard® is a registered trademark of Jason A. Donenfeld.
+### 4) Start stack
+
+```bash
+cd /home/ubuntu
+docker compose up -d
+```
+
+### 5) Validate
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+docker logs --tail 100 pangolin
+docker logs --tail 100 pangolin-license-server
+```
+
+## Upgrade workflow (recommended)
+
+Use the automation script from repo root:
+- `update-custom-pangolin.sh`
+
+What it does:
+1. Fetches `origin/main` and `fork/main`
+2. Merges upstream main into local main
+3. Pulls active key from remote `pangolin-license-server`
+4. Patches `server/private/license/license.ts`
+5. Commits and pushes if key changed
+6. Builds remote Pangolin image with `BUILD=enterprise`
+7. Redeploys `pangolin`
+
+Run:
+
+```bash
+cd /Users/gilberth/Documents/DEV/pangolin
+./update-custom-pangolin.sh
+```
+
+Optional env vars:
+- `SSH_TARGET` (default `ubuntu@10.0.1.96`)
+- `REMOTE_APP_DIR` (default `/home/ubuntu`)
+- `BRANCH` (default `main`)
+- `FORK_REPO_URL` (default `https://github.com/gilberth/pangolin.git`)
+
+## Important notes
+
+- Always build Pangolin with `BUILD=enterprise`.
+- Do not delete `license-keys` volume in production.
+- If keys rotate, you must sync public key in Pangolin and rebuild image.
+- If UI shows `Invalid signature`, key mismatch is the first thing to verify.
+
+## Troubleshooting
+
+### Error: `Invalid signature`
+
+Root cause:
+- Pangolin embedded public key does not match current private key used by license server.
+
+Fix:
+1. Read active key from server:
+   ```bash
+   ssh ubuntu@10.0.1.96 "docker exec pangolin-license-server cat /app/keys/public.pem"
+   ```
+2. Update `server/private/license/license.ts` public key
+3. Rebuild Pangolin image with `BUILD=enterprise`
+4. Restart `pangolin`
+
+### Pangolin starts but unhealthy
+
+Check:
+```bash
+docker logs --tail 200 pangolin
+```
+
+Most common causes:
+- Build type was `oss` instead of `enterprise`
+- DB schema mismatch from wrong branch/version
+- Broken `config` mount
+
+## Git branches used
+
+- `main`: active branch for deployment in this fork
+- `release-1.16.2-license`: compatibility branch used during fix process
+
+## Maintainer flow summary
+
+For every upstream update:
+1. Run `./update-custom-pangolin.sh`
+2. Wait for remote build and restart
+3. Validate container health and UI access
+4. Activate/check license only if needed
