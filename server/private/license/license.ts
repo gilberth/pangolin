@@ -61,7 +61,8 @@ type TokenPayload = {
 
 export class License {
     private phoneHomeInterval = 6 * 60 * 60; // 6 hours = 6 * 60 * 60 = 21600 seconds
-    private serverBaseUrl = "https://api.fossorial.io";
+    private serverBaseUrl =
+        process.env.PANGOLIN_LICENSE_SERVER_URL || "http://license-server:3456";
     private validationServerUrl = `${this.serverBaseUrl}/api/v1/license/enterprise/validate`;
     private activationServerUrl = `${this.serverBaseUrl}/api/v1/license/enterprise/activate`;
 
@@ -75,13 +76,13 @@ export class License {
     private doRecheck = false;
 
     private publicKey = `-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAx9RKc8cw+G8r7h/xeozF
-FNkRDggQfYO6Ae+EWHGujZ9WYAZ10spLh9F/zoLhhr3XhsjpoRXwMfgNuO5HstWf
-CYM20I0l7EUUMWEyWd4tZLd+5XQ4jY5xWOCWyFJAGQSp7flcRmxdfde+l+xg9eKl
-apbY84aVp09/GqM96hCS+CsQZrhohu/aOqYVB/eAhF01qsbmiZ7Y3WtdhTldveYt
-h4mZWGmjf8d/aEgePf/tk1gp0BUxf+Ae5yqoAqU+6aiFbjJ7q1kgxc18PWFGfE9y
-zSk+OZk887N5ThQ52154+oOUCMMR2Y3t5OH1hVZod51vuY2u5LsQXsf+87PwB91y
-LQIDAQAB
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyiRHHWaLj9OEO/WLBrfD
+YLeBBfVSFvWMKNEJVyTCjnAQ28F+9/vfMVc/4nBVVtFirMB7+NEeZaezVMEjyF1y
+aluRZqMmGT1bfeSIKP8TXh/SuPaXJgPWP5RI27NV5izzjLnIneQEN053M2WLO1mg
+kZ3K81FnEyrfRJMZ0ZvuVKgB8CiVDyxFb42xqca9bFQP5LfialSPjvFlZ35W1Gf/
+qHC2oA9pfuWnmV6Jbrx7LWumd6j5Voeph/VURfzpai3FR+vLIusYjzd37MCs1md3
+HXSwUw2GeUbimPs84Mj8NCYh2/eE93H3wbFaWGs2Qo07jKeVZdrf9oxY55DYhBqj
+1QIDAQAB
 -----END PUBLIC KEY-----`;
 
     constructor(private hostMeta: HostMeta) {
@@ -142,12 +143,8 @@ LQIDAQAB
         }
 
         // Count used sites and users for license comparison
-        const [siteCountRes] = await db
-            .select({ value: count() })
-            .from(sites);
-        const [userCountRes] = await db
-            .select({ value: count() })
-            .from(users);
+        const [siteCountRes] = await db.select({ value: count() }).from(sites);
+        const [userCountRes] = await db.select({ value: count() }).from(users);
 
         const status: LicenseStatus = {
             hostId: this.hostMeta.hostMetaId,
@@ -348,10 +345,7 @@ LQIDAQAB
                 }
 
                 // Only consider quantity if defined and >= 0 (quantity = users, quantity_2 = sites)
-                if (
-                    cached.quantity_2 !== undefined &&
-                    cached.quantity_2 >= 0
-                ) {
+                if (cached.quantity_2 !== undefined && cached.quantity_2 >= 0) {
                     status.maxSites =
                         (status.maxSites ?? 0) + cached.quantity_2;
                 }
@@ -541,7 +535,7 @@ LQIDAQAB
                     // Calculate exponential backoff delay
                     const retryDelay = Math.floor(
                         initialRetryDelay *
-                        Math.pow(exponentialFactor, attempt - 1)
+                            Math.pow(exponentialFactor, attempt - 1)
                     );
 
                     logger.debug(
