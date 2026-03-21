@@ -1,0 +1,152 @@
+name: Custom Update and Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      sync_upstream:
+        description: "Merge upstream (fosrl/main) into fork/main"
+        required: true
+        default: true
+        type: boolean
+      sync_license_key:
+        description: "Read active public key from production and patch license.ts"
+        required: true
+        default: true
+        type: boolean
+      deploy:
+        description: "Deploy updated image to production"
+        required: true
+        default: true
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  UPSTREAM_REPO: https://github.com/fosrl/pangolin.git
+
+jobs:
+  update-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge upstream main
+        if: inputs.sync_upstream
+        run: |
+          git remote add upstream "${UPSTREAM_REPO}" 2>/dev/null || true
+          git fetch upstream main
+          git checkout main
+          git merge --no-edit upstream/main
+
+      - name: Setup SSH agent
+        if: inputs.sync_license_key || inputs.deploy
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
+
+      - name: Patch license key from production server
+        if: inputs.sync_license_key
+        env:
+          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+        run: |
+          test -n "$PROD_SSH_HOST"
+          test -n "$PROD_SSH_USER"
+          ssh -o StrictHostKeyChecking=accept-new "${PROD_SSH_USER}@${PROD_SSH_HOST}" "docker exec pangolin-license-server cat /app/keys/public.pem" > /tmp/public.pem
+          python3 - << 'PY'
+          import pathlib
+          import re
+
+          license_path = pathlib.Path("server/private/license/license.ts")
+          content = license_path.read_text(encoding="utf-8")
+          key = pathlib.Path("/tmp/public.pem").read_text(encoding="utf-8").strip()
+
+          server_url_re = re.compile(r'private serverBaseUrl =\s*"[^"]+";', re.MULTILINE)
+          server_url_repl = (
+              'private serverBaseUrl =\n'
+              '        process.env.PANGOLIN_LICENSE_SERVER_URL || "http://license-server:3456";'
+          )
+          public_key_re = re.compile(
+              r'private publicKey = `-----BEGIN PUBLIC KEY-----.*?-----END PUBLIC KEY-----`;',
+              re.DOTALL,
+          )
+
+          new_content = server_url_re.sub(server_url_repl, content)
+          new_content = public_key_re.sub(f"private publicKey = `{key}`;", new_content)
+
+          if new_content != content:
+              license_path.write_text(new_content, encoding="utf-8")
+          PY
+
+      - name: Commit and push updates
+        run: |
+          git checkout main
+          if ! git diff --quiet; then
+            git add server/private/license/license.ts || true
+            git add .
+            git commit -m "Automate upstream sync and license key update"
+          else
+            echo "No file changes to commit"
+          fi
+          git push origin main
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Pangolin enterprise image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          build-args: |
+            BUILD=enterprise
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy on production server
+        if: inputs.deploy
+        env:
+          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
+          GHCR_USER: ${{ secrets.GHCR_USER }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+        run: |
+          test -n "$PROD_SSH_HOST"
+          test -n "$PROD_SSH_USER"
+          test -n "$PROD_APP_DIR"
+          ssh -o StrictHostKeyChecking=accept-new "${PROD_SSH_USER}@${PROD_SSH_HOST}" "\
+            echo \"${GHCR_TOKEN}\" | docker login ghcr.io -u \"${GHCR_USER}\" --password-stdin && \
+            docker pull \"${GHCR_IMAGE}\" && \
+            docker tag \"${GHCR_IMAGE}\" pangolin-custom:latest && \
+            cd \"${PROD_APP_DIR}\" && \
+            docker compose up -d pangolin && \
+            docker ps --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}'\
+          "

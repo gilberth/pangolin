@@ -196,6 +196,29 @@ Optional env vars:
 - `BRANCH` (default `main`)
 - `FORK_REPO_URL` (default `https://github.com/gilberth/pangolin.git`)
 
+## GitHub Actions automation
+
+Two workflows are available:
+
+- `.github/workflows/build-pangolin.yml`
+  - Builds and publishes images to GHCR
+  - Pangolin image is built with `BUILD=enterprise`
+
+- `.github/workflows/custom-update-and-deploy.yml`
+  - Manual workflow (`workflow_dispatch`)
+  - Can merge upstream `fosrl/main` into fork `main`
+  - Can pull active license public key from production and patch `license.ts`
+  - Pushes fork `main`, builds enterprise image, and optionally deploys to production
+
+Required GitHub repository secrets for `custom-update-and-deploy.yml`:
+
+- `PROD_SSH_HOST` (example: `10.0.1.96`)
+- `PROD_SSH_USER` (example: `ubuntu`)
+- `PROD_SSH_PRIVATE_KEY` (private key for SSH)
+- `PROD_APP_DIR` (example: `/home/ubuntu`)
+- `GHCR_USER` (GitHub username with package pull access)
+- `GHCR_TOKEN` (PAT with `read:packages`)
+
 ## Important notes
 
 - Always build Pangolin with `BUILD=enterprise`.

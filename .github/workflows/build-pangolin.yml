@@ -68,6 +68,8 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          build-args: |
+            BUILD=enterprise
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta-pangolin.outputs.tags }}
           labels: ${{ steps.meta-pangolin.outputs.labels }}
