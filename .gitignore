@@ -50,6 +50,7 @@ dynamic/
 *.mmdb
 scratch/
 tsconfig.json
+!pangolin-mcp-server/tsconfig.json
 hydrateSaas.ts
 CLAUDE.md
 drizzle.config.ts
