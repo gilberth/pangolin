@@ -47,7 +47,37 @@ jobs:
           git remote add upstream "${UPSTREAM_REPO}" 2>/dev/null || true
           git fetch upstream main
           git checkout main
-          git merge --no-edit upstream/main
+
+          # Files we always keep OUR version of (custom fork files)
+          OUR_FILES="README.md .gitignore"
+
+          # Attempt merge
+          git merge --no-edit upstream/main || true
+
+          # If there are conflicts, resolve them keeping ours for known custom files
+          if git status | grep -q "^UU\|^AA\|^DD\|Unmerged"; then
+            echo "Conflicts detected, resolving..."
+            for f in $OUR_FILES; do
+              if git status "$f" 2>/dev/null | grep -q "both modified\|UU"; then
+                echo "Keeping ours: $f"
+                git checkout --ours "$f"
+                git add "$f"
+              fi
+            done
+            # license.ts: keep ours (our custom patch)
+            if git status "server/private/license/license.ts" 2>/dev/null | grep -q "both modified\|UU"; then
+              echo "Keeping ours: server/private/license/license.ts"
+              git checkout --ours "server/private/license/license.ts"
+              git add "server/private/license/license.ts"
+            fi
+            # Fail if any other file still has conflicts
+            if git status | grep -q "^UU\|both modified"; then
+              echo "ERROR: Unresolved conflicts remain:"
+              git status --short | grep "^UU\|^AA"
+              exit 1
+            fi
+            git commit -m "Merge upstream fosrl/main - keep custom files (ours)"
+          fi
 
       - name: Setup SSH agent
         if: inputs.sync_license_key || inputs.deploy
