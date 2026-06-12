@@ -9,12 +9,7 @@ on:
         default: true
         type: boolean
       sync_license_key:
-        description: "Read active public key from production and patch license.ts"
-        required: true
-        default: true
-        type: boolean
-      deploy:
-        description: "Deploy updated image to production"
+        description: "Patch license.ts with LICENSE_PUBLIC_KEY secret"
         required: true
         default: true
         type: boolean
@@ -47,62 +42,39 @@ jobs:
           git remote add upstream "${UPSTREAM_REPO}" 2>/dev/null || true
           git fetch upstream main
           git checkout main
-
-          # Files we always keep OUR version of (custom fork files)
-          OUR_FILES="README.md .gitignore"
-
-          # Attempt merge
           git merge --no-edit upstream/main || true
 
-          # If there are conflicts, resolve them keeping ours for known custom files
-          if git status | grep -q "^UU\|^AA\|^DD\|Unmerged"; then
-            echo "Conflicts detected, resolving..."
-            for f in $OUR_FILES; do
-              if git status "$f" 2>/dev/null | grep -q "both modified\|UU"; then
+          if git status | grep -q "both modified\|UU"; then
+            echo "Conflicts detected, resolving with ours..."
+            for f in README.md .gitignore server/private/license/license.ts; do
+              if git status "$f" 2>/dev/null | grep -q "both modified"; then
                 echo "Keeping ours: $f"
                 git checkout --ours "$f"
                 git add "$f"
               fi
             done
-            # license.ts: keep ours (our custom patch)
-            if git status "server/private/license/license.ts" 2>/dev/null | grep -q "both modified\|UU"; then
-              echo "Keeping ours: server/private/license/license.ts"
-              git checkout --ours "server/private/license/license.ts"
-              git add "server/private/license/license.ts"
-            fi
-            # Fail if any other file still has conflicts
-            if git status | grep -q "^UU\|both modified"; then
+            if git status | grep -q "both modified"; then
               echo "ERROR: Unresolved conflicts remain:"
-              git status --short | grep "^UU\|^AA"
+              git status --short
               exit 1
             fi
             git commit -m "Merge upstream fosrl/main - keep custom files (ours)"
           fi
 
-      - name: Setup SSH agent
-        if: inputs.sync_license_key || inputs.deploy
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.PROD_SSH_PRIVATE_KEY }}
-
-      - name: Patch license key from production server
+      - name: Patch license.ts from secret
         if: inputs.sync_license_key
         env:
-          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+          LICENSE_PUBLIC_KEY: ${{ secrets.LICENSE_PUBLIC_KEY }}
         run: |
-          test -n "$PROD_SSH_HOST"
-          test -n "$PROD_SSH_USER"
-          ssh -o StrictHostKeyChecking=accept-new "${PROD_SSH_USER}@${PROD_SSH_HOST}" "docker exec pangolin-license-server cat /app/keys/public.pem" > /tmp/public.pem
+          echo "${LICENSE_PUBLIC_KEY}" > /tmp/public.pem
           python3 - << 'PY'
-          import pathlib
-          import re
+          import pathlib, re, os
 
           license_path = pathlib.Path("server/private/license/license.ts")
           content = license_path.read_text(encoding="utf-8")
           key = pathlib.Path("/tmp/public.pem").read_text(encoding="utf-8").strip()
 
-          server_url_re = re.compile(r'private serverBaseUrl =\s*"[^"]+";', re.MULTILINE)
+          server_url_re = re.compile(r'private serverBaseUrl\s*=\s*["\'].*?["\'];', re.MULTILINE)
           server_url_repl = (
               'private serverBaseUrl =\n'
               '        process.env.PANGOLIN_LICENSE_SERVER_URL || "http://license-server:3456";'
@@ -117,17 +89,19 @@ jobs:
 
           if new_content != content:
               license_path.write_text(new_content, encoding="utf-8")
+              print("license.ts patched successfully")
+          else:
+              print("license.ts already up to date")
           PY
 
       - name: Commit and push updates
         run: |
           git checkout main
           if ! git diff --quiet; then
-            git add server/private/license/license.ts || true
             git add .
-            git commit -m "Automate upstream sync and license key update"
+            git commit -m "chore: upstream sync + license key patch"
           else
-            echo "No file changes to commit"
+            echo "No changes to commit"
           fi
           git push origin main
 
@@ -144,7 +118,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Pangolin enterprise image
+      - name: Build and push pangolin-custom image
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -159,24 +133,15 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Deploy on production server
-        if: inputs.deploy
-        env:
-          PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
-          PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
-          PROD_APP_DIR: ${{ secrets.PROD_APP_DIR }}
-          GHCR_USER: ${{ secrets.GHCR_USER }}
-          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
-          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-        run: |
-          test -n "$PROD_SSH_HOST"
-          test -n "$PROD_SSH_USER"
-          test -n "$PROD_APP_DIR"
-          ssh -o StrictHostKeyChecking=accept-new "${PROD_SSH_USER}@${PROD_SSH_HOST}" "\
-            echo \"${GHCR_TOKEN}\" | docker login ghcr.io -u \"${GHCR_USER}\" --password-stdin && \
-            docker pull \"${GHCR_IMAGE}\" && \
-            docker tag \"${GHCR_IMAGE}\" pangolin-custom:latest && \
-            cd \"${PROD_APP_DIR}\" && \
-            docker compose up -d pangolin && \
-            docker ps --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}'\
-          "
+      - name: Build and push pangolin-license-server image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./license-server
+          file: ./license-server/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/license-server:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/license-server:${{ github.sha }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
