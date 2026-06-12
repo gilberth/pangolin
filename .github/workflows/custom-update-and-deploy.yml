@@ -25,11 +25,13 @@ jobs:
     permissions:
       contents: write
       packages: write
+      workflows: write
     steps:
       - name: Checkout fork
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configure git identity
         run: |
@@ -68,7 +70,7 @@ jobs:
         run: |
           echo "${LICENSE_PUBLIC_KEY}" > /tmp/public.pem
           python3 - << 'PY'
-          import pathlib, re, os
+          import pathlib, re
 
           license_path = pathlib.Path("server/private/license/license.ts")
           content = license_path.read_text(encoding="utf-8")
