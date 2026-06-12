@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -15,3 +15,5 @@ export * from "./queryActionAuditLog";
 export * from "./exportActionAuditLog";
 export * from "./queryAccessAuditLog";
 export * from "./exportAccessAuditLog";
+export * from "./queryConnectionAuditLog";
+export * from "./exportConnectionAuditLog";

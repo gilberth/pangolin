@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -12,15 +12,21 @@
  */
 
 import { rateLimitService } from "#private/lib/rateLimit";
+import { logStreamingManager } from "#private/lib/logStreaming";
 import { cleanup as wsCleanup } from "#private/routers/ws";
 import { flushBandwidthToDb } from "@server/routers/newt/handleReceiveBandwidthMessage";
+import { flushConnectionLogToDb } from "#private/routers/newt";
 import { flushSiteBandwidthToDb } from "@server/routers/gerbil/receiveBandwidth";
+import { stopPingAccumulator } from "@server/routers/newt/pingAccumulator";
 
 async function cleanup() {
+    await stopPingAccumulator();
     await flushBandwidthToDb();
+    await flushConnectionLogToDb();
     await flushSiteBandwidthToDb();
     await rateLimitService.cleanup();
     await wsCleanup();
+    await logStreamingManager.shutdown();
 
     process.exit(0);
 }

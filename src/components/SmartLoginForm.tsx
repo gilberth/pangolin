@@ -15,15 +15,18 @@ import {
     FormMessage
 } from "@app/components/ui/form";
 import { Alert, AlertDescription } from "@app/components/ui/alert";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useUserLookup } from "@app/hooks/useUserLookup";
+import { useEnvContext } from "@app/hooks/useEnvContext";
 import { LookupUserResponse } from "@server/routers/auth/lookupUser";
 import { useTranslations } from "next-intl";
 import LoginPasswordForm from "@app/components/LoginPasswordForm";
-import LoginOrgSelector from "@app/components/LoginOrgSelector";
+import SmartLoginOrgSelector from "@app/components/SmartLoginOrgSelector";
 import UserProfileCard from "@app/components/UserProfileCard";
-import { ArrowLeft } from "lucide-react";
 import SecurityKeyAuthButton from "@app/components/SecurityKeyAuthButton";
+import { Separator } from "@app/components/ui/separator";
+import OrgSignInLink from "@app/components/OrgSignInLink";
 
 const identifierSchema = z.object({
     identifier: z.string().min(1, "Username or email is required")
@@ -39,10 +42,17 @@ const isValidEmail = (str: string): boolean => {
     }
 };
 
+type OrgSignInConfig = {
+    href: string;
+    linkText: string;
+    descriptionText: string;
+};
+
 type SmartLoginFormProps = {
     redirect?: string;
     forceLogin?: boolean;
     defaultUser?: string;
+    orgSignIn?: OrgSignInConfig;
 };
 
 type ViewState =
@@ -58,12 +68,31 @@ type ViewState =
           lookupResult: LookupUserResponse;
       };
 
+function buildResetPasswordHref(
+    dashboardUrl: string,
+    identifier: string,
+    redirectParam?: string
+) {
+    const trimmed = identifier.trim();
+    const params = new URLSearchParams();
+    if (isValidEmail(trimmed)) {
+        params.set("email", trimmed);
+    }
+    if (redirectParam) {
+        params.set("redirect", redirectParam);
+    }
+    const qs = params.toString();
+    return `${dashboardUrl}/auth/reset-password${qs ? `?${qs}` : ""}`;
+}
+
 export default function SmartLoginForm({
     redirect,
     forceLogin,
-    defaultUser
+    defaultUser,
+    orgSignIn
 }: SmartLoginFormProps) {
     const router = useRouter();
+    const { env } = useEnvContext();
     const { lookup, loading, error } = useUserLookup();
     const t = useTranslations();
     const [viewState, setViewState] = useState<ViewState>({ type: "initial" });
@@ -77,6 +106,13 @@ export default function SmartLoginForm({
             identifier: defaultUser ?? ""
         }
     });
+
+    const watchedIdentifier = form.watch("identifier");
+    const resetPasswordHref = buildResetPasswordHref(
+        env.app.dashboardUrl,
+        watchedIdentifier,
+        redirect
+    );
 
     const hasAutoLookedUp = useRef(false);
     useEffect(() => {
@@ -170,7 +206,7 @@ export default function SmartLoginForm({
     if (viewState.type === "orgSelector") {
         return (
             <div className="space-y-4">
-                <LoginOrgSelector
+                <SmartLoginOrgSelector
                     identifier={viewState.identifier}
                     lookupResult={viewState.lookupResult}
                     redirect={redirect}
@@ -209,6 +245,15 @@ export default function SmartLoginForm({
                         )}
                     />
 
+                    <div className="text-center">
+                        <Link
+                            href={resetPasswordHref}
+                            className="text-sm text-muted-foreground"
+                        >
+                            {t("passwordForgot")}
+                        </Link>
+                    </div>
+
                     {(error || securityKeyError) && (
                         <Alert variant="destructive">
                             <AlertDescription>
@@ -219,7 +264,7 @@ export default function SmartLoginForm({
                 </form>
             </Form>
 
-            <div className="space-y-2">
+            <div className="space-y-4">
                 <Button
                     type="submit"
                     form="form"
@@ -236,6 +281,28 @@ export default function SmartLoginForm({
                     onError={setSecurityKeyError}
                     disabled={loading}
                 />
+
+                {orgSignIn && (
+                    <>
+                        <div className="relative">
+                            <div className="absolute inset-0 flex items-center">
+                                <Separator />
+                            </div>
+                            <div className="relative flex justify-center text-xs uppercase">
+                                <span className="px-2 bg-card text-muted-foreground">
+                                    {t("idpContinue")}
+                                </span>
+                            </div>
+                        </div>
+                        <OrgSignInLink
+                            href={orgSignIn.href}
+                            linkText={orgSignIn.linkText}
+                            descriptionText={orgSignIn.descriptionText}
+                            primaryActionVariant="button"
+                            className="mt-0"
+                        />
+                    </>
+                )}
             </div>
         </div>
     );

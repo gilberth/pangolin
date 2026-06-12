@@ -1,15 +1,19 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { db, loginPage } from "@server/db";
+import { build } from "@server/build";
 import {
-    domains,
-    orgDomains,
+    db,
+    loginPage,
     orgs,
     Resource,
     resources,
+    resourcePolicies,
     roleResources,
+    rolePolicies,
     roles,
-    userResources
+    userPolicies,
+    userResources,
+    domainNamespaces
 } from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -17,32 +21,86 @@ import createHttpError from "http-errors";
 import { eq, and } from "drizzle-orm";
 import { fromError } from "zod-validation-error";
 import logger from "@server/logger";
-import { subdomainSchema } from "@server/lib/schemas";
+import { subdomainSchema, wildcardSubdomainSchema } from "@server/lib/schemas";
 import config from "@server/lib/config";
 import { OpenAPITags, registry } from "@server/openApi";
-import { build } from "@server/build";
 import { createCertificate } from "#dynamic/routers/certificates/createCertificate";
-import { getUniqueResourceName } from "@server/db/names";
-import { validateAndConstructDomain } from "@server/lib/domainUtils";
+import {
+    validateAndConstructDomain,
+    checkWildcardDomainConflict
+} from "@server/lib/domainUtils";
+import { isSubscribed } from "#dynamic/lib/isSubscribed";
+import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
+import { TierFeature, tierMatrix } from "@server/lib/billing/tierMatrix";
+import {
+    getUniqueResourceName,
+    getUniqueResourcePolicyName
+} from "@server/db/names";
 
 const createResourceParamsSchema = z.strictObject({
     orgId: z.string()
 });
 
+function resolveModeFromLegacyFields(data: {
+    mode?: "http" | "ssh" | "rdp" | "vnc" | "tcp" | "udp";
+    http?: boolean;
+    protocol?: "tcp" | "udp";
+}): {
+    mode?: "http" | "ssh" | "rdp" | "vnc" | "tcp" | "udp";
+    error?: string;
+} {
+    if (data.mode) {
+        return { mode: data.mode };
+    }
+
+    if (typeof data.http === "boolean" && data.protocol) {
+        if (data.http && data.protocol === "tcp") {
+            return { mode: "http" };
+        }
+        if (!data.http && data.protocol === "tcp") {
+            return { mode: "tcp" };
+        }
+        if (!data.http && data.protocol === "udp") {
+            return { mode: "udp" };
+        }
+        return {
+            error: "Invalid deprecated http/protocol combination"
+        };
+    }
+
+    return { mode: undefined };
+}
+
 const createHttpResourceSchema = z
     .strictObject({
         name: z.string().min(1).max(255),
         subdomain: z.string().nullable().optional(),
-        http: z.boolean(),
-        protocol: z.enum(["tcp", "udp"]),
+        http: z.boolean().optional().openapi({
+            deprecated: true,
+            description:
+                "Deprecated. Use `mode` instead. Legacy compatibility only."
+        }),
+        protocol: z.enum(["tcp", "udp"]).optional().openapi({
+            deprecated: true,
+            description:
+                "Deprecated. Use `mode` instead. Legacy compatibility only."
+        }),
         domainId: z.string(),
         stickySession: z.boolean().optional(),
-        postAuthPath: z.string().nullable().optional()
+        postAuthPath: z.string().nullable().optional(),
+        mode: z.enum(["http", "ssh", "rdp", "vnc", "tcp", "udp"]).optional(),
+        // SSH Settings
+        pamMode: z.enum(["passthrough", "push"]).optional(),
+        authDaemonPort: z.int().positive().optional(),
+        authDaemonMode: z.enum(["site", "remote", "native"]).optional()
     })
     .refine(
         (data) => {
             if (data.subdomain) {
-                return subdomainSchema.safeParse(data.subdomain).success;
+                return (
+                    subdomainSchema.safeParse(data.subdomain).success ||
+                    wildcardSubdomainSchema.safeParse(data.subdomain).success
+                );
             }
             return true;
         },
@@ -54,13 +112,27 @@ const createHttpResourceSchema = z
 const createRawResourceSchema = z
     .strictObject({
         name: z.string().min(1).max(255),
-        http: z.boolean(),
-        protocol: z.enum(["tcp", "udp"]),
+        http: z.boolean().optional().openapi({
+            deprecated: true,
+            description:
+                "Deprecated. Use `mode` instead. Legacy compatibility only."
+        }),
+        protocol: z.enum(["tcp", "udp"]).optional().openapi({
+            deprecated: true,
+            description:
+                "Deprecated. Use `mode` instead. Legacy compatibility only."
+        }),
+        mode: z.enum(["tcp", "udp"]).optional(),
         proxyPort: z.int().min(1).max(65535)
         // enableProxy: z.boolean().default(true) // always true now
     })
     .refine(
         (data) => {
+            const resolved = resolveModeFromLegacyFields(data);
+            if (resolved.error || !resolved.mode) {
+                return false;
+            }
+
             if (!config.getRawConfig().flags?.allow_raw_resources) {
                 if (data.proxyPort !== undefined) {
                     return false;
@@ -90,7 +162,22 @@ registry.registerPath({
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function createResource(
@@ -112,7 +199,10 @@ export async function createResource(
 
         const { orgId } = parsedParams.data;
 
-        if (req.user && !req.userOrgRoleId) {
+        if (
+            req.user &&
+            (!req.userOrgRoleIds || req.userOrgRoleIds.length === 0)
+        ) {
             return next(
                 createHttpError(HttpCode.FORBIDDEN, "User does not have a role")
             );
@@ -134,17 +224,18 @@ export async function createResource(
             );
         }
 
-        if (typeof req.body.http !== "boolean") {
+        const resolvedMode = resolveModeFromLegacyFields(req.body);
+        if (resolvedMode.error) {
             return next(
-                createHttpError(HttpCode.BAD_REQUEST, "http field is required")
+                createHttpError(HttpCode.BAD_REQUEST, resolvedMode.error)
             );
         }
 
-        const { http } = req.body;
+        if (resolvedMode.mode) {
+            req.body.mode = resolvedMode.mode;
+        }
 
-        if (http) {
-            return await createHttpResource({ req, res, next }, { orgId });
-        } else {
+        if (typeof req.body.proxyPort === "number") {
             if (
                 !config.getRawConfig().flags?.allow_raw_resources &&
                 build == "oss"
@@ -157,6 +248,17 @@ export async function createResource(
                 );
             }
             return await createRawResource({ req, res, next }, { orgId });
+        }
+
+        if (req.body.mode) {
+            return await createHttpResource({ req, res, next }, { orgId });
+        } else {
+            return next(
+                createHttpError(
+                    HttpCode.BAD_REQUEST,
+                    "mode is required when deprecated fields are not provided"
+                )
+            );
         }
     } catch (error) {
         logger.error(error);
@@ -189,9 +291,71 @@ async function createHttpResource(
         );
     }
 
-    const { name, domainId, postAuthPath } = parsedBody.data;
+    const {
+        name,
+        domainId,
+        postAuthPath,
+        mode,
+        authDaemonPort,
+        authDaemonMode,
+        pamMode
+    } = parsedBody.data;
     const subdomain = parsedBody.data.subdomain;
     const stickySession = parsedBody.data.stickySession;
+
+    // Wildcard subdomains are a paid feature
+    if (subdomain && subdomain.includes("*")) {
+        const isLicensed = await isLicensedOrSubscribed(
+            orgId,
+            tierMatrix.wildcardSubdomain
+        );
+        if (!isLicensed) {
+            return next(
+                createHttpError(
+                    HttpCode.FORBIDDEN,
+                    "Wildcard subdomains are not supported on your current plan. Please upgrade to access this feature."
+                )
+            );
+        }
+    }
+
+    if (build == "saas" && !isSubscribed(orgId!, tierMatrix.domainNamespaces)) {
+        // grandfather in existing users
+        const lastAllowedDate = new Date("2026-04-13");
+        const userCreatedDate = new Date(req.user?.dateCreated || new Date());
+        if (userCreatedDate > lastAllowedDate) {
+            // check if this domain id is a namespace domain and if so, reject
+            const domain = await db
+                .select()
+                .from(domainNamespaces)
+                .where(eq(domainNamespaces.domainId, domainId))
+                .limit(1);
+
+            if (domain.length > 0) {
+                return next(
+                    createHttpError(
+                        HttpCode.BAD_REQUEST,
+                        "Your current subscription does not support custom domain namespaces. Please upgrade to access this feature."
+                    )
+                );
+            }
+        }
+    }
+
+    if (
+        ["ssh", "rdp", "vnc"].includes(mode!) &&
+        !isLicensedOrSubscribed(
+            orgId!,
+            tierMatrix[TierFeature.AdvancedPublicResources]
+        )
+    ) {
+        return next(
+            createHttpError(
+                HttpCode.BAD_REQUEST,
+                "Your current subscription does not support browser gateway resources. Please upgrade to access this feature."
+            )
+        );
+    }
 
     // Validate domain and construct full domain
     const domainResult = await validateAndConstructDomain(
@@ -204,7 +368,7 @@ async function createHttpResource(
         return next(createHttpError(HttpCode.BAD_REQUEST, domainResult.error));
     }
 
-    const { fullDomain, subdomain: finalSubdomain } = domainResult;
+    const { fullDomain, subdomain: finalSubdomain, wildcard } = domainResult;
 
     logger.debug(`Full domain: ${fullDomain}`);
 
@@ -220,6 +384,13 @@ async function createHttpResource(
                 HttpCode.CONFLICT,
                 "Resource with that domain already exists"
             )
+        );
+    }
+
+    const wildcardConflict = await checkWildcardDomainConflict(fullDomain);
+    if (wildcardConflict.conflict) {
+        return next(
+            createHttpError(HttpCode.CONFLICT, wildcardConflict.message)
         );
     }
 
@@ -256,26 +427,10 @@ async function createHttpResource(
     let resource: Resource | undefined;
 
     const niceId = await getUniqueResourceName(orgId);
+    const policyNiceId = await getUniqueResourcePolicyName(orgId);
 
     await db.transaction(async (trx) => {
-        const newResource = await trx
-            .insert(resources)
-            .values({
-                niceId,
-                fullDomain,
-                domainId,
-                orgId,
-                name,
-                subdomain: finalSubdomain,
-                http: true,
-                protocol: "tcp",
-                ssl: true,
-                stickySession: stickySession,
-                postAuthPath: postAuthPath
-            })
-            .returning();
-
-        const adminRole = await db
+        const adminRole = await trx
             .select()
             .from(roles)
             .where(and(eq(roles.isAdmin, true), eq(roles.orgId, orgId)))
@@ -287,12 +442,59 @@ async function createHttpResource(
             );
         }
 
+        const [defaultPolicy] = await trx
+            .insert(resourcePolicies)
+            .values({
+                niceId: policyNiceId,
+                orgId,
+                name: `default policy for ${niceId}`,
+                sso: true,
+                scope: "resource"
+            })
+            .returning();
+
+        // make this policy visible by the admin role
+        await trx.insert(rolePolicies).values({
+            roleId: adminRole[0].roleId,
+            resourcePolicyId: defaultPolicy.resourcePolicyId
+        });
+
+        // make this policy visible by the current user
+        if (req.user && !req.userOrgRoleIds?.includes(adminRole[0].roleId)) {
+            await trx.insert(userPolicies).values({
+                userId: req.user?.userId!,
+                resourcePolicyId: defaultPolicy.resourcePolicyId
+            });
+        }
+
+        const newResource = await trx
+            .insert(resources)
+            .values({
+                niceId,
+                fullDomain,
+                domainId,
+                orgId,
+                name,
+                subdomain: finalSubdomain,
+                mode: mode,
+                pamMode: pamMode,
+                authDaemonMode: authDaemonMode,
+                authDaemonPort: authDaemonPort,
+                ssl: true,
+                stickySession: stickySession,
+                postAuthPath: postAuthPath,
+                wildcard,
+                health: "unknown",
+                defaultResourcePolicyId: defaultPolicy.resourcePolicyId
+            })
+            .returning();
+
         await trx.insert(roleResources).values({
             roleId: adminRole[0].roleId,
             resourceId: newResource[0].resourceId
         });
 
-        if (req.user && req.userOrgRoleId != adminRole[0].roleId) {
+        if (req.user && !req.userOrgRoleIds?.includes(adminRole[0].roleId)) {
             // make sure the user can access the resource
             await trx.insert(userResources).values({
                 userId: req.user?.userId!,
@@ -312,7 +514,7 @@ async function createHttpResource(
         );
     }
 
-    if (build != "oss") {
+    if (build !== "oss") {
         await createCertificate(domainId, fullDomain, db);
     }
 
@@ -348,27 +550,25 @@ async function createRawResource(
         );
     }
 
-    const { name, http, protocol, proxyPort } = parsedBody.data;
+    const { name, proxyPort } = parsedBody.data;
+    const resolvedMode = resolveModeFromLegacyFields(parsedBody.data);
+    if (resolvedMode.error || !resolvedMode.mode) {
+        return next(
+            createHttpError(
+                HttpCode.BAD_REQUEST,
+                resolvedMode.error ||
+                    "mode is required when deprecated fields are not provided"
+            )
+        );
+    }
 
     let resource: Resource | undefined;
 
     const niceId = await getUniqueResourceName(orgId);
+    const policyNiceId = await getUniqueResourcePolicyName(orgId);
 
     await db.transaction(async (trx) => {
-        const newResource = await trx
-            .insert(resources)
-            .values({
-                niceId,
-                orgId,
-                name,
-                http,
-                protocol,
-                proxyPort
-                // enableProxy
-            })
-            .returning();
-
-        const adminRole = await db
+        const adminRole = await trx
             .select()
             .from(roles)
             .where(and(eq(roles.isAdmin, true), eq(roles.orgId, orgId)))
@@ -380,12 +580,49 @@ async function createRawResource(
             );
         }
 
+        const [defaultPolicy] = await trx
+            .insert(resourcePolicies)
+            .values({
+                niceId: policyNiceId,
+                orgId,
+                name: `default policy for ${niceId}`,
+                sso: true,
+                scope: "resource"
+            })
+            .returning();
+
+        // make this policy visible by the admin role
+        await trx.insert(rolePolicies).values({
+            roleId: adminRole[0].roleId,
+            resourcePolicyId: defaultPolicy.resourcePolicyId
+        });
+
+        // make this policy visible by the current user
+        if (req.user && !req.userOrgRoleIds?.includes(adminRole[0].roleId)) {
+            await trx.insert(userPolicies).values({
+                userId: req.user?.userId!,
+                resourcePolicyId: defaultPolicy.resourcePolicyId
+            });
+        }
+
+        const newResource = await trx
+            .insert(resources)
+            .values({
+                niceId,
+                orgId,
+                name,
+                mode: resolvedMode.mode,
+                proxyPort,
+                defaultResourcePolicyId: defaultPolicy.resourcePolicyId
+            })
+            .returning();
+
         await trx.insert(roleResources).values({
             roleId: adminRole[0].roleId,
             resourceId: newResource[0].resourceId
         });
 
-        if (req.user && req.userOrgRoleId != adminRole[0].roleId) {
+        if (req.user && !req.userOrgRoleIds?.includes(adminRole[0].roleId)) {
             // make sure the user can access the resource
             await trx.insert(userResources).values({
                 userId: req.user?.userId!,

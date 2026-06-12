@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from "express";
-import { Client, db } from "@server/db";
+import { Client, db, Olm, primaryDb } from "@server/db";
 import { olms, clients, clientSitesAssociationsCache } from "@server/db";
 import { eq } from "drizzle-orm";
 import HttpCode from "@server/types/HttpCode";
@@ -28,7 +28,22 @@ const paramsSchema = z
 //     request: {
 //         params: paramsSchema
 //     },
-//     responses: {}
+// responses: {
+// 200: {
+// description: "Successful response",
+// content: {
+// "application/json": {
+// schema: z.object({
+// data: z.record(z.string(), z.any()).nullable(),
+// success: z.boolean(),
+// error: z.boolean(),
+// message: z.string(),
+// status: z.number()
+// })
+// }
+// }
+// }
+// }
 // });
 
 export async function deleteUserOlm(
@@ -49,6 +64,7 @@ export async function deleteUserOlm(
 
         const { olmId } = parsedParams.data;
 
+        let deletedClient: Client | undefined;
         // Delete associated clients and the OLM in a transaction
         await db.transaction(async (trx) => {
             // Find all clients associated with this OLM
@@ -57,7 +73,6 @@ export async function deleteUserOlm(
                 .from(clients)
                 .where(eq(clients.olmId, olmId));
 
-            let deletedClient: Client | null = null;
             // Delete all associated clients
             if (associatedClients.length > 0) {
                 [deletedClient] = await trx
@@ -67,22 +82,27 @@ export async function deleteUserOlm(
             }
 
             // Finally, delete the OLM itself
-            const [olm] = await trx
-                .delete(olms)
-                .where(eq(olms.olmId, olmId))
-                .returning();
-
-            if (deletedClient) {
-                await rebuildClientAssociationsFromClient(deletedClient, trx);
-                if (olm) {
-                    await sendTerminateClient(
-                        deletedClient.clientId,
-                        OlmErrorCodes.TERMINATED_DELETED,
-                        olm.olmId
-                    ); //  the olmId needs to be provided because it cant look it up after deletion
-                }
-            }
+            await trx.delete(olms).where(eq(olms.olmId, olmId)).returning();
         });
+
+        if (deletedClient) {
+            rebuildClientAssociationsFromClient(deletedClient, primaryDb).catch(
+                (e) => {
+                    logger.error(
+                        `Failed to rebuild client-site associations after deleting OLM ${olmId}: ${e}`
+                    );
+                }
+            );
+            sendTerminateClient(
+                deletedClient.clientId,
+                OlmErrorCodes.TERMINATED_DELETED,
+                olmId
+            ).catch((e) => {
+                logger.error(
+                    `Failed to send terminate message for client ${deletedClient?.clientId} after deleting OLM ${olmId}: ${e}`
+                );
+            });
+        }
 
         return response(res, {
             data: null,

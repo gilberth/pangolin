@@ -1,21 +1,26 @@
-import { Request, Response, NextFunction } from "express";
-import { z } from "zod";
-import { db } from "@server/db";
-import { newts, resources, sites, targets } from "@server/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
+import {
+    db,
+    newts,
+    resourcePolicies,
+    resources,
+    sites,
+    targetHealthCheck,
+    targets
+} from "@server/db";
 import response from "@server/lib/response";
-import HttpCode from "@server/types/HttpCode";
-import createHttpError from "http-errors";
 import logger from "@server/logger";
-import { fromError } from "zod-validation-error";
-import { addPeer } from "../gerbil/peers";
-import { removeTargets } from "../newt/targets";
-import { getAllowedIps } from "../target/helpers";
 import { OpenAPITags, registry } from "@server/openApi";
+import HttpCode from "@server/types/HttpCode";
+import { NextFunction, Request, Response } from "express";
+import createHttpError from "http-errors";
+import { z } from "zod";
+import { fromError } from "zod-validation-error";
+import { removeTargets } from "../newt/targets";
 
 // Define Zod schema for request parameters validation
 const deleteResourceSchema = z.strictObject({
-    resourceId: z.string().transform(Number).pipe(z.int().positive())
+    resourceId: z.coerce.number().int().positive()
 });
 
 registry.registerPath({
@@ -26,7 +31,22 @@ registry.registerPath({
     request: {
         params: deleteResourceSchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function deleteResource(
@@ -52,6 +72,16 @@ export async function deleteResource(
             .from(targets)
             .where(eq(targets.resourceId, resourceId));
 
+        const healthChecksToBeRemoved = await db
+            .select()
+            .from(targetHealthCheck)
+            .where(
+                inArray(
+                    targetHealthCheck.targetId,
+                    targetsToBeRemoved.map((t) => t.targetId)
+                )
+            );
+
         const [deletedResource] = await db
             .delete(resources)
             .where(eq(resources.resourceId, resourceId))
@@ -66,44 +96,55 @@ export async function deleteResource(
             );
         }
 
-        // const [site] = await db
-        //     .select()
-        //     .from(sites)
-        //     .where(eq(sites.siteId, deletedResource.siteId!))
-        //     .limit(1);
-        //
-        // if (!site) {
-        //     return next(
-        //         createHttpError(
-        //             HttpCode.NOT_FOUND,
-        //             `Site with ID ${deletedResource.siteId} not found`
-        //         )
-        //     );
-        // }
-        //
-        // if (site.pubKey) {
-        //     if (site.type == "wireguard") {
-        //         await addPeer(site.exitNodeId!, {
-        //             publicKey: site.pubKey,
-        //             allowedIps: await getAllowedIps(site.siteId)
-        //         });
-        //     } else if (site.type == "newt") {
-        //         // get the newt on the site by querying the newt table for siteId
-        //         const [newt] = await db
-        //             .select()
-        //             .from(newts)
-        //             .where(eq(newts.siteId, site.siteId))
-        //             .limit(1);
-        //
-        //         removeTargets(
-        //             newt.newtId,
-        //             targetsToBeRemoved,
-        //             deletedResource.protocol,
-        //             deletedResource.proxyPort
-        //         );
-        //     }
-        // }
-        //
+        for (const target of targetsToBeRemoved) {
+            const [site] = await db
+                .select()
+                .from(sites)
+                .where(eq(sites.siteId, target.siteId))
+                .limit(1);
+
+            if (!site) {
+                return next(
+                    createHttpError(
+                        HttpCode.NOT_FOUND,
+                        `Site with ID ${target.siteId} not found`
+                    )
+                );
+            }
+
+            if (site.pubKey) {
+                if (site.type == "newt") {
+                    // get the newt on the site by querying the newt table for siteId
+                    const [newt] = await db
+                        .select()
+                        .from(newts)
+                        .where(eq(newts.siteId, site.siteId))
+                        .limit(1);
+
+                    await removeTargets(
+                        newt.newtId,
+                        // [target],
+                        [], // deleting the target from newt causes issues because we cant unbind the port. this needs to be fixed in newt before we can do this
+                        healthChecksToBeRemoved,
+                        deletedResource.mode === "udp" ? "udp" : "tcp",
+                        newt.version
+                    );
+                }
+            }
+        }
+
+        // Also delete default resource policy
+        if (deletedResource.defaultResourcePolicyId) {
+            await db
+                .delete(resourcePolicies)
+                .where(
+                    eq(
+                        resourcePolicies.resourcePolicyId,
+                        deletedResource.defaultResourcePolicyId
+                    )
+                );
+        }
+
         return response(res, {
             data: null,
             success: true,

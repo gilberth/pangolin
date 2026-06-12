@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { db, newts, sites } from "@server/db";
+import { db, newts, primaryDb, sites } from "@server/db";
 import { siteResources } from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -12,7 +12,7 @@ import { OpenAPITags, registry } from "@server/openApi";
 import { rebuildClientAssociationsFromSiteResource } from "@server/lib/rebuildClientAssociations";
 
 const deleteSiteResourceParamsSchema = z.strictObject({
-    siteResourceId: z.string().transform(Number).pipe(z.int().positive())
+    siteResourceId: z.coerce.number().int().positive()
 });
 
 export type DeleteSiteResourceResponse = {
@@ -27,7 +27,22 @@ registry.registerPath({
     request: {
         params: deleteSiteResourceParamsSchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function deleteSiteResource(
@@ -63,28 +78,23 @@ export async function deleteSiteResource(
             );
         }
 
-        await db.transaction(async (trx) => {
-            // Delete the site resource
-            const [removedSiteResource] = await trx
-                .delete(siteResources)
-                .where(and(eq(siteResources.siteResourceId, siteResourceId)))
-                .returning();
+        // Delete the site resource
+        const [removedSiteResource] = await db
+            .delete(siteResources)
+            .where(eq(siteResources.siteResourceId, siteResourceId))
+            .returning();
 
-            const [newt] = await trx
-                .select()
-                .from(newts)
-                .where(eq(newts.siteId, removedSiteResource.siteId))
-                .limit(1);
-
-            if (!newt) {
-                return next(
-                    createHttpError(HttpCode.NOT_FOUND, "Newt not found")
-                );
-            }
-
-            await rebuildClientAssociationsFromSiteResource(
-                removedSiteResource,
-                trx
+        // Run in the background after the response is sent. Wrapped in its
+        // own transaction so it always executes on the primary — avoiding any
+        // replica-lag issues while still allowing the HTTP response to return
+        // early.
+        rebuildClientAssociationsFromSiteResource(
+            removedSiteResource,
+            primaryDb
+        ).catch((err) => {
+            logger.error(
+                `Error rebuilding client associations for site resource ${removedSiteResource!.siteResourceId}:`,
+                err
             );
         });
 

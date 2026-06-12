@@ -4,6 +4,11 @@ import { cleanRedirect } from "@app/lib/cleanRedirect";
 import { pullEnv } from "@app/lib/pullEnv";
 import { redirect } from "next/navigation";
 import { cache } from "react";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Verify Email"
+};
 
 export const dynamic = "force-dynamic";
 

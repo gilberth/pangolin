@@ -1,5 +1,5 @@
 import { NextFunction, Request, Response } from "express";
-import { db, olms } from "@server/db";
+import { db, olms, primaryDb } from "@server/db";
 import HttpCode from "@server/types/HttpCode";
 import { z } from "zod";
 import createHttpError from "http-errors";
@@ -43,7 +43,22 @@ export type CreateOlmResponse = {
 //         },
 //         params: paramsSchema
 //     },
-//     responses: {}
+// responses: {
+// 200: {
+// description: "Successful response",
+// content: {
+// "application/json": {
+// schema: z.object({
+// data: z.record(z.string(), z.any()).nullable(),
+// success: z.boolean(),
+// error: z.boolean(),
+// message: z.string(),
+// status: z.number()
+// })
+// }
+// }
+// }
+// }
 // });
 
 export async function createUserOlm(
@@ -81,16 +96,19 @@ export async function createUserOlm(
 
         const secretHash = await hashPassword(secret);
 
-        await db.transaction(async (trx) => {
-            await trx.insert(olms).values({
-                olmId: olmId,
-                userId,
-                name,
-                secretHash,
-                dateCreated: moment().toISOString()
-            });
+        await db.insert(olms).values({
+            olmId: olmId,
+            userId,
+            name,
+            secretHash,
+            dateCreated: moment().toISOString()
+        });
 
-            await calculateUserClientsForOrgs(userId, trx);
+        calculateUserClientsForOrgs(userId, primaryDb).catch((e) => {
+            console.error(
+                "Error calculating user clients after creating olm:",
+                e
+            );
         });
 
         return response<CreateOlmResponse>(res, {

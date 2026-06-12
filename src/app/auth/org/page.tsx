@@ -18,6 +18,11 @@ import ValidateSessionTransferToken from "@app/components/ValidateSessionTransfe
 import { isOrgSubscribed } from "@app/lib/api/isOrgSubscribed";
 import { OrgSelectionForm } from "@app/components/OrgSelectionForm";
 import OrgLoginPage from "@app/components/OrgLoginPage";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Choose Organization"
+};
 
 export const dynamic = "force-dynamic";
 

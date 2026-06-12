@@ -154,7 +154,7 @@ export default function CreateDomainForm({
 
     const punycodePreview = useMemo(() => {
         if (!baseDomain) return "";
-        const punycode = toPunycode(baseDomain);
+        const punycode = toPunycode(baseDomain.toLowerCase());
         return punycode !== baseDomain.toLowerCase() ? punycode : "";
     }, [baseDomain]);
 
@@ -239,21 +239,24 @@ export default function CreateDomainForm({
                             className="space-y-4"
                             id="create-domain-form"
                         >
-                            <FormField
-                                control={form.control}
-                                name="type"
-                                render={({ field }) => (
-                                    <FormItem>
-                                        <StrategySelect
-                                            options={domainOptions}
-                                            defaultValue={field.value}
-                                            onChange={field.onChange}
-                                            cols={1}
-                                        />
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
+                            {build != "oss" && env.flags.usePangolinDns ? (
+                                <FormField
+                                    control={form.control}
+                                    name="type"
+                                    render={({ field }) => (
+                                        <FormItem>
+                                            <StrategySelect
+                                                options={domainOptions}
+                                                defaultValue={field.value}
+                                                onChange={field.onChange}
+                                                cols={1}
+                                            />
+                                            <FormMessage />
+                                        </FormItem>
+                                    )}
+                                />
+                            ) : null}
+
                             <FormField
                                 control={form.control}
                                 name="baseDomain"

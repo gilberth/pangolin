@@ -12,6 +12,11 @@ import {
 import { redirect } from "next/navigation";
 import OrgLoginPage from "@app/components/OrgLoginPage";
 import { pullEnv } from "@app/lib/pullEnv";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Organization Login"
+};
 
 export const dynamic = "force-dynamic";
 

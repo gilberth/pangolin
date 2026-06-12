@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
+import { createApiResponseSchema } from "@server/lib/openapi/createApiResponseSchema";
 import { db } from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -25,13 +26,19 @@ const bodySchema = z.strictObject({
     namePath: z.string().optional(),
     scopes: z.string().nonempty(),
     autoProvision: z.boolean().optional(),
-    tags: z.string().optional()
+    tags: z.string().optional(),
+    variant: z.enum(["oidc", "google", "azure"]).optional().default("oidc")
 });
 
 export type CreateIdpResponse = {
     idpId: number;
     redirectUrl: string;
 };
+const CreateIdpResponseDataSchema = z.object({
+    idpId: z.number(),
+    redirectUrl: z.string()
+});
+
 
 registry.registerPath({
     method: "put",
@@ -47,7 +54,16 @@ registry.registerPath({
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: createApiResponseSchema(CreateIdpResponseDataSchema)
+                }
+            }
+        }
+    }
 });
 
 export async function createOidcIdp(
@@ -77,7 +93,8 @@ export async function createOidcIdp(
             namePath,
             name,
             autoProvision,
-            tags
+            tags,
+            variant
         } = parsedBody.data;
 
         if (
@@ -121,7 +138,8 @@ export async function createOidcIdp(
                 scopes,
                 identifierPath,
                 emailPath,
-                namePath
+                namePath,
+                variant
             });
         });
 

@@ -7,10 +7,13 @@ import { cache } from "react";
 import { GetOrgResponse } from "@server/routers/org";
 import OrgProvider from "@app/providers/OrgProvider";
 import { ListAccessTokensResponse } from "@server/routers/accessToken";
-import ShareLinksTable, {
-    ShareLinkRow
-} from "../../../../components/ShareLinksTable";
+import ShareLinksTable, { ShareLinkRow } from "@app/components/ShareLinksTable";
 import { getTranslations } from "next-intl/server";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Shareable Links"
+};
 
 type ShareLinksPageProps = {
     params: Promise<{ orgId: string }>;

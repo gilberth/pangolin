@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -33,7 +33,15 @@ import {
 } from "drizzle-orm";
 import logger from "@server/logger";
 import config from "@server/lib/config";
-import { orgs, resources, sites, Target, targets } from "@server/db";
+import {
+    orgs,
+    resources,
+    sites,
+    siteNetworks,
+    siteResources,
+    Target,
+    targets
+} from "@server/db";
 import {
     sanitize,
     encodePath,
@@ -76,7 +84,8 @@ export async function getTraefikConfig(
     filterOutNamespaceDomains = false,
     generateLoginPageRouters = false,
     allowRawResources = true,
-    allowMaintenancePage = true
+    allowMaintenancePage = true,
+    allowBrowserGatewayResources = true
 ): Promise<any> {
     // Get resources with their targets and sites in a single optimized query
     // Start from sites on this exit node, then join to targets and resources
@@ -87,9 +96,7 @@ export async function getTraefikConfig(
             resourceName: resources.name,
             fullDomain: resources.fullDomain,
             ssl: resources.ssl,
-            http: resources.http,
             proxyPort: resources.proxyPort,
-            protocol: resources.protocol,
             subdomain: resources.subdomain,
             domainId: resources.domainId,
             enabled: resources.enabled,
@@ -100,6 +107,8 @@ export async function getTraefikConfig(
             headers: resources.headers,
             proxyProtocol: resources.proxyProtocol,
             proxyProtocolVersion: resources.proxyProtocolVersion,
+            wildcard: resources.wildcard,
+            mode: resources.mode,
 
             maintenanceModeEnabled: resources.maintenanceModeEnabled,
             maintenanceModeType: resources.maintenanceModeType,
@@ -162,8 +171,15 @@ export async function getTraefikConfig(
                 ),
                 inArray(sites.type, siteTypes),
                 allowRawResources
-                    ? isNotNull(resources.http) // ignore the http check if allow_raw_resources is true
-                    : eq(resources.http, true)
+                    ? inArray(resources.mode, [
+                          "http",
+                          "udp",
+                          "tcp",
+                          "vnc",
+                          "ssh",
+                          "rdp"
+                      ]) // allow all three
+                    : inArray(resources.mode, ["http", "vnc", "ssh", "rdp"])
             )
         )
         .orderBy(desc(targets.priority), targets.targetId); // stable ordering
@@ -171,7 +187,10 @@ export async function getTraefikConfig(
     // Group by resource and include targets with their unique site data
     const resourcesMap = new Map();
 
-    resourcesWithTargetsAndSites.forEach((row) => {
+    for (const row of resourcesWithTargetsAndSites) {
+        if (!["http", "tcp", "udp"].includes(row.mode)) {
+            continue;
+        }
         const resourceId = row.resourceId;
         const resourceName = sanitize(row.resourceName) || "";
         const targetPath = encodePath(row.path); // Use encodePath to avoid collisions (e.g. "/a/b" vs "/a-b")
@@ -181,7 +200,7 @@ export async function getTraefikConfig(
         const priority = row.priority ?? 100;
 
         if (filterOutNamespaceDomains && row.domainNamespaceId) {
-            return;
+            continue;
         }
 
         // Create a unique key combining resourceId, path config, and rewrite config
@@ -208,7 +227,7 @@ export async function getTraefikConfig(
                 logger.debug(
                     `Invalid path rewrite configuration for resource ${resourceId}: ${validation.error}`
                 );
-                return;
+                continue;
             }
 
             resourcesMap.set(mapKey, {
@@ -217,9 +236,8 @@ export async function getTraefikConfig(
                 key: key,
                 fullDomain: row.fullDomain,
                 ssl: row.ssl,
-                http: row.http,
                 proxyPort: row.proxyPort,
-                protocol: row.protocol,
+                mode: row.mode,
                 subdomain: row.subdomain,
                 domainId: row.domainId,
                 enabled: row.enabled,
@@ -238,6 +256,7 @@ export async function getTraefikConfig(
                 priority: priority, // may be null, we fallback later
                 domainCertResolver: row.domainCertResolver,
                 preferWildcardCert: row.preferWildcardCert,
+                wildcard: row.wildcard,
 
                 maintenanceModeEnabled: row.maintenanceModeEnabled,
                 maintenanceModeType: row.maintenanceModeType,
@@ -265,7 +284,113 @@ export async function getTraefikConfig(
                 online: row.siteOnline
             }
         });
-    });
+    }
+
+    // Group browser gateway targets by resource
+    type BrowserGatewayResourceEntry = {
+        resourceId: number;
+        name: string;
+        fullDomain: string | null;
+        ssl: boolean | null;
+        subdomain: string | null;
+        domainId: string | null;
+        enabled: boolean | null;
+        wildcard: boolean | null;
+        domainCertResolver: string | null;
+        preferWildcardCert: boolean | null;
+        maintenanceModeEnabled: boolean | null;
+        maintenanceModeType: string | null;
+        maintenanceTitle: string | null;
+        maintenanceMessage: string | null;
+        maintenanceEstimatedTime: string | null;
+        targets: {
+            targetId: number;
+            bgType: string;
+            siteId: number;
+            siteType: string;
+            siteOnline: boolean | null;
+            subnet: string | null;
+        }[];
+    };
+    const browserGatewayResourcesMap = new Map<
+        number,
+        BrowserGatewayResourceEntry
+    >();
+
+    if (allowBrowserGatewayResources) {
+        for (const row of resourcesWithTargetsAndSites) {
+            if (!["ssh", "vnc", "rdp"].includes(row.mode)) {
+                continue;
+            }
+            if (filterOutNamespaceDomains && row.domainNamespaceId) {
+                continue;
+            }
+            if (!browserGatewayResourcesMap.has(row.resourceId)) {
+                browserGatewayResourcesMap.set(row.resourceId, {
+                    resourceId: row.resourceId,
+                    name: sanitize(row.resourceName) || "",
+                    fullDomain: row.fullDomain,
+                    ssl: row.ssl,
+                    subdomain: row.subdomain,
+                    domainId: row.domainId,
+                    enabled: row.enabled,
+                    wildcard: row.wildcard,
+                    domainCertResolver: row.domainCertResolver,
+                    preferWildcardCert: row.preferWildcardCert,
+                    maintenanceModeEnabled: row.maintenanceModeEnabled,
+                    maintenanceModeType: row.maintenanceModeType,
+                    maintenanceTitle: row.maintenanceTitle,
+                    maintenanceMessage: row.maintenanceMessage,
+                    maintenanceEstimatedTime: row.maintenanceEstimatedTime,
+                    targets: []
+                });
+            }
+            browserGatewayResourcesMap.get(row.resourceId)!.targets.push({
+                targetId: row.targetId,
+                bgType: row.mode,
+                siteId: row.siteId,
+                siteType: row.siteType,
+                siteOnline: row.siteOnline,
+                subnet: row.subnet
+            });
+        }
+    }
+
+    let siteResourcesWithFullDomain: {
+        siteResourceId: number;
+        fullDomain: string | null;
+        mode: "http" | "host" | "cidr" | "ssh";
+    }[] = [];
+    if (
+        build == "enterprise" &&
+        !privateConfig.getRawPrivateConfig().flags
+            .disable_private_http_placeholder
+    ) {
+        // we dont want to do this on the cloud
+        // Query siteResources in HTTP mode with SSL enabled and aliases - cert generation / HTTPS edge
+        siteResourcesWithFullDomain = await db
+            .select({
+                siteResourceId: siteResources.siteResourceId,
+                fullDomain: siteResources.fullDomain,
+                mode: siteResources.mode
+            })
+            .from(siteResources)
+            .innerJoin(
+                siteNetworks,
+                eq(siteResources.networkId, siteNetworks.networkId)
+            )
+            .innerJoin(sites, eq(siteNetworks.siteId, sites.siteId))
+            .where(
+                and(
+                    eq(siteResources.enabled, true),
+                    isNotNull(siteResources.fullDomain),
+                    eq(siteResources.mode, "http"),
+                    eq(siteResources.ssl, true),
+                    eq(sites.exitNodeId, exitNodeId),
+                    inArray(sites.type, siteTypes)
+                )
+            );
+    }
 
     let validCerts: CertificateResult[] = [];
     if (privateConfig.getRawPrivateConfig().flags.use_pangolin_dns) {
@@ -274,6 +399,18 @@ export async function getTraefikConfig(
         for (const resource of resourcesMap.values()) {
             if (resource.enabled && resource.ssl && resource.fullDomain) {
                 domains.add(resource.fullDomain);
+            }
+        }
+        // Include siteResource aliases so pangolin-dns also fetches certs for them
+        for (const sr of siteResourcesWithFullDomain) {
+            if (sr.fullDomain) {
+                domains.add(sr.fullDomain);
+            }
+        }
+        // Include browser gateway resource domains
+        for (const bgResource of browserGatewayResourcesMap.values()) {
+            if (bgResource.enabled && bgResource.ssl && bgResource.fullDomain) {
+                domains.add(bgResource.fullDomain);
             }
         }
         // get the valid certs for these domains
@@ -311,16 +448,29 @@ export async function getTraefikConfig(
         const transportName = `${key}-transport`;
         const headersMiddlewareName = `${key}-headers-middleware`;
 
+        logger.debug(
+            `Processing resource ${resource.name} with domain ${fullDomain} and ${targets.length} targets`
+        );
+
         if (!resource.enabled) {
+            logger.debug(
+                `Resource ${resource.name} is disabled, skipping Traefik config`
+            );
             continue;
         }
 
-        if (resource.http) {
+        if (resource.mode == "http") {
             if (!resource.domainId) {
+                logger.debug(
+                    `Resource ${resource.name} does not have a domainId, skipping Traefik config`
+                );
                 continue;
             }
 
             if (!resource.fullDomain) {
+                logger.debug(
+                    `Resource ${resource.name} does not have a fullDomain, skipping Traefik config`
+                );
                 continue;
             }
 
@@ -341,7 +491,16 @@ export async function getTraefikConfig(
                 ...additionalMiddlewares
             ];
 
-            let rule = `Host(\`${fullDomain}\`)`;
+            let rule: string;
+            if (resource.wildcard && fullDomain.startsWith("*.")) {
+                // Convert *.foo.bar.com -> HostRegexp(`^[^.]+\.foo\.bar\.com$`)
+                const escaped = fullDomain
+                    .slice(2) // remove leading "*."
+                    .replace(/\./g, "\\.");
+                rule = `HostRegexp(\`^[^.]+\\.${escaped}$\`)`;
+            } else {
+                rule = `Host(\`${fullDomain}\`)`;
+            }
 
             // priority logic
             let priority: number;
@@ -384,7 +543,8 @@ export async function getTraefikConfig(
                     config.getRawConfig().traefik.prefer_wildcard_cert;
 
                 const domainCertResolver = resource.domainCertResolver;
-                const preferWildcardCert = resource.preferWildcardCert;
+                const preferWildcardCert =
+                    resource.preferWildcardCert || resource.wildcard;
 
                 let resolverName: string | undefined;
                 let preferWildcard: boolean | undefined;
@@ -531,7 +691,7 @@ export async function getTraefikConfig(
                             resource.ssl ? entrypointHttps : entrypointHttp
                         ],
                         service: maintenanceServiceName,
-                        rule: `Host(\`${fullDomain}\`) && (PathPrefix(\`/_next\`) || PathRegexp(\`^/__nextjs*\`))`,
+                        rule: `${rule} && (PathPrefix(\`/_next\`) || PathRegexp(\`^/__nextjs*\`) || Path(\`/favicon.ico\`)) `,
                         priority: 2001,
                         ...(resource.ssl ? { tls } : {})
                     };
@@ -671,10 +831,7 @@ export async function getTraefikConfig(
 
                         // TODO: HOW TO HANDLE ^^^^^^ BETTER
                         const anySitesOnline = targets.some(
-                            (target) =>
-                            target.site.online ||
-                            target.site.type === "local" ||
-                            target.site.type === "wireguard"
+                            (target) => target.site.online
                         );
 
                         return (
@@ -769,13 +926,13 @@ export async function getTraefikConfig(
                     serviceName
                 ].loadBalancer.serversTransport = transportName;
             }
-        } else {
+        } else if (resource.mode == "tcp" || resource.mode == "udp") {
             // Non-HTTP (TCP/UDP) configuration
             if (!resource.enableProxy) {
                 continue;
             }
 
-            const protocol = resource.protocol.toLowerCase();
+            const protocol = resource.mode == "udp" ? "udp" : "tcp";
             const port = resource.proxyPort;
 
             if (!port) {
@@ -802,10 +959,7 @@ export async function getTraefikConfig(
                     servers: (() => {
                         // Check if any sites are online
                         const anySitesOnline = targets.some(
-                            (target) =>
-                            target.site.online ||
-                            target.site.type === "local" ||
-                            target.site.type === "wireguard"
+                            (target) => target.site.online
                         );
 
                         return targets
@@ -869,6 +1023,389 @@ export async function getTraefikConfig(
                           }
                         : {})
                 }
+            };
+        }
+    }
+
+    if (allowBrowserGatewayResources) {
+        // Generate Traefik config for browser gateway resources
+        const browserGatewayPort = 39999;
+        for (const [, bgResource] of browserGatewayResourcesMap.entries()) {
+            if (!bgResource.enabled) continue;
+            if (!bgResource.domainId) continue;
+            if (!bgResource.fullDomain) continue;
+
+            if (!config_output.http.routers) config_output.http.routers = {};
+            if (!config_output.http.services) config_output.http.services = {};
+
+            const fullDomain = bgResource.fullDomain;
+            const additionalMiddlewares =
+                config.getRawConfig().traefik.additional_middlewares || [];
+            const routerMiddlewares = [
+                badgerMiddlewareName,
+                ...additionalMiddlewares
+            ];
+
+            const hostRule = `Host(\`${fullDomain}\`)`;
+
+            // Build TLS config
+            let tls = {};
+            if (!privateConfig.getRawPrivateConfig().flags.use_pangolin_dns) {
+                const domainParts = fullDomain.split(".");
+                let wildCard: string;
+                if (domainParts.length <= 2) {
+                    wildCard = `*.${domainParts.join(".")}`;
+                } else {
+                    wildCard = `*.${domainParts.slice(1).join(".")}`;
+                }
+                if (!bgResource.subdomain) {
+                    wildCard = fullDomain;
+                }
+
+                const globalDefaultResolver =
+                    config.getRawConfig().traefik.cert_resolver;
+                const globalDefaultPreferWildcard =
+                    config.getRawConfig().traefik.prefer_wildcard_cert;
+                const resolverName = bgResource.domainCertResolver
+                    ? bgResource.domainCertResolver.trim()
+                    : globalDefaultResolver;
+                const preferWildcard =
+                    bgResource.preferWildcardCert !== undefined &&
+                    bgResource.preferWildcardCert !== null
+                        ? bgResource.preferWildcardCert
+                        : globalDefaultPreferWildcard;
+
+                tls = {
+                    certResolver: resolverName,
+                    ...(preferWildcard ? { domains: [{ main: wildCard }] } : {})
+                };
+            } else {
+                const matchingCert = validCerts.find(
+                    (cert) => cert.queriedDomain === fullDomain
+                );
+                if (!matchingCert) {
+                    logger.debug(
+                        `No matching certificate found for browser gateway domain: ${fullDomain}`
+                    );
+                    continue;
+                }
+            }
+
+            const bgUiServiceName = `bg-r${bgResource.resourceId}-ui-service`;
+
+            if (bgResource.ssl) {
+                const redirectRouterName = `bg-r${bgResource.resourceId}-redirect`;
+                config_output.http.routers![redirectRouterName] = {
+                    entryPoints: [
+                        config.getRawConfig().traefik.http_entrypoint
+                    ],
+                    middlewares: [redirectHttpsMiddlewareName],
+                    service: bgUiServiceName,
+                    rule: hostRule,
+                    priority: 100
+                };
+            }
+
+            // Collect online sites for this resource (for any type)
+            const anySiteOnline = bgResource.targets.some((t) => t.siteOnline);
+
+            // Maintenance page logic for browser gateway resources
+            let showBgMaintenancePage = false;
+            if (bgResource.maintenanceModeEnabled) {
+                if (bgResource.maintenanceModeType === "forced") {
+                    showBgMaintenancePage = true;
+                } else if (bgResource.maintenanceModeType === "automatic") {
+                    showBgMaintenancePage = !anySiteOnline;
+                }
+            }
+
+            if (showBgMaintenancePage && allowMaintenancePage) {
+                const bgMaintenanceServiceName = `bg-r${bgResource.resourceId}-maintenance-service`;
+                const bgMaintenanceRouterName = `bg-r${bgResource.resourceId}-maintenance-router`;
+                const bgRewriteMiddlewareName = `bg-r${bgResource.resourceId}-maintenance-rewrite`;
+
+                const entrypointHttp =
+                    config.getRawConfig().traefik.http_entrypoint;
+                const entrypointHttps =
+                    config.getRawConfig().traefik.https_entrypoint;
+
+                const maintenancePort = config.getRawConfig().server.next_port;
+                const maintenanceHost =
+                    config.getRawConfig().server.internal_hostname;
+
+                if (!config_output.http.services)
+                    config_output.http.services = {};
+                if (!config_output.http.middlewares)
+                    config_output.http.middlewares = {};
+                if (!config_output.http.routers)
+                    config_output.http.routers = {};
+
+                config_output.http.services![bgMaintenanceServiceName] = {
+                    loadBalancer: {
+                        servers: [
+                            {
+                                url: `http://${maintenanceHost}:${maintenancePort}`
+                            }
+                        ],
+                        passHostHeader: true
+                    }
+                };
+
+                config_output.http.middlewares![bgRewriteMiddlewareName] = {
+                    replacePathRegex: {
+                        regex: "^/(.*)",
+                        replacement: "/maintenance-screen"
+                    }
+                };
+
+                config_output.http.routers![bgMaintenanceRouterName] = {
+                    entryPoints: [
+                        bgResource.ssl ? entrypointHttps : entrypointHttp
+                    ],
+                    service: bgMaintenanceServiceName,
+                    middlewares: [bgRewriteMiddlewareName],
+                    rule: hostRule,
+                    priority: 2000,
+                    ...(bgResource.ssl ? { tls } : {})
+                };
+
+                config_output.http.routers![
+                    `${bgMaintenanceRouterName}-assets`
+                ] = {
+                    entryPoints: [
+                        bgResource.ssl ? entrypointHttps : entrypointHttp
+                    ],
+                    service: bgMaintenanceServiceName,
+                    rule: `${hostRule} && (PathPrefix(\`/_next\`) || PathRegexp(\`^/__nextjs*\`) || Path(\`/favicon.ico\`))`,
+                    priority: 2001,
+                    ...(bgResource.ssl ? { tls } : {})
+                };
+
+                continue;
+            }
+
+            // Group targets by type and generate per-type websocket routers and services
+            const typeMap = new Map<string, typeof bgResource.targets>();
+            for (const t of bgResource.targets) {
+                if (!typeMap.has(t.bgType)) typeMap.set(t.bgType, []);
+                typeMap.get(t.bgType)!.push(t);
+            }
+
+            for (const [bgType, typedTargets] of typeMap.entries()) {
+                const bgKey = `bg-r${bgResource.resourceId}-${bgType}`;
+                const bgRouterName = `${bgKey}-router`;
+                const bgServiceName = `${bgKey}-service`;
+                const bgRule = `${hostRule} && PathPrefix(\`/gateway/${bgType}\`)`;
+
+                const servers = typedTargets
+                    .filter((t) => {
+                        if (!t.siteOnline && anySiteOnline) return false;
+                        if (t.siteType === "newt") return !!t.subnet;
+                        return false; // browser gateway only supported on newt sites
+                    })
+                    .map((t) => ({
+                        url: `http://${t.subnet!.split("/")[0]}:${browserGatewayPort}`
+                    }))
+                    .filter(
+                        (v, i, a) => a.findIndex((u) => u.url === v.url) === i
+                    );
+
+                config_output.http.routers![bgRouterName] = {
+                    entryPoints: [
+                        bgResource.ssl
+                            ? config.getRawConfig().traefik.https_entrypoint
+                            : config.getRawConfig().traefik.http_entrypoint
+                    ],
+                    middlewares: routerMiddlewares,
+                    service: bgServiceName,
+                    rule: bgRule,
+                    priority: 110, // highest - websocket path takes precedence
+                    ...(bgResource.ssl ? { tls } : {})
+                };
+
+                config_output.http.services![bgServiceName] = {
+                    loadBalancer: {
+                        servers
+                    }
+                };
+            }
+
+            // UI: serve the browser gateway page from the internal pangolin instance.
+            // The primary type is used for the path rewrite (e.g. /rdp), mirroring
+            // how the maintenance page rewrites everything to /maintenance-screen.
+            const primaryType = typeMap.keys().next().value as string;
+            const internalHost = config.getRawConfig().server.internal_hostname;
+            const internalPort = config.getRawConfig().server.next_port;
+            const uiRewriteMiddlewareName = `bg-r${bgResource.resourceId}-ui-rewrite`;
+            const entrypoint = bgResource.ssl
+                ? config.getRawConfig().traefik.https_entrypoint
+                : config.getRawConfig().traefik.http_entrypoint;
+
+            if (!config_output.http.middlewares) {
+                config_output.http.middlewares = {};
+            }
+
+            config_output.http.middlewares![uiRewriteMiddlewareName] = {
+                replacePathRegex: {
+                    regex: "^/(.*)",
+                    replacement: `/${primaryType}`
+                }
+            };
+
+            config_output.http.services![bgUiServiceName] = {
+                loadBalancer: {
+                    servers: [
+                        {
+                            url: `http://${internalHost}:${internalPort}`
+                        }
+                    ]
+                }
+            };
+
+            // Assets router at higher priority so /_next files load without rewrite
+            config_output.http.routers![
+                `bg-r${bgResource.resourceId}-assets-router`
+            ] = {
+                entryPoints: [entrypoint],
+                middlewares: routerMiddlewares,
+                service: bgUiServiceName,
+                rule: `${hostRule} && (PathPrefix(\`/_next\`) || PathRegexp(\`^/__nextjs*\`) || Path(\`/favicon.ico\`))`,
+                priority: 101,
+                ...(bgResource.ssl ? { tls } : {})
+            };
+
+            // Catch-all router rewrites everything on the domain to /{primaryType}
+            config_output.http.routers![
+                `bg-r${bgResource.resourceId}-ui-router`
+            ] = {
+                entryPoints: [entrypoint],
+                middlewares: [...routerMiddlewares, uiRewriteMiddlewareName],
+                service: bgUiServiceName,
+                rule: hostRule,
+                priority: 100,
+                ...(bgResource.ssl ? { tls } : {})
+            };
+        }
+    }
+
+    // Add Traefik routes for siteResource aliases (HTTP mode + SSL) so that
+    // Traefik generates TLS certificates for those domains even when no
+    // matching resource exists yet.
+    if (siteResourcesWithFullDomain.length > 0) {
+        // Build a set of domains already covered by normal resources
+        const existingFullDomains = new Set<string>();
+        for (const resource of resourcesMap.values()) {
+            if (resource.fullDomain) {
+                existingFullDomains.add(resource.fullDomain);
+            }
+        }
+
+        for (const sr of siteResourcesWithFullDomain) {
+            if (!sr.fullDomain) continue;
+
+            // Skip if this alias is already handled by a resource router
+            if (existingFullDomains.has(sr.fullDomain)) continue;
+
+            const fullDomain = sr.fullDomain;
+            const srKey = `site-resource-cert-${sr.siteResourceId}`;
+            const siteResourceServiceName = `${srKey}-service`;
+            const siteResourceRouterName = `${srKey}-router`;
+            const siteResourceRewriteMiddlewareName = `${srKey}-rewrite`;
+
+            const maintenancePort = config.getRawConfig().server.next_port;
+            const maintenanceHost =
+                config.getRawConfig().server.internal_hostname;
+
+            if (!config_output.http.routers) {
+                config_output.http.routers = {};
+            }
+            if (!config_output.http.services) {
+                config_output.http.services = {};
+            }
+            if (!config_output.http.middlewares) {
+                config_output.http.middlewares = {};
+            }
+
+            // Service pointing at the internal maintenance/Next.js page
+            config_output.http.services[siteResourceServiceName] = {
+                loadBalancer: {
+                    servers: [
+                        {
+                            url: `http://${maintenanceHost}:${maintenancePort}`
+                        }
+                    ],
+                    passHostHeader: true
+                }
+            };
+
+            // Middleware that rewrites any path to /maintenance-screen
+            config_output.http.middlewares[siteResourceRewriteMiddlewareName] =
+                {
+                    replacePathRegex: {
+                        regex: "^/(.*)",
+                        replacement: "/private-maintenance-screen"
+                    }
+                };
+
+            // HTTP -> HTTPS redirect so the ACME challenge can be served
+            config_output.http.routers[`${siteResourceRouterName}-redirect`] = {
+                entryPoints: [config.getRawConfig().traefik.http_entrypoint],
+                middlewares: [redirectHttpsMiddlewareName],
+                service: siteResourceServiceName,
+                rule: `Host(\`${fullDomain}\`)`,
+                priority: 100
+            };
+
+            // Determine TLS / cert-resolver configuration
+            let tls: any = {};
+            if (!privateConfig.getRawPrivateConfig().flags.use_pangolin_dns) {
+                const domainParts = fullDomain.split(".");
+                const wildCard =
+                    domainParts.length <= 2
+                        ? `*.${domainParts.join(".")}`
+                        : `*.${domainParts.slice(1).join(".")}`;
+
+                const globalDefaultResolver =
+                    config.getRawConfig().traefik.cert_resolver;
+                const globalDefaultPreferWildcard =
+                    config.getRawConfig().traefik.prefer_wildcard_cert;
+
+                tls = {
+                    certResolver: globalDefaultResolver,
+                    ...(globalDefaultPreferWildcard
+                        ? { domains: [{ main: wildCard }] }
+                        : {})
+                };
+            } else {
+                // pangolin-dns: only add route if we already have a valid cert
+                const matchingCert = validCerts.find(
+                    (cert) => cert.queriedDomain === fullDomain
+                );
+                if (!matchingCert) {
+                    logger.debug(
+                        `No matching certificate found for siteResource alias: ${fullDomain}`
+                    );
+                    continue;
+                }
+            }
+
+            // HTTPS router - presence of this entry triggers cert generation
+            config_output.http.routers[siteResourceRouterName] = {
+                entryPoints: [config.getRawConfig().traefik.https_entrypoint],
+                service: siteResourceServiceName,
+                middlewares: [siteResourceRewriteMiddlewareName],
+                rule: `Host(\`${fullDomain}\`)`,
+                priority: 100,
+                tls
+            };
+
+            // Assets bypass router - lets Next.js static files load without rewrite
+            config_output.http.routers[`${siteResourceRouterName}-assets`] = {
+                entryPoints: [config.getRawConfig().traefik.https_entrypoint],
+                service: siteResourceServiceName,
+                rule: `Host(\`${fullDomain}\`) && (PathPrefix(\`/_next\`) || PathRegexp(\`^/__nextjs*\`) || Path(\`/favicon.ico\`))`,
+                priority: 101,
+                tls
             };
         }
     }
@@ -969,7 +1506,7 @@ export async function getTraefikConfig(
                         config.getRawConfig().traefik.https_entrypoint
                     ],
                     service: "landing-service",
-                    rule: `Host(\`${fullDomain}\`) && (PathRegexp(\`^/auth/resource/[^/]+$\`) || PathRegexp(\`^/auth/idp/[0-9]+/oidc/callback\`) || PathPrefix(\`/_next\`) || Path(\`/auth/org\`) || PathRegexp(\`^/__nextjs*\`))`,
+                    rule: `Host(\`${fullDomain}\`) && (PathRegexp(\`^/auth/resource/[^/]+$\`) || PathRegexp(\`^/auth/idp/[0-9]+/oidc/callback\`) || PathPrefix(\`/_next\`) || Path(\`/auth/org\`) || PathRegexp(\`^/__nextjs*\`) || Path(\`/favicon.ico\`))`,
                     priority: 203,
                     tls: tls
                 };

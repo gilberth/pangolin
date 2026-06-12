@@ -41,6 +41,7 @@ export type Env = {
         appName?: string;
         background_image_path?: string;
         hideAuthLayoutFooter?: boolean;
+        hidePoweredBy?: boolean;
         logo?: {
             lightPath?: string;
             darkPath?: string;

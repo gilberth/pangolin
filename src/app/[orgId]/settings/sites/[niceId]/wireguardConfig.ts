@@ -1,7 +1,5 @@
-/*! SPDX-License-Identifier: GPL-2.0
- *
- * Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
- */
+// SPDX-License-Identifier: GPL-2.0
+// Copyright (C) 2015-2020 Jason A. Donenfeld <Jason@zx2c4.com>. All Rights Reserved.
 
 function gf(init: number[] | undefined = undefined) {
     var r = new Float64Array(16);

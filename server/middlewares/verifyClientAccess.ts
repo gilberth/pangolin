@@ -1,11 +1,12 @@
 import { Request, Response, NextFunction } from "express";
 import { Client, db } from "@server/db";
 import { userOrgs, clients, roleClients, userClients } from "@server/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import createHttpError from "http-errors";
 import HttpCode from "@server/types/HttpCode";
 import { checkOrgAccessPolicy } from "#dynamic/lib/checkOrgAccessPolicy";
 import logger from "@server/logger";
+import { getUserOrgRoleIds } from "@server/lib/userOrgRoles";
 
 export async function verifyClientAccess(
     req: Request,
@@ -113,21 +114,30 @@ export async function verifyClientAccess(
             }
         }
 
-        const userOrgRoleId = req.userOrg.roleId;
-        req.userOrgRoleId = userOrgRoleId;
+        req.userOrgRoleIds = await getUserOrgRoleIds(
+            req.userOrg.userId,
+            client.orgId
+        );
         req.userOrgId = client.orgId;
 
-        // Check role-based site access first
-        const [roleClientAccess] = await db
-            .select()
-            .from(roleClients)
-            .where(
-                and(
-                    eq(roleClients.clientId, client.clientId),
-                    eq(roleClients.roleId, userOrgRoleId)
-                )
-            )
-            .limit(1);
+        // Check role-based client access (any of user's roles)
+        const roleClientAccessList =
+            (req.userOrgRoleIds?.length ?? 0) > 0
+                ? await db
+                      .select()
+                      .from(roleClients)
+                      .where(
+                          and(
+                              eq(roleClients.clientId, client.clientId),
+                              inArray(
+                                  roleClients.roleId,
+                                  req.userOrgRoleIds!
+                              )
+                          )
+                      )
+                      .limit(1)
+                : [];
+        const [roleClientAccess] = roleClientAccessList;
 
         if (roleClientAccess) {
             // User has access to the site through their role

@@ -1,6 +1,8 @@
 import { generateSessionToken } from "@server/auth/sessions/app";
-import { db } from "@server/db";
+import { db, newtSessions } from "@server/db";
 import { newts } from "@server/db";
+import { getOrCreateCachedToken } from "#dynamic/lib/tokenCache";
+import { EXPIRES } from "@server/auth/sessions/newt";
 import HttpCode from "@server/types/HttpCode";
 import response from "@server/lib/response";
 import { eq } from "drizzle-orm";
@@ -92,8 +94,19 @@ export async function getNewtToken(
             );
         }
 
-        const resToken = generateSessionToken();
-        await createNewtSession(resToken, existingNewt.newtId);
+        // Return a cached token if one exists to prevent thundering herd on
+        // simultaneous restarts; falls back to creating a fresh session when
+        // Redis is unavailable or the cache has expired.
+        const resToken = await getOrCreateCachedToken(
+            `newt:token_cache:${existingNewt.newtId}`,
+            config.getRawConfig().server.secret!,
+            Math.floor(EXPIRES / 1000),
+            async () => {
+                const token = generateSessionToken();
+                await createNewtSession(token, existingNewt.newtId);
+                return token;
+            }
+        );
 
         return response<{ token: string; serverVersion: string }>(res, {
             data: {

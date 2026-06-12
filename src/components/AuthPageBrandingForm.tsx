@@ -28,15 +28,14 @@ import { usePaidStatus } from "@app/hooks/usePaidStatus";
 import { toast } from "@app/hooks/useToast";
 import { createApiClient, formatAxiosError } from "@app/lib/api";
 import { build } from "@server/build";
+import { validateLocalPath } from "@app/lib/validateLocalPath";
+import { tierMatrix } from "@server/lib/billing/tierMatrix";
 import type { GetLoginPageBrandingResponse } from "@server/routers/loginPage/types";
 import { XIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { PaidFeaturesAlert } from "./PaidFeaturesAlert";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
-import { validateLocalPath } from "@app/lib/validateLocalPath";
-import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
-import { tierMatrix } from "@server/lib/billing/tierMatrix";
 
 export type AuthPageCustomizationProps = {
     orgId: string;
@@ -44,77 +43,11 @@ export type AuthPageCustomizationProps = {
 };
 
 const AuthPageFormSchema = z.object({
-    logoUrl: z.union([
-        z.literal(""),
-        z.string().superRefine(async (urlOrPath, ctx) => {
-            const parseResult = z.url().safeParse(urlOrPath);
-            if (!parseResult.success) {
-                if (build !== "enterprise") {
-                    ctx.addIssue({
-                        code: "custom",
-                        message: "Must be a valid URL"
-                    });
-                    return;
-                } else {
-                    try {
-                        validateLocalPath(urlOrPath);
-                    } catch (error) {
-                        ctx.addIssue({
-                            code: "custom",
-                            message:
-                                "Must be either a valid image URL or a valid pathname starting with `/` and not containing query parameters, `..` or `*`"
-                        });
-                    } finally {
-                        return;
-                    }
-                }
-            }
+    logoUrl: z
+        .string()
+        .optional()
+        .transform((val) => (val === "" ? undefined : val)),
 
-            try {
-                const response = await fetch(urlOrPath, {
-                    method: "HEAD"
-                }).catch(() => {
-                    // If HEAD fails (CORS or method not allowed), try GET
-                    return fetch(urlOrPath, { method: "GET" });
-                });
-
-                if (response.status !== 200) {
-                    ctx.addIssue({
-                        code: "custom",
-                        message: `Failed to load image. Please check that the URL is accessible.`
-                    });
-                    return;
-                }
-
-                const contentType = response.headers.get("content-type") ?? "";
-                if (!contentType.startsWith("image/")) {
-                    ctx.addIssue({
-                        code: "custom",
-                        message: `URL does not point to an image. Please provide a URL to an image file (e.g., .png, .jpg, .svg).`
-                    });
-                    return;
-                }
-            } catch (error) {
-                let errorMessage =
-                    "Unable to verify image URL. Please check that the URL is accessible and points to an image file.";
-
-                if (
-                    error instanceof TypeError &&
-                    error.message.includes("fetch")
-                ) {
-                    errorMessage =
-                        "Network error: Unable to reach the URL. Please check your internet connection and verify the URL is correct.";
-                } else if (error instanceof Error) {
-                    errorMessage = `Error verifying URL: ${error.message}`;
-                }
-
-                ctx.addIssue({
-                    code: "custom",
-                    message: errorMessage
-                });
-            }
-        })
-    ]),
     logoWidth: z.coerce.number<number>().min(1),
     logoHeight: z.coerce.number<number>().min(1),
     orgTitle: z.string().optional(),
@@ -158,7 +91,7 @@ export default function AuthPageBrandingForm({
             orgSubtitle: branding?.orgSubtitle ?? `Log in to {{orgName}}`,
             resourceTitle:
                 branding?.resourceTitle ??
-                `Authenticate to access {{resourceName}}`,
+                `Authenticate to Access {{resourceName}}`,
             resourceSubtitle:
                 branding?.resourceSubtitle ??
                 `Choose your preferred authentication method for {{resourceName}}`,

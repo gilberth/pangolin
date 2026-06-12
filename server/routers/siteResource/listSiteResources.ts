@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { db } from "@server/db";
+import { db, networks, siteNetworks } from "@server/db";
 import { siteResources, sites, SiteResource } from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -11,7 +11,7 @@ import logger from "@server/logger";
 import { OpenAPITags, registry } from "@server/openApi";
 
 const listSiteResourcesParamsSchema = z.strictObject({
-    siteId: z.string().transform(Number).pipe(z.int().positive()),
+    siteId: z.coerce.number().int().positive(),
     orgId: z.string()
 });
 
@@ -63,7 +63,22 @@ registry.registerPath({
         params: listSiteResourcesParamsSchema,
         query: listSiteResourcesQuerySchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function listSiteResources(
@@ -108,13 +123,18 @@ export async function listSiteResources(
             return next(createHttpError(HttpCode.NOT_FOUND, "Site not found"));
         }
 
-        // Get site resources
+        // Get site resources by joining networks to siteResources via siteNetworks
         const siteResourcesList = await db
             .select()
-            .from(siteResources)
+            .from(siteNetworks)
+            .innerJoin(networks, eq(siteNetworks.networkId, networks.networkId))
+            .innerJoin(
+                siteResources,
+                eq(siteResources.networkId, networks.networkId)
+            )
             .where(
                 and(
-                    eq(siteResources.siteId, siteId),
+                    eq(siteNetworks.siteId, siteId),
                     eq(siteResources.orgId, orgId)
                 )
             )

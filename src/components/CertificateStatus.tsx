@@ -1,43 +1,39 @@
 "use client";
 
 import { Button } from "@/components/ui/button";
-import { RotateCw } from "lucide-react";
+import { FileBadge, RotateCw } from "lucide-react";
 import { useCertificate } from "@app/hooks/useCertificate";
+import type { GetCertificateResponse } from "@server/routers/certificates/types";
 import { useTranslations } from "next-intl";
 
-type CertificateStatusProps = {
-    orgId: string;
-    domainId: string;
-    fullDomain: string;
-    autoFetch?: boolean;
+export type CertificateStatusContentProps = {
+    cert: GetCertificateResponse | null;
+    certLoading: boolean;
+    certError: string | null;
+    refreshing: boolean;
+    refreshCert: () => Promise<void>;
     showLabel?: boolean;
     className?: string;
     onRefresh?: () => void;
-    polling?: boolean;
-    pollingInterval?: number;
 };
 
-export default function CertificateStatus({
-    orgId,
-    domainId,
-    fullDomain,
-    autoFetch = true,
+/** Presentation-only certificate row (shared hook state possible via props). */
+export function CertificateStatusContent({
+    cert,
+    certLoading,
+    certError,
+    refreshing,
+    refreshCert,
     showLabel = true,
     className = "",
-    onRefresh,
-    polling = false,
-    pollingInterval = 5000
-}: CertificateStatusProps) {
+    onRefresh
+}: CertificateStatusContentProps) {
     const t = useTranslations();
-    const { cert, certLoading, certError, refreshing, refreshCert } =
-        useCertificate({
-            orgId,
-            domainId,
-            fullDomain,
-            autoFetch,
-            polling,
-            pollingInterval
-        });
+
+    const labelClass =
+        "inline-flex shrink-0 items-center self-center text-sm font-medium leading-normal";
+    const valueClass =
+        "inline-flex items-center gap-2 text-sm leading-normal";
 
     const handleRefresh = async () => {
         await refreshCert();
@@ -74,11 +70,15 @@ export default function CertificateStatus({
         return (
             <div className={`flex items-center gap-2 ${className}`}>
                 {showLabel && (
-                    <span className="text-sm font-medium">
+                    <span className={labelClass}>
                         {t("certificateStatus")}:
                     </span>
                 )}
-                <span className="text-sm text-muted-foreground">
+                <span className={valueClass}>
+                    <FileBadge
+                        className="h-4 w-4 shrink-0 animate-pulse text-muted-foreground"
+                        aria-hidden
+                    />
                     {t("loading")}
                 </span>
             </div>
@@ -89,11 +89,17 @@ export default function CertificateStatus({
         return (
             <div className={`flex items-center gap-2 ${className}`}>
                 {showLabel && (
-                    <span className="text-sm font-medium">
+                    <span className={labelClass}>
                         {t("certificateStatus")}:
                     </span>
                 )}
-                <span className="text-sm text-red-500">{certError}</span>
+                <span className={valueClass}>
+                    <FileBadge
+                        className="h-4 w-4 shrink-0 text-red-500"
+                        aria-hidden
+                    />
+                    {certError}
+                </span>
             </div>
         );
     }
@@ -102,32 +108,64 @@ export default function CertificateStatus({
         return (
             <div className={`flex items-center gap-2 ${className}`}>
                 {showLabel && (
-                    <span className="text-sm font-medium">
+                    <span className={labelClass}>
                         {t("certificateStatus")}:
                     </span>
                 )}
-                <span className="text-sm text-muted-foreground">
+                <span className={valueClass}>
+                    <FileBadge
+                        className="h-4 w-4 shrink-0 text-muted-foreground"
+                        aria-hidden
+                    />
                     {t("none", { defaultValue: "None" })}
                 </span>
             </div>
         );
     }
 
+    const isPending = cert.status === "pending";
+    const disableRestartButton = cert.domainType === "wildcard";
+
     return (
         <div className={`flex items-center gap-2 ${className}`}>
             {showLabel && (
-                <span className="text-sm font-medium">
-                    {t("certificateStatus")}:
-                </span>
+                <span className={labelClass}>{t("certificateStatus")}:</span>
             )}
-            <span className={`text-sm ${getStatusColor(cert.status)}`}>
-                <span className="inline-flex items-center">
+            {isPending && !disableRestartButton ? (
+                <Button
+                    variant="ghost"
+                    className="h-auto min-h-0 shrink-0 p-0 text-sm font-normal leading-normal inline-flex items-center self-center"
+                    onClick={handleRefresh}
+                    disabled={refreshing}
+                    title={t("restartCertificate", {
+                        defaultValue: "Restart Certificate"
+                    })}
+                >
+                    <span className="inline-flex items-center gap-2 leading-normal">
+                        <FileBadge
+                            className={`h-4 w-4 shrink-0 ${getStatusColor(cert.status)}`}
+                            aria-hidden
+                        />
+                        {cert.status.charAt(0).toUpperCase() +
+                            cert.status.slice(1)}
+                        <RotateCw
+                            className={`h-4 w-4 shrink-0 ${refreshing ? "animate-spin" : ""}`}
+                        />
+                    </span>
+                </Button>
+            ) : (
+                <span className={valueClass}>
+                    <FileBadge
+                        className={`h-4 w-4 shrink-0 ${getStatusColor(cert.status)}`}
+                        aria-hidden
+                    />
                     {cert.status.charAt(0).toUpperCase() + cert.status.slice(1)}
-                    {shouldShowRefreshButton(cert.status, cert.updatedAt) && (
+                    {shouldShowRefreshButton(cert.status, cert.updatedAt) &&
+                    !disableRestartButton ? (
                         <Button
                             size="icon"
                             variant="ghost"
-                            className="ml-2 p-0 h-auto align-middle"
+                            className="inline-flex h-4 w-4 min-h-0 shrink-0 items-center justify-center self-center p-0"
                             onClick={handleRefresh}
                             disabled={refreshing}
                             title={t("restartCertificate", {
@@ -135,12 +173,58 @@ export default function CertificateStatus({
                             })}
                         >
                             <RotateCw
-                                className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`}
+                                className={`h-4 w-4 shrink-0 ${refreshing ? "animate-spin" : ""}`}
                             />
                         </Button>
-                    )}
+                    ) : null}
                 </span>
-            </span>
+            )}
         </div>
+    );
+}
+
+type CertificateStatusProps = {
+    orgId: string;
+    domainId: string;
+    fullDomain: string;
+    autoFetch?: boolean;
+    showLabel?: boolean;
+    className?: string;
+    onRefresh?: () => void;
+    polling?: boolean;
+    pollingInterval?: number;
+};
+
+export default function CertificateStatus({
+    orgId,
+    domainId,
+    fullDomain,
+    autoFetch = true,
+    showLabel = true,
+    className = "",
+    onRefresh,
+    polling = false,
+    pollingInterval = 5000
+}: CertificateStatusProps) {
+    const hook = useCertificate({
+        orgId,
+        domainId,
+        fullDomain,
+        autoFetch,
+        polling,
+        pollingInterval
+    });
+
+    return (
+        <CertificateStatusContent
+            cert={hook.cert}
+            certLoading={hook.certLoading}
+            certError={hook.certError}
+            refreshing={hook.refreshing}
+            refreshCert={hook.refreshCert}
+            showLabel={showLabel}
+            className={className}
+            onRefresh={onRefresh}
+        />
     );
 }

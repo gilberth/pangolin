@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -28,7 +28,7 @@ import { OlmErrorCodes, sendOlmError } from "@server/routers/olm/error";
 import { sendTerminateClient } from "@server/routers/client/terminate";
 
 const reGenerateSecretParamsSchema = z.strictObject({
-    clientId: z.string().transform(Number).pipe(z.int().positive())
+    clientId: z.coerce.number().int().positive()
 });
 
 const reGenerateSecretBodySchema = z.strictObject({

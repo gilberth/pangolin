@@ -39,6 +39,7 @@ import { PaidFeaturesAlert } from "@app/components/PaidFeaturesAlert";
 import { NewtSiteInstallCommands } from "@app/components/newt-install-commands";
 import { usePaidStatus } from "@app/hooks/usePaidStatus";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
+import type { AxiosResponse } from "axios";
 
 export default function CredentialsPage() {
     const { env } = useEnvContext();
@@ -100,7 +101,9 @@ export default function CredentialsPage() {
                 generatedPublicKey = generatedKeypair.publicKey;
                 setPublicKey(generatedPublicKey);
 
-                const res = await api.get(`/org/${orgId}/pick-site-defaults`);
+                const res = await api.get<
+                    AxiosResponse<PickSiteDefaultsResponse>
+                >(`/org/${orgId}/pick-site-defaults`);
                 if (res && res.status === 200) {
                     const data = res.data.data;
                     setSiteDefaults(data);
@@ -108,7 +111,7 @@ export default function CredentialsPage() {
                     // generate config with the fetched data
                     generatedWgConfig = generateWireGuardConfig(
                         generatedKeypair.privateKey,
-                        data.publicKey,
+                        generatedKeypair.publicKey,
                         data.subnet,
                         data.address,
                         data.endpoint,
@@ -322,7 +325,7 @@ export default function CredentialsPage() {
                             {!loadingDefaults && (
                                 <>
                                     {wgConfig ? (
-                                        <div className="flex flex-col sm:flex-row items-center gap-4">
+                                        <div className="flex flex-col lg:flex-row items-center gap-4">
                                             <CopyTextBox
                                                 text={wgConfig}
                                                 outline={true}
@@ -342,25 +345,20 @@ export default function CredentialsPage() {
                                             text={generateObfuscatedWireGuardConfig(
                                                 {
                                                     subnet:
-                                                        siteDefaults?.subnet ||
                                                         site?.subnet ||
+                                                        siteDefaults?.subnet ||
                                                         null,
                                                     address:
-                                                        siteDefaults?.address ||
                                                         site?.address ||
+                                                        siteDefaults?.address ||
                                                         null,
                                                     endpoint:
-                                                        siteDefaults?.endpoint ||
                                                         site?.endpoint ||
+                                                        siteDefaults?.endpoint ||
                                                         null,
                                                     listenPort:
-                                                        siteDefaults?.listenPort ||
                                                         site?.listenPort ||
-                                                        null,
-                                                    publicKey:
-                                                        siteDefaults?.publicKey ||
-                                                        site?.publicKey ||
-                                                        site?.pubKey ||
+                                                        siteDefaults?.listenPort ||
                                                         null
                                                 }
                                             )}

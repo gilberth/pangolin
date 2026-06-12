@@ -35,6 +35,7 @@ import { useMemo, useState, useTransition } from "react";
 import { useDebouncedCallback } from "use-debounce";
 import ClientDownloadBanner from "./ClientDownloadBanner";
 import { ColumnFilterButton } from "./ColumnFilterButton";
+import IdpTypeBadge from "./IdpTypeBadge";
 import { Badge } from "./ui/badge";
 import { ControlledDataTable } from "./ui/controlled-data-table";
 
@@ -52,6 +53,9 @@ export type ClientRow = {
     userId: string | null;
     username: string | null;
     userEmail: string | null;
+    userType: string | null;
+    idpName: string | null;
+    idpVariant: string | null;
     niceId: string;
     agent: string | null;
     approvalState: "approved" | "pending" | "denied" | null;
@@ -370,17 +374,30 @@ export default function UserDevicesTable({
                 cell: ({ row }) => {
                     const r = row.original;
                     return r.userId ? (
-                        <Link
-                            href={`/${r.orgId}/settings/access/users/${r.userId}`}
-                        >
-                            <Button variant="outline">
-                                {getUserDisplayName({
-                                    email: r.userEmail,
-                                    username: r.username
-                                }) || r.userId}
-                                <ArrowUpRight className="ml-2 h-4 w-4" />
-                            </Button>
-                        </Link>
+                        <div className="flex items-center gap-2">
+                            <Link
+                                href={`/${r.orgId}/settings/access/users/${r.userId}`}
+                            >
+                                <Button variant="outline" size="sm">
+                                    {getUserDisplayName({
+                                        email: r.userEmail,
+                                        username: r.username
+                                    }) || r.userId}
+                                    <ArrowUpRight className="ml-2 h-3 w-3" />
+                                </Button>
+                            </Link>
+                            {(r.userType ?? "internal") !== "internal" && (
+                                <IdpTypeBadge
+                                    type={r.userType ?? "oidc"}
+                                    name={
+                                        r.idpName?.trim()
+                                            ? r.idpName
+                                            : t("idpNameInternal")
+                                    }
+                                    variant={r.idpVariant ?? undefined}
+                                />
+                            )}
+                        </div>
                     ) : (
                         "-"
                     );
@@ -388,7 +405,7 @@ export default function UserDevicesTable({
             },
             {
                 accessorKey: "online",
-                friendlyName: t("online"),
+                friendlyName: t("status"),
                 header: () => {
                     return (
                         <ColumnFilterButton
@@ -410,7 +427,7 @@ export default function UserDevicesTable({
                             }
                             searchPlaceholder={t("searchPlaceholder")}
                             emptyMessage={t("emptySearchOptions")}
-                            label={t("online")}
+                            label={t("status")}
                             className="p-3"
                         />
                     );
@@ -419,15 +436,15 @@ export default function UserDevicesTable({
                     const originalRow = row.original;
                     if (originalRow.online) {
                         return (
-                            <span className="text-green-500 flex items-center space-x-2">
+                            <span className="flex items-center space-x-2">
                                 <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                                 <span>{t("connected")}</span>
                             </span>
                         );
                     } else {
                         return (
-                            <span className="text-neutral-500 flex items-center space-x-2">
-                                <div className="w-2 h-2 bg-gray-500 rounded-full"></div>
+                            <span className="flex items-center space-x-2">
+                                <div className="w-2 h-2 bg-neutral-500 rounded-full"></div>
                                 <span>{t("disconnected")}</span>
                             </span>
                         );
@@ -770,13 +787,14 @@ export default function UserDevicesTable({
                 columns={columns}
                 rows={userClients || []}
                 tableId="user-clients"
-                searchPlaceholder={t("resourcesSearch")}
+                searchPlaceholder={t("userDevicesSearch")}
                 onRefresh={refreshData}
                 isRefreshing={isRefreshing || isFiltering}
                 enableColumnVisibility
                 columnVisibility={defaultUserColumnVisibility}
                 onSearch={handleSearchChange}
                 onPaginationChange={handlePaginationChange}
+                searchQuery={searchParams.get("query")?.toString()}
                 pagination={pagination}
                 rowCount={rowCount}
                 stickyLeftColumn="name"

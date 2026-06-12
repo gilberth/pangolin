@@ -14,6 +14,7 @@ import { Input } from "./ui/input";
 import { Button } from "./ui/button";
 import {
     Credenza,
+    CredenzaBody,
     CredenzaContent,
     CredenzaDescription,
     CredenzaFooter,
@@ -88,7 +89,7 @@ export function PathMatchModal({
                         {t("pathMatchModalDescription")}
                     </CredenzaDescription>
                 </CredenzaHeader>
-                <div className="grid gap-4">
+                <CredenzaBody className="grid gap-4 space-y-0">
                     <div className="grid gap-2">
                         <Label htmlFor="match-type">{t("pathMatchType")}</Label>
                         <Select value={matchType} onValueChange={setMatchType}>
@@ -122,7 +123,7 @@ export function PathMatchModal({
                             {getHelpText()}
                         </p>
                     </div>
-                </div>
+                </CredenzaBody>
                 <CredenzaFooter className="gap-2">
                     {/* {value?.path && (
                         )} */}
@@ -215,7 +216,7 @@ export function PathRewriteModal({
                         {t("pathRewriteModalDescription")}
                     </CredenzaDescription>
                 </CredenzaHeader>
-                <div className="grid gap-4">
+                <CredenzaBody className="grid gap-4 space-y-0">
                     <div className="grid gap-2">
                         <Label htmlFor="rewrite-type">
                             {t("pathRewriteType")}
@@ -257,7 +258,7 @@ export function PathRewriteModal({
                             {getHelpText()}
                         </p>
                     </div>
-                </div>
+                </CredenzaBody>
                 <CredenzaFooter className="gap-2">
                     {value?.rewritePath && (
                         <Button variant="outline" onClick={handleClear}>

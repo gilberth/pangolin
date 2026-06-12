@@ -1,8 +1,14 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { db, orgs, UserOrg } from "@server/db";
-import { roles, userInvites, userOrgs, users } from "@server/db";
-import { eq, and, inArray, ne } from "drizzle-orm";
+import { db, orgs, primaryDb } from "@server/db";
+import {
+    roles,
+    userInviteRoles,
+    userInvites,
+    userOrgs,
+    users
+} from "@server/db";
+import { eq, and, inArray } from "drizzle-orm";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
@@ -141,17 +147,32 @@ export async function acceptInvite(
             );
         }
 
-        let roleId: number;
-        // get the role to make sure it exists
-        const existingRole = await db
+        const inviteRoleRows = await db
+            .select({ roleId: userInviteRoles.roleId })
+            .from(userInviteRoles)
+            .where(eq(userInviteRoles.inviteId, inviteId));
+
+        const inviteRoleIds = [...new Set(inviteRoleRows.map((r) => r.roleId))];
+        if (inviteRoleIds.length === 0) {
+            return next(
+                createHttpError(
+                    HttpCode.BAD_REQUEST,
+                    "This invitation has no roles. Please contact an admin."
+                )
+            );
+        }
+
+        const existingRoles = await db
             .select()
             .from(roles)
-            .where(eq(roles.roleId, existingInvite.roleId))
-            .limit(1);
-        if (existingRole.length) {
-            roleId = existingRole[0].roleId;
-        } else {
-            // TODO: use the default role on the org instead of failing
+            .where(
+                and(
+                    eq(roles.orgId, existingInvite.orgId),
+                    inArray(roles.roleId, inviteRoleIds)
+                )
+            );
+
+        if (existingRoles.length !== inviteRoleIds.length) {
             return next(
                 createHttpError(
                     HttpCode.BAD_REQUEST,
@@ -165,9 +186,9 @@ export async function acceptInvite(
                 org,
                 {
                     userId: existingUser[0].userId,
-                    orgId: existingInvite.orgId,
-                    roleId: existingInvite.roleId
+                    orgId: existingInvite.orgId
                 },
+                inviteRoleIds,
                 trx
             );
 
@@ -176,12 +197,18 @@ export async function acceptInvite(
                 .delete(userInvites)
                 .where(eq(userInvites.inviteId, inviteId));
 
-            await calculateUserClientsForOrgs(existingUser[0].userId, trx);
-
             logger.debug(
                 `User ${existingUser[0].userId} accepted invite to org ${existingInvite.orgId}`
             );
         });
+
+        calculateUserClientsForOrgs(existingUser[0].userId, primaryDb).catch(
+            (e) => {
+                logger.error(
+                    `Failed to calculate user clients after accepting invite for user ${existingUser[0].userId}: ${e}`
+                );
+            }
+        );
 
         return response<AcceptInviteResponse>(res, {
             data: { accepted: true, orgId: existingInvite.orgId },

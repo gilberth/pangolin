@@ -2,11 +2,14 @@ import { internal } from "@app/lib/api";
 import { authCookieHeader } from "@app/lib/api/cookies";
 import { AxiosResponse } from "axios";
 import SettingsSectionTitle from "@app/components/SettingsSectionTitle";
-import OrgApiKeysTable, {
-    OrgApiKeyRow
-} from "../../../../components/OrgApiKeysTable";
+import OrgApiKeysTable, { OrgApiKeyRow } from "@app/components/OrgApiKeysTable";
 import { ListOrgApiKeysResponse } from "@server/routers/apiKeys";
 import { getTranslations } from "next-intl/server";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "API Keys"
+};
 
 type ApiKeyPageProps = {
     params: Promise<{ orgId: string }>;

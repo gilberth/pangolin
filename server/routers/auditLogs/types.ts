@@ -28,6 +28,7 @@ export type QueryRequestAuditLogResponse = {
         actor: string | null;
         actorId: string | null;
         resourceId: number | null;
+        siteResourceId: number | null;
         resourceNiceId: string | null;
         resourceName: string | null;
         ip: string | null;
@@ -89,5 +90,53 @@ export type QueryAccessAuditLogResponse = {
             name: string | null;
         }[];
         locations: string[];
+    };
+};
+
+export type QueryConnectionAuditLogResponse = {
+    log: {
+        sessionId: string;
+        siteResourceId: number | null;
+        orgId: string | null;
+        siteId: number | null;
+        clientId: number | null;
+        clientEndpoint: string | null;
+        userId: string | null;
+        sourceAddr: string;
+        destAddr: string;
+        protocol: string;
+        startedAt: number;
+        endedAt: number | null;
+        bytesTx: number | null;
+        bytesRx: number | null;
+        resourceName: string | null;
+        resourceNiceId: string | null;
+        siteName: string | null;
+        siteNiceId: string | null;
+        clientName: string | null;
+        clientNiceId: string | null;
+        clientType: string | null;
+        userEmail: string | null;
+    }[];
+    pagination: {
+        total: number;
+        limit: number;
+        offset: number;
+    };
+    filterAttributes: {
+        protocols: string[];
+        destAddrs: string[];
+        clients: {
+            id: number;
+            name: string;
+        }[];
+        resources: {
+            id: number;
+            name: string | null;
+        }[];
+        users: {
+            id: string;
+            email: string | null;
+        }[];
     };
 };

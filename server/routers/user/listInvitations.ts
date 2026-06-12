@@ -1,11 +1,11 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { db } from "@server/db";
-import { userInvites, roles } from "@server/db";
+import { userInvites, userInviteRoles, roles } from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
-import { sql } from "drizzle-orm";
+import { sql, eq, and, inArray } from "drizzle-orm";
 import logger from "@server/logger";
 import { fromZodError } from "zod-validation-error";
 import { OpenAPITags, registry } from "@server/openApi";
@@ -29,24 +29,69 @@ const listInvitationsQuerySchema = z.strictObject({
         .pipe(z.int().nonnegative())
 });
 
-async function queryInvitations(orgId: string, limit: number, offset: number) {
-    return await db
+export type InvitationListRow = {
+    inviteId: string;
+    email: string;
+    expiresAt: number;
+    roles: { roleId: number; roleName: string | null }[];
+};
+
+async function queryInvitations(
+    orgId: string,
+    limit: number,
+    offset: number
+): Promise<InvitationListRow[]> {
+    const inviteRows = await db
         .select({
             inviteId: userInvites.inviteId,
             email: userInvites.email,
-            expiresAt: userInvites.expiresAt,
-            roleId: userInvites.roleId,
-            roleName: roles.name
+            expiresAt: userInvites.expiresAt
         })
         .from(userInvites)
-        .leftJoin(roles, sql`${userInvites.roleId} = ${roles.roleId}`)
-        .where(sql`${userInvites.orgId} = ${orgId}`)
+        .where(eq(userInvites.orgId, orgId))
         .limit(limit)
         .offset(offset);
+
+    if (inviteRows.length === 0) {
+        return [];
+    }
+
+    const inviteIds = inviteRows.map((r) => r.inviteId);
+    const roleRows = await db
+        .select({
+            inviteId: userInviteRoles.inviteId,
+            roleId: userInviteRoles.roleId,
+            roleName: roles.name
+        })
+        .from(userInviteRoles)
+        .innerJoin(roles, eq(userInviteRoles.roleId, roles.roleId))
+        .where(
+            and(
+                eq(roles.orgId, orgId),
+                inArray(userInviteRoles.inviteId, inviteIds)
+            )
+        );
+
+    const rolesByInvite = new Map<
+        string,
+        { roleId: number; roleName: string | null }[]
+    >();
+    for (const row of roleRows) {
+        const list = rolesByInvite.get(row.inviteId) ?? [];
+        list.push({ roleId: row.roleId, roleName: row.roleName });
+        rolesByInvite.set(row.inviteId, list);
+    }
+
+    return inviteRows.map((inv) => ({
+        inviteId: inv.inviteId,
+        email: inv.email,
+        expiresAt: inv.expiresAt,
+        roles: rolesByInvite.get(inv.inviteId) ?? []
+    }));
 }
 
 export type ListInvitationsResponse = {
-    invitations: NonNullable<Awaited<ReturnType<typeof queryInvitations>>>;
+    invitations: InvitationListRow[];
     pagination: { total: number; limit: number; offset: number };
 };
 
@@ -59,7 +104,22 @@ registry.registerPath({
         params: listInvitationsParamsSchema,
         query: listInvitationsQuerySchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function listInvitations(
@@ -95,7 +155,7 @@ export async function listInvitations(
         const [{ count }] = await db
             .select({ count: sql<number>`count(*)` })
             .from(userInvites)
-            .where(sql`${userInvites.orgId} = ${orgId}`);
+            .where(eq(userInvites.orgId, orgId));
 
         return response<ListInvitationsResponse>(res, {
             data: {

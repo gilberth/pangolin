@@ -10,19 +10,28 @@ import logger from "@server/logger";
 import { fromError } from "zod-validation-error";
 import { addPeer } from "../gerbil/peers";
 import { addTargets } from "../newt/targets";
+import {
+    fireHealthCheckHealthyAlert,
+    fireHealthCheckUnknownAlert,
+    fireHealthCheckUnhealthyAlert
+} from "@server/lib/alerts";
 import { pickPort } from "./helpers";
 import { isTargetValid } from "@server/lib/validators";
 import { OpenAPITags, registry } from "@server/openApi";
-import { vs } from "@react-email/components";
+import { sendBrowserGatewayTargets } from "@server/routers/newt/targets";
 
 const updateTargetParamsSchema = z.strictObject({
-    targetId: z.string().transform(Number).pipe(z.int().positive())
+    targetId: z.coerce.number().int().positive()
 });
 
 const updateTargetBodySchema = z
     .strictObject({
         siteId: z.int().positive(),
         ip: z.string().refine(isTargetValid),
+        mode: z
+            .enum(["http", "tcp", "udp", "ssh", "rdp", "vnc"])
+            .optional()
+            .nullable(),
         method: z.string().min(1).max(10).optional().nullable(),
         port: z.int().min(1).max(65535).optional(),
         enabled: z.boolean().optional(),
@@ -32,8 +41,8 @@ const updateTargetBodySchema = z
         hcMode: z.string().optional().nullable(),
         hcHostname: z.string().optional().nullable(),
         hcPort: z.int().positive().optional().nullable(),
-        hcInterval: z.int().positive().min(5).optional().nullable(),
-        hcUnhealthyInterval: z.int().positive().min(5).optional().nullable(),
+        hcInterval: z.int().positive().min(1).optional().nullable(),
+        hcUnhealthyInterval: z.int().positive().min(1).optional().nullable(),
         hcTimeout: z.int().positive().min(1).optional().nullable(),
         hcHeaders: z
             .array(z.strictObject({ name: z.string(), value: z.string() }))
@@ -43,6 +52,8 @@ const updateTargetBodySchema = z
         hcMethod: z.string().min(1).optional().nullable(),
         hcStatus: z.int().optional().nullable(),
         hcTlsServerName: z.string().optional().nullable(),
+        hcHealthyThreshold: z.int().positive().min(1).optional().nullable(),
+        hcUnhealthyThreshold: z.int().positive().min(1).optional().nullable(),
         path: z.string().optional().nullable(),
         pathMatchType: z
             .enum(["exact", "prefix", "regex"])
@@ -74,7 +85,22 @@ registry.registerPath({
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function updateTarget(
@@ -151,32 +177,6 @@ export async function updateTarget(
             );
         }
 
-        const targetData = {
-            ...target,
-            ...parsedBody.data
-        };
-
-        const existingTargets = await db
-            .select()
-            .from(targets)
-            .where(eq(targets.resourceId, target.resourceId));
-
-        const foundTarget = existingTargets.find(
-            (target) =>
-                target.targetId !== targetId && // Exclude the current target being updated
-                target.ip === targetData.ip &&
-                target.port === targetData.port &&
-                target.method === targetData.method &&
-                target.siteId === targetData.siteId
-        );
-
-        if (foundTarget) {
-            // log a warning
-            logger.warn(
-                `Target with IP ${targetData.ip}, port ${targetData.port}, method ${targetData.method} already exists for resource ID ${target.resourceId}`
-            );
-        }
-
         const { internalPort, targetIps } = await pickPort(site.siteId!, db);
 
         if (!internalPort) {
@@ -188,60 +188,154 @@ export async function updateTarget(
             );
         }
 
-        const [updatedTarget] = await db
-            .update(targets)
-            .set({
-                siteId: parsedBody.data.siteId,
-                ip: parsedBody.data.ip,
-                method: parsedBody.data.method,
-                port: parsedBody.data.port,
-                internalPort,
-                enabled: parsedBody.data.enabled,
-                path: parsedBody.data.path,
-                pathMatchType: parsedBody.data.pathMatchType,
-                priority: parsedBody.data.priority,
-                rewritePath: parsedBody.data.rewritePath,
-                rewritePathType: parsedBody.data.rewritePathType
-            })
-            .where(eq(targets.targetId, targetId))
-            .returning();
+        const pathMatchTypeRemoved = parsedBody.data.pathMatchType === null;
+        const nextMode =
+            parsedBody.data.mode === null ? undefined : parsedBody.data.mode;
 
-        let hcHeaders = null;
-        if (parsedBody.data.hcHeaders) {
-            hcHeaders = JSON.stringify(parsedBody.data.hcHeaders);
-        }
+        let updatedTarget: any;
+        let updatedHc: any;
+        await db.transaction(async (trx) => {
+            [updatedTarget] = await trx
+                .update(targets)
+                .set({
+                    siteId: parsedBody.data.siteId,
+                    ip: parsedBody.data.ip,
+                    mode: nextMode,
+                    method: parsedBody.data.method,
+                    port: parsedBody.data.port,
+                    internalPort,
+                    enabled: parsedBody.data.enabled,
+                    path: parsedBody.data.path,
+                    pathMatchType: parsedBody.data.pathMatchType,
+                    priority: parsedBody.data.priority,
+                    rewritePath: pathMatchTypeRemoved
+                        ? null
+                        : parsedBody.data.rewritePath,
+                    rewritePathType: pathMatchTypeRemoved
+                        ? null
+                        : parsedBody.data.rewritePathType
+                })
+                .where(eq(targets.targetId, targetId))
+                .returning();
 
-        // When health check is disabled, reset hcHealth to "unknown"
-        // to prevent previously unhealthy targets from being excluded
-        // Also when the site is not a newt, set hcHealth to "unknown"
-        const hcHealthValue =
-            parsedBody.data.hcEnabled === false ||
-            parsedBody.data.hcEnabled === null ||
-            site.type !== "newt"
-                ? "unknown"
-                : undefined;
+            const [existingHc] = await trx
+                .select()
+                .from(targetHealthCheck)
+                .where(eq(targetHealthCheck.targetId, targetId))
+                .limit(1);
 
-        const [updatedHc] = await db
-            .update(targetHealthCheck)
-            .set({
-                hcEnabled: parsedBody.data.hcEnabled || false,
-                hcPath: parsedBody.data.hcPath,
-                hcScheme: parsedBody.data.hcScheme,
-                hcMode: parsedBody.data.hcMode,
-                hcHostname: parsedBody.data.hcHostname,
-                hcPort: parsedBody.data.hcPort,
-                hcInterval: parsedBody.data.hcInterval,
-                hcUnhealthyInterval: parsedBody.data.hcUnhealthyInterval,
-                hcTimeout: parsedBody.data.hcTimeout,
-                hcHeaders: hcHeaders,
-                hcFollowRedirects: parsedBody.data.hcFollowRedirects,
-                hcMethod: parsedBody.data.hcMethod,
-                hcStatus: parsedBody.data.hcStatus,
-                hcTlsServerName: parsedBody.data.hcTlsServerName,
-                ...(hcHealthValue !== undefined && { hcHealth: hcHealthValue })
-            })
-            .where(eq(targetHealthCheck.targetId, targetId))
-            .returning();
+            if (!existingHc) {
+                return next(
+                    createHttpError(
+                        HttpCode.NOT_FOUND,
+                        `Health check for target with ID ${targetId} not found`
+                    )
+                );
+            }
+
+            let hcHeaders = null;
+            if (parsedBody.data.hcHeaders) {
+                hcHeaders = JSON.stringify(parsedBody.data.hcHeaders);
+            }
+
+            // When health check is disabled, reset hcHealth to "unknown"
+            // to prevent previously unhealthy targets from being excluded.
+            // Also when the site is not a newt, set hcHealth to "unknown".
+            // If hcEnabled is being turned on (was false, now true), set to "unhealthy"
+            // so the target must pass a health check before being considered healthy.
+            const hcEnabledTurnedOn =
+                parsedBody.data.hcEnabled === true &&
+                existingHc.hcEnabled === false;
+
+            let hcHealthValue: "unknown" | "healthy" | "unhealthy" | undefined;
+            if (
+                parsedBody.data.hcEnabled === false ||
+                parsedBody.data.hcEnabled === null ||
+                site.type !== "newt"
+            ) {
+                hcHealthValue = "unknown";
+            } else if (hcEnabledTurnedOn) {
+                hcHealthValue = "unhealthy";
+            } else {
+                hcHealthValue = undefined;
+            }
+
+            [updatedHc] = await trx
+                .update(targetHealthCheck)
+                .set({
+                    siteId: parsedBody.data.siteId,
+                    hcEnabled: parsedBody.data.hcEnabled || false,
+                    hcPath: parsedBody.data.hcPath,
+                    hcScheme: parsedBody.data.hcScheme,
+                    hcMode: parsedBody.data.hcMode,
+                    hcHostname: parsedBody.data.hcHostname,
+                    hcPort: parsedBody.data.hcPort,
+                    hcInterval: parsedBody.data.hcInterval,
+                    hcUnhealthyInterval: parsedBody.data.hcUnhealthyInterval,
+                    hcTimeout: parsedBody.data.hcTimeout,
+                    hcHeaders: hcHeaders,
+                    hcFollowRedirects: parsedBody.data.hcFollowRedirects,
+                    hcMethod: parsedBody.data.hcMethod,
+                    hcStatus: parsedBody.data.hcStatus,
+                    hcTlsServerName: parsedBody.data.hcTlsServerName,
+                    hcHealthyThreshold: parsedBody.data.hcHealthyThreshold,
+                    hcUnhealthyThreshold: parsedBody.data.hcUnhealthyThreshold,
+                    hcHealth: hcHealthValue
+                })
+                .where(eq(targetHealthCheck.targetId, targetId))
+                .returning();
+
+            if (
+                updatedHc.hcHealth === "unhealthy" &&
+                existingHc.hcHealth !== "unhealthy"
+            ) {
+                logger.debug(
+                    `Health check ${updatedHc.targetHealthCheckId} for target ${targetId} is now unhealthy, firing alert`
+                );
+                await fireHealthCheckUnhealthyAlert(
+                    updatedHc.orgId,
+                    updatedHc.targetHealthCheckId,
+                    updatedHc.name || "",
+                    updatedHc.targetId,
+                    undefined,
+                    false, // dont send the alert because we just want to create the alert, not notify users yet
+                    trx
+                );
+            } else if (
+                updatedHc.hcHealth === "unknown" &&
+                existingHc.hcHealth !== "unknown"
+            ) {
+                logger.debug(
+                    `Health check ${updatedHc.targetHealthCheckId} for target ${targetId} is now unknown, firing alert`
+                );
+                // if the health is unknown, we want to fire an alert to notify users to enable health checks
+                await fireHealthCheckUnknownAlert(
+                    updatedHc.orgId,
+                    updatedHc.targetHealthCheckId,
+                    updatedHc.name,
+                    updatedHc.targetId,
+                    undefined,
+                    false, // dont send the alert because we just want to create the alert, not notify users yet
+                    trx
+                );
+            } else if (
+                updatedHc.hcHealth === "healthy" &&
+                existingHc.hcHealth !== "healthy"
+            ) {
+                logger.debug(
+                    `Health check ${updatedHc.targetHealthCheckId} for target ${targetId} is now healthy, firing alert`
+                );
+                await fireHealthCheckHealthyAlert(
+                    updatedHc.orgId,
+                    updatedHc.targetHealthCheckId,
+                    updatedHc.name,
+                    updatedHc.targetId,
+                    undefined,
+                    false, // dont send the alert because we just want to create the alert, not notify users yet
+                    trx
+                );
+            }
+        });
 
         if (site.pubKey) {
             if (site.type == "wireguard") {
@@ -257,15 +351,24 @@ export async function updateTarget(
                     .where(eq(newts.siteId, site.siteId))
                     .limit(1);
 
-                await addTargets(
-                    newt.newtId,
-                    [updatedTarget],
-                    [updatedHc],
-                    resource.protocol,
-                    newt.version
-                );
+                if (["http", "tcp", "udp"].includes(updatedTarget.mode)) {
+                    await addTargets(
+                        newt.newtId,
+                        [updatedTarget],
+                        [updatedHc],
+                        resource.mode === "udp" ? "udp" : "tcp",
+                        newt.version
+                    );
+                } else if (["ssh", "rdp", "vnc"].includes(updatedTarget.mode)) {
+                    await sendBrowserGatewayTargets(
+                        newt.newtId,
+                        [updatedTarget],
+                        newt.version
+                    );
+                }
             }
         }
+
         return response(res, {
             data: {
                 ...updatedTarget,

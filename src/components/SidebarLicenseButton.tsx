@@ -10,6 +10,7 @@ import { Button } from "./ui/button";
 import { TicketCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useLicenseStatusContext } from "@app/hooks/useLicenseStatusContext";
+import { useUserContext } from "@app/hooks/useUserContext";
 import Link from "next/link";
 
 interface SidebarLicenseButtonProps {
@@ -20,8 +21,11 @@ export default function SidebarLicenseButton({
     isCollapsed = false
 }: SidebarLicenseButtonProps) {
     const { licenseStatus, updateLicenseStatus } = useLicenseStatusContext();
+    const { user } = useUserContext();
 
-    const url = "https://docs.pangolin.net/self-host/enterprise-edition";
+    const url = user?.serverAdmin
+        ? "/admin/license"
+        : "https://docs.pangolin.net/self-host/enterprise-edition";
 
     const t = useTranslations();
 

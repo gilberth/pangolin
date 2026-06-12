@@ -1,43 +1,25 @@
 import {
-    Client,
     clientSiteResourcesAssociationsCache,
     db,
-    ExitNode,
-    Org,
-    orgs,
-    roleClients,
-    roles,
+    networks,
+    siteNetworks,
     siteResources,
-    Transaction,
-    userClients,
-    userOrgs,
-    users
 } from "@server/db";
 import { MessageHandler } from "@server/routers/ws";
 import {
     clients,
     clientSitesAssociationsCache,
-    exitNodes,
     Olm,
-    olms,
     sites
 } from "@server/db";
 import { and, eq, inArray, isNotNull, isNull } from "drizzle-orm";
-import { addPeer, deletePeer } from "../newt/peers";
 import logger from "@server/logger";
-import { listExitNodes } from "#dynamic/lib/exitNodes";
 import {
     generateAliasConfig,
-    getNextAvailableClientSubnet
 } from "@server/lib/ip";
 import { generateRemoteSubnets } from "@server/lib/ip";
-import { rebuildClientAssociationsFromClient } from "@server/lib/rebuildClientAssociations";
-import { checkOrgAccessPolicy } from "#dynamic/lib/checkOrgAccessPolicy";
-import { validateSessionToken } from "@server/auth/sessions/app";
-import config from "@server/lib/config";
 import {
     addPeer as newtAddPeer,
-    deletePeer as newtDeletePeer
 } from "@server/routers/newt/peers";
 
 export const handleOlmServerPeerAddMessage: MessageHandler = async (
@@ -153,13 +135,21 @@ export const handleOlmServerPeerAddMessage: MessageHandler = async (
                 clientSiteResourcesAssociationsCache.siteResourceId
             )
         )
-        .where(
+        .innerJoin(
+            networks,
+            eq(siteResources.networkId, networks.networkId)
+        )
+        .innerJoin(
+            siteNetworks,
             and(
-                eq(siteResources.siteId, site.siteId),
-                eq(
-                    clientSiteResourcesAssociationsCache.clientId,
-                    client.clientId
-                )
+                eq(networks.networkId, siteNetworks.networkId),
+                eq(siteNetworks.siteId, site.siteId)
+            )
+        )
+        .where(
+            eq(
+                clientSiteResourcesAssociationsCache.clientId,
+                client.clientId
             )
         );
 

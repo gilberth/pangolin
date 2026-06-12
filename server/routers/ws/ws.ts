@@ -3,9 +3,18 @@ import zlib from "zlib";
 import { Server as HttpServer } from "http";
 import { WebSocket, WebSocketServer } from "ws";
 import { Socket } from "net";
-import { Newt, newts, NewtSession, olms, Olm, OlmSession, sites } from "@server/db";
+import {
+    Newt,
+    newts,
+    NewtSession,
+    olms,
+    Olm,
+    OlmSession,
+    sites
+} from "@server/db";
 import { eq } from "drizzle-orm";
 import { db } from "@server/db";
+import { recordPing } from "@server/routers/newt/pingAccumulator";
 import { validateNewtSessionToken } from "@server/auth/sessions/newt";
 import { validateOlmSessionToken } from "@server/auth/sessions/olm";
 import { messageHandlers } from "./messageHandlers";
@@ -79,6 +88,9 @@ const removeClient = async (
     const updatedClients = existingClients.filter((client) => client !== ws);
     if (updatedClients.length === 0) {
         connectedClients.delete(mapKey);
+        // Remove clientId from clientConfigVersions — prevents unbounded growth
+        // from stale entries.
+        clientConfigVersions.delete(clientId);
 
         logger.info(
             `All connections removed for ${clientType.toUpperCase()} ID: ${clientId}`
@@ -217,9 +229,13 @@ const hasActiveConnections = async (clientId: string): Promise<boolean> => {
 };
 
 // Get the current config version for a client
-const getClientConfigVersion = async (clientId: string): Promise<number | undefined> => {
+const getClientConfigVersion = async (
+    clientId: string
+): Promise<number | undefined> => {
     const version = clientConfigVersions.get(clientId);
-    logger.debug(`getClientConfigVersion called for clientId: ${clientId}, returning: ${version} (type: ${typeof version})`);
+    logger.debug(
+        `getClientConfigVersion called for clientId: ${clientId}, returning: ${version} (type: ${typeof version})`
+    );
     return version;
 };
 
@@ -386,22 +402,14 @@ const setupConnection = async (
     // the same as modern newt clients.
     if (clientType === "newt") {
         const newtClient = client as Newt;
-        ws.on("ping", async () => {
+        ws.on("ping", () => {
             if (!newtClient.siteId) return;
-            try {
-                await db
-                    .update(sites)
-                    .set({
-                        online: true,
-                        lastPing: Math.floor(Date.now() / 1000)
-                    })
-                    .where(eq(sites.siteId, newtClient.siteId));
-            } catch (error) {
-                logger.error(
-                    "Error updating newt site online state on WS ping",
-                    { error }
-                );
-            }
+            // Record the ping in the accumulator instead of writing to the
+            // database on every WS ping frame. The accumulator flushes all
+            // pending pings in a single batched UPDATE every ~10s, which
+            // prevents connection pool exhaustion under load (especially
+            // with cross-region latency to the database).
+            recordPing(newtClient.siteId);
         });
     }
 
@@ -513,6 +521,11 @@ const disconnectClient = async (clientId: string): Promise<boolean> => {
             client.close(1000, "Disconnected by server");
         }
     });
+
+    // Eagerly remove client — close event may not fire if socket already
+    // CLOSING, leaving zombie entries.
+    connectedClients.delete(mapKey);
+    clientConfigVersions.delete(clientId);
 
     return true;
 };

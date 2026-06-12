@@ -10,14 +10,25 @@ import {
     FormMessage
 } from "@app/components/ui/form";
 import { Input } from "@app/components/ui/input";
+import { Textarea } from "@app/components/ui/textarea";
 import {
     OptionSelect,
     type OptionSelectOption
 } from "@app/components/OptionSelect";
+import { TextFileImportDialog } from "@app/components/TextFileImportDialog";
 import { useEnvContext } from "@app/hooks/useEnvContext";
 import { usePaidStatus } from "@app/hooks/usePaidStatus";
+import { toast } from "@app/hooks/useToast";
+import { cn } from "@app/lib/cn";
+import {
+    getTextImportFileType,
+    isSupportedTextImportFile,
+    parseTextFileItems,
+    readFileAsText,
+    type TextImportFileType
+} from "@app/lib/roleFormTextImport";
 import { useTranslations } from "next-intl";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -46,6 +57,39 @@ function toSshSudoMode(value: string | null | undefined): SshSudoMode {
     return "none";
 }
 
+export function parseUnixGroups(value: string | undefined): string[] {
+    if (!value?.trim()) return [];
+
+    return value
+        .split(/[,\s\n]+/)
+        .map((group) => group.trim())
+        .filter(Boolean);
+}
+
+export function parseSudoCommands(value: string | undefined): string[] {
+    if (!value?.trim()) return [];
+
+    const commands: string[] = [];
+    for (const segment of value.split(/[,\n]+/)) {
+        const trimmed = segment.trim();
+        if (!trimmed) continue;
+
+        for (const part of trimmed.split(/ (?=\/)/)) {
+            const command = part.trim();
+            if (command) commands.push(command);
+        }
+    }
+
+    return commands;
+}
+
+function hasOnlyAbsoluteSudoCommands(value: string | undefined): boolean {
+    return parseSudoCommands(value).every((command) => {
+        const executable = command.split(/\s+/)[0];
+        return executable.startsWith("/");
+    });
+}
+
 export type RoleFormValues = {
     name: string;
     description?: string;
@@ -64,6 +108,15 @@ type RoleFormProps = {
     formId?: string;
 };
 
+type RoleTextImportField = "sshSudoCommands" | "sshUnixGroups";
+
+type PendingTextImport = {
+    field: RoleTextImportField;
+    fileName: string;
+    fileType: TextImportFileType;
+    rawContent: string;
+};
+
 export function RoleForm({
     variant,
     role,
@@ -74,19 +127,33 @@ export function RoleForm({
     const { isPaidUser } = usePaidStatus();
     const { env } = useEnvContext();
 
-    const formSchema = z.object({
-        name: z
-            .string({ message: t("nameRequired") })
-            .min(1)
-            .max(32),
-        description: z.string().max(255).optional(),
-        requireDeviceApproval: z.boolean().optional(),
-        allowSsh: z.boolean().optional(),
-        sshSudoMode: z.enum(SSH_SUDO_MODE_VALUES),
-        sshSudoCommands: z.string().optional(),
-        sshCreateHomeDir: z.boolean().optional(),
-        sshUnixGroups: z.string().optional()
-    });
+    const formSchema = z
+        .object({
+            name: z
+                .string({ message: t("nameRequired") })
+                .min(1)
+                .max(32),
+            description: z.string().max(255).optional(),
+            requireDeviceApproval: z.boolean().optional(),
+            allowSsh: z.boolean().optional(),
+            sshSudoMode: z.enum(SSH_SUDO_MODE_VALUES),
+            sshSudoCommands: z.string().optional(),
+            sshCreateHomeDir: z.boolean().optional(),
+            sshUnixGroups: z.string().optional()
+        })
+        .superRefine((values, ctx) => {
+            if (
+                values.sshSudoMode === "commands" &&
+                !hasOnlyAbsoluteSudoCommands(values.sshSudoCommands)
+            ) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: ["sshSudoCommands"],
+                    message:
+                        "Each sudo command must start with an absolute path (for example, /usr/bin/systemctl)."
+                });
+            }
+        });
 
     const defaultValues: RoleFormValues = role
         ? {
@@ -97,10 +164,10 @@ export function RoleForm({
                   (role as Role & { allowSsh?: boolean }).allowSsh ?? false,
               sshSudoMode: toSshSudoMode(role.sshSudoMode),
               sshSudoCommands: parseRoleJsonArray(role.sshSudoCommands).join(
-                  ", "
+                  "\n"
               ),
               sshCreateHomeDir: role.sshCreateHomeDir ?? false,
-              sshUnixGroups: parseRoleJsonArray(role.sshUnixGroups).join(", ")
+              sshUnixGroups: parseRoleJsonArray(role.sshUnixGroups).join("\n")
           }
         : {
               name: "",
@@ -128,23 +195,99 @@ export function RoleForm({
                     (role as Role & { allowSsh?: boolean }).allowSsh ?? false,
                 sshSudoMode: toSshSudoMode(role.sshSudoMode),
                 sshSudoCommands: parseRoleJsonArray(role.sshSudoCommands).join(
-                    ", "
+                    "\n"
                 ),
                 sshCreateHomeDir: role.sshCreateHomeDir ?? false,
-                sshUnixGroups: parseRoleJsonArray(role.sshUnixGroups).join(", ")
+                sshUnixGroups: parseRoleJsonArray(role.sshUnixGroups).join("\n")
             });
         }
     }, [variant, role, form]);
 
-    const sshDisabled = !isPaidUser(tierMatrix.sshPam);
+    const sshDisabled = !isPaidUser(tierMatrix.advancedPrivateResources);
     const sshSudoMode = form.watch("sshSudoMode");
     const isAdminRole = variant === "edit" && role?.isAdmin === true;
+    const [pendingImport, setPendingImport] =
+        useState<PendingTextImport | null>(null);
+    const [dragOverField, setDragOverField] =
+        useState<RoleTextImportField | null>(null);
 
     useEffect(() => {
         if (sshDisabled) {
             form.setValue("allowSsh", false);
         }
     }, [sshDisabled, form]);
+
+    async function handleFileDrop(
+        file: File,
+        field: RoleTextImportField
+    ): Promise<void> {
+        if (!isSupportedTextImportFile(file)) {
+            toast({
+                variant: "destructive",
+                title: t("roleTextImportInvalidFile"),
+                description: t("roleTextImportInvalidFileDescription")
+            });
+            return;
+        }
+
+        const fileType = getTextImportFileType(file);
+        if (!fileType) return;
+
+        const rawContent = await readFileAsText(file);
+        const parser =
+            field === "sshSudoCommands" ? parseSudoCommands : parseUnixGroups;
+        const items = parseTextFileItems({
+            content: rawContent,
+            fileType,
+            skipHeader: false,
+            parser
+        });
+
+        if (items.length === 0) {
+            toast({
+                variant: "destructive",
+                title: t("roleTextImportEmpty"),
+                description: t("roleTextImportEmptyDescription")
+            });
+            return;
+        }
+
+        setPendingImport({
+            field,
+            fileName: file.name,
+            fileType,
+            rawContent
+        });
+    }
+
+    function getTextImportDropHandlers(field: RoleTextImportField) {
+        return {
+            onDragOver: (event: React.DragEvent<HTMLTextAreaElement>) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (!sshDisabled) {
+                    setDragOverField(field);
+                }
+            },
+            onDragLeave: (event: React.DragEvent<HTMLTextAreaElement>) => {
+                event.preventDefault();
+                setDragOverField((current) =>
+                    current === field ? null : current
+                );
+            },
+            onDrop: (event: React.DragEvent<HTMLTextAreaElement>) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setDragOverField(null);
+                if (sshDisabled) return;
+
+                const file = event.dataTransfer.files[0];
+                if (file) {
+                    void handleFileDrop(file, field);
+                }
+            }
+        };
+    }
 
     return (
         <Form {...form}>
@@ -291,12 +434,16 @@ export function RoleForm({
                         {/* SSH tab - hidden when enterprise features are disabled */}
                         {!env.flags.disableEnterpriseFeatures && (
                             <div className="space-y-4 mt-4">
-                                <PaidFeaturesAlert tiers={tierMatrix.sshPam} />
+                                <PaidFeaturesAlert
+                                    tiers={tierMatrix.advancedPrivateResources}
+                                />
                                 <FormField
                                     control={form.control}
                                     name="allowSsh"
                                     render={({ field }) => {
-                                        const allowSshOptions: OptionSelectOption<"allow" | "disallow">[] = [
+                                        const allowSshOptions: OptionSelectOption<
+                                            "allow" | "disallow"
+                                        >[] = [
                                             {
                                                 value: "allow",
                                                 label: t("roleAllowSshAllow")
@@ -311,7 +458,9 @@ export function RoleForm({
                                                 <FormLabel>
                                                     {t("roleAllowSsh")}
                                                 </FormLabel>
-                                                <OptionSelect<"allow" | "disallow">
+                                                <OptionSelect<
+                                                    "allow" | "disallow"
+                                                >
                                                     options={allowSshOptions}
                                                     value={
                                                         sshDisabled
@@ -322,7 +471,9 @@ export function RoleForm({
                                                     }
                                                     onChange={(v) => {
                                                         if (sshDisabled) return;
-                                                        field.onChange(v === "allow");
+                                                        field.onChange(
+                                                            v === "allow"
+                                                        );
                                                     }}
                                                     cols={2}
                                                     disabled={sshDisabled}
@@ -385,9 +536,25 @@ export function RoleForm({
                                                     {t("sshSudoCommands")}
                                                 </FormLabel>
                                                 <FormControl>
-                                                    <Input
+                                                    <Textarea
                                                         {...field}
+                                                        {...getTextImportDropHandlers(
+                                                            "sshSudoCommands"
+                                                        )}
+                                                        placeholder={
+                                                            sshDisabled
+                                                                ? undefined
+                                                                : t(
+                                                                      "roleTextFieldPlaceholder"
+                                                                  )
+                                                        }
                                                         disabled={sshDisabled}
+                                                        className={cn(
+                                                            "h-20 min-h-20",
+                                                            dragOverField ===
+                                                                "sshSudoCommands" &&
+                                                                "border-primary"
+                                                        )}
                                                     />
                                                 </FormControl>
                                                 <FormDescription>
@@ -410,9 +577,25 @@ export function RoleForm({
                                                 {t("sshUnixGroups")}
                                             </FormLabel>
                                             <FormControl>
-                                                <Input
+                                                <Textarea
                                                     {...field}
+                                                    {...getTextImportDropHandlers(
+                                                        "sshUnixGroups"
+                                                    )}
+                                                    placeholder={
+                                                        sshDisabled
+                                                            ? undefined
+                                                            : t(
+                                                                  "roleTextFieldPlaceholder"
+                                                              )
+                                                    }
                                                     disabled={sshDisabled}
+                                                    className={cn(
+                                                        "h-20 min-h-20",
+                                                        dragOverField ===
+                                                            "sshUnixGroups" &&
+                                                            "border-primary"
+                                                    )}
                                                 />
                                             </FormControl>
                                             <FormDescription>
@@ -463,6 +646,38 @@ export function RoleForm({
                     </HorizontalTabs>
                 )}
             </form>
+            {pendingImport && (
+                <TextFileImportDialog
+                    key={`${pendingImport.field}-${pendingImport.fileName}`}
+                    open={true}
+                    onOpenChange={(open) => {
+                        if (!open) {
+                            setPendingImport(null);
+                        }
+                    }}
+                    fileName={pendingImport.fileName}
+                    fileType={pendingImport.fileType}
+                    rawContent={pendingImport.rawContent}
+                    currentValue={form.watch(pendingImport.field) ?? ""}
+                    fieldLabel={
+                        pendingImport.field === "sshSudoCommands"
+                            ? t("sshSudoCommands")
+                            : t("sshUnixGroups")
+                    }
+                    parser={
+                        pendingImport.field === "sshSudoCommands"
+                            ? parseSudoCommands
+                            : parseUnixGroups
+                    }
+                    onConfirm={(value) => {
+                        form.setValue(pendingImport.field, value, {
+                            shouldDirty: true,
+                            shouldValidate: true
+                        });
+                        setPendingImport(null);
+                    }}
+                />
+            )}
         </Form>
     );
 }

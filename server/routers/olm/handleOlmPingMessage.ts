@@ -1,102 +1,16 @@
-import { disconnectClient, getClientConfigVersion } from "#dynamic/routers/ws";
+import { getClientConfigVersion } from "#dynamic/routers/ws";
 import { db } from "@server/db";
 import { MessageHandler } from "@server/routers/ws";
-import { clients, olms, Olm } from "@server/db";
-import { eq, lt, isNull, and, or } from "drizzle-orm";
+import { clients, Olm } from "@server/db";
+import { eq } from "drizzle-orm";
+import { recordClientPing } from "@server/routers/newt/pingAccumulator";
 import logger from "@server/logger";
 import { validateSessionToken } from "@server/auth/sessions/app";
 import { checkOrgAccessPolicy } from "#dynamic/lib/checkOrgAccessPolicy";
-import { sendTerminateClient } from "../client/terminate";
 import { encodeHexLowerCase } from "@oslojs/encoding";
 import { sha256 } from "@oslojs/crypto/sha2";
 import { sendOlmSyncMessage } from "./sync";
-import { OlmErrorCodes } from "./error";
 import { handleFingerprintInsertion } from "./fingerprintingUtils";
-
-// Track if the offline checker interval is running
-let offlineCheckerInterval: NodeJS.Timeout | null = null;
-const OFFLINE_CHECK_INTERVAL = 30 * 1000; // Check every 30 seconds
-const OFFLINE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
-
-/**
- * Starts the background interval that checks for clients that haven't pinged recently
- * and marks them as offline
- */
-export const startOlmOfflineChecker = (): void => {
-    if (offlineCheckerInterval) {
-        return; // Already running
-    }
-
-    offlineCheckerInterval = setInterval(async () => {
-        try {
-            const twoMinutesAgo = Math.floor(
-                (Date.now() - OFFLINE_THRESHOLD_MS) / 1000
-            );
-
-            // TODO: WE NEED TO MAKE SURE THIS WORKS WITH DISTRIBUTED NODES ALL DOING THE SAME THING
-
-            // Find clients that haven't pinged in the last 2 minutes and mark them as offline
-            const offlineClients = await db
-                .update(clients)
-                .set({ online: false })
-                .where(
-                    and(
-                        eq(clients.online, true),
-                        or(
-                            lt(clients.lastPing, twoMinutesAgo),
-                            isNull(clients.lastPing)
-                        )
-                    )
-                )
-                .returning();
-
-            for (const offlineClient of offlineClients) {
-                logger.info(
-                    `Kicking offline olm client ${offlineClient.clientId} due to inactivity`
-                );
-
-                if (!offlineClient.olmId) {
-                    logger.warn(
-                        `Offline client ${offlineClient.clientId} has no olmId, cannot disconnect`
-                    );
-                    continue;
-                }
-
-                // Send a disconnect message to the client if connected
-                try {
-                    await sendTerminateClient(
-                        offlineClient.clientId,
-                        OlmErrorCodes.TERMINATED_INACTIVITY,
-                        offlineClient.olmId
-                    ); // terminate first
-                    // wait a moment to ensure the message is sent
-                    await new Promise((resolve) => setTimeout(resolve, 1000));
-                    await disconnectClient(offlineClient.olmId);
-                } catch (error) {
-                    logger.error(
-                        `Error sending disconnect to offline olm ${offlineClient.clientId}`,
-                        { error }
-                    );
-                }
-            }
-        } catch (error) {
-            logger.error("Error in offline checker interval", { error });
-        }
-    }, OFFLINE_CHECK_INTERVAL);
-
-    logger.debug("Started offline checker interval");
-};
-
-/**
- * Stops the background interval that checks for offline clients
- */
-export const stopOlmOfflineChecker = (): void => {
-    if (offlineCheckerInterval) {
-        clearInterval(offlineCheckerInterval);
-        offlineCheckerInterval = null;
-        logger.info("Stopped offline checker interval");
-    }
-};
 
 /**
  * Handles ping messages from clients and responds with pong
@@ -201,22 +115,12 @@ export const handleOlmPingMessage: MessageHandler = async (context) => {
             await sendOlmSyncMessage(olm, client);
         }
 
-        // Update the client's last ping timestamp
-        await db
-            .update(clients)
-            .set({
-                lastPing: Math.floor(Date.now() / 1000),
-                online: true,
-                archived: false
-            })
-            .where(eq(clients.clientId, olm.clientId));
-
-        if (olm.archived) {
-            await db
-                .update(olms)
-                .set({ archived: false })
-                .where(eq(olms.olmId, olm.olmId));
-        }
+        // Record the ping in memory; it will be flushed to the database
+        // periodically by the ping accumulator (every ~10s) in a single
+        // batched UPDATE instead of one query per ping. This prevents
+        // connection pool exhaustion under load, especially with
+        // cross-region latency to the database.
+        recordClientPing(olm.clientId, olm.olmId, !!olm.archived);
     } catch (error) {
         logger.error("Error handling ping message", { error });
     }

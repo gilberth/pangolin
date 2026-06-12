@@ -1,5 +1,5 @@
 import { CommandModule } from "yargs";
-import { db, idpOidcConfig, licenseKey } from "@server/db";
+import { db, idpOidcConfig, licenseKey, certificates, eventStreamingDestinations, alertWebhookActions } from "@server/db";
 import { encrypt, decrypt } from "@server/lib/crypto";
 import { configFilePath1, configFilePath2 } from "@server/lib/consts";
 import { eq } from "drizzle-orm";
@@ -129,9 +129,15 @@ export const rotateServerSecret: CommandModule<
             console.log("\nReading encrypted data from database...");
             const idpConfigs = await db.select().from(idpOidcConfig);
             const licenseKeys = await db.select().from(licenseKey);
+            const certs = await db.select().from(certificates);
+            const streamingDestinations = await db.select().from(eventStreamingDestinations);
+            const webhookActions = await db.select().from(alertWebhookActions);
 
             console.log(`Found ${idpConfigs.length} OIDC IdP configuration(s)`);
             console.log(`Found ${licenseKeys.length} license key(s)`);
+            console.log(`Found ${certs.length} certificate(s)`);
+            console.log(`Found ${streamingDestinations.length} event streaming destination(s)`);
+            console.log(`Found ${webhookActions.length} alert webhook action(s)`);
 
             // Prepare all decrypted and re-encrypted values
             console.log("\nDecrypting and re-encrypting values...");
@@ -149,8 +155,27 @@ export const rotateServerSecret: CommandModule<
                 encryptedInstanceId: string;
             };
 
+            type CertUpdate = {
+                certId: number;
+                encryptedCertFile: string | null;
+                encryptedKeyFile: string | null;
+            };
+
+            type StreamingDestinationUpdate = {
+                destinationId: number;
+                encryptedConfig: string;
+            };
+
+            type WebhookActionUpdate = {
+                webhookActionId: number;
+                encryptedConfig: string;
+            };
+
             const idpUpdates: IdpUpdate[] = [];
             const licenseKeyUpdates: LicenseKeyUpdate[] = [];
+            const certUpdates: CertUpdate[] = [];
+            const streamingDestinationUpdates: StreamingDestinationUpdate[] = [];
+            const webhookActionUpdates: WebhookActionUpdate[] = [];
 
             // Process idpOidcConfig entries
             for (const idpConfig of idpConfigs) {
@@ -217,6 +242,70 @@ export const rotateServerSecret: CommandModule<
                 }
             }
 
+            // Process certificate entries
+            for (const cert of certs) {
+                try {
+                    const encryptedCertFile = cert.certFile
+                        ? encrypt(decrypt(cert.certFile, oldSecret), newSecret)
+                        : null;
+                    const encryptedKeyFile = cert.keyFile
+                        ? encrypt(decrypt(cert.keyFile, oldSecret), newSecret)
+                        : null;
+
+                    certUpdates.push({
+                        certId: cert.certId,
+                        encryptedCertFile,
+                        encryptedKeyFile
+                    });
+                } catch (error) {
+                    console.error(
+                        `Error processing certificate ${cert.certId} (${cert.domain}):`,
+                        error
+                    );
+                    throw error;
+                }
+            }
+
+            // Process eventStreamingDestinations entries
+            for (const dest of streamingDestinations) {
+                try {
+                    const decryptedConfig = decrypt(dest.config, oldSecret);
+                    const encryptedConfig = encrypt(decryptedConfig, newSecret);
+
+                    streamingDestinationUpdates.push({
+                        destinationId: dest.destinationId,
+                        encryptedConfig
+                    });
+                } catch (error) {
+                    console.error(
+                        `Error processing event streaming destination ${dest.destinationId}:`,
+                        error
+                    );
+                    throw error;
+                }
+            }
+
+            // Process alertWebhookActions entries
+            for (const webhook of webhookActions) {
+                try {
+                    if (webhook.config == null) continue;
+
+                    const decryptedConfig = decrypt(webhook.config, oldSecret);
+                    const encryptedConfig = encrypt(decryptedConfig, newSecret);
+
+                    webhookActionUpdates.push({
+                        webhookActionId: webhook.webhookActionId,
+                        encryptedConfig
+                    });
+                } catch (error) {
+                    console.error(
+                        `Error processing alert webhook action ${webhook.webhookActionId}:`,
+                        error
+                    );
+                    throw error;
+                }
+            }
+
             // Perform all database updates in a single transaction
             console.log("\nUpdating database in transaction...");
             await db.transaction(async (trx) => {
@@ -250,10 +339,50 @@ export const rotateServerSecret: CommandModule<
                         instanceId: update.encryptedInstanceId
                     });
                 }
+
+                // Update certificate entries
+                for (const update of certUpdates) {
+                    await trx
+                        .update(certificates)
+                        .set({
+                            certFile: update.encryptedCertFile,
+                            keyFile: update.encryptedKeyFile
+                        })
+                        .where(eq(certificates.certId, update.certId));
+                }
+
+                // Update event streaming destination entries
+                for (const update of streamingDestinationUpdates) {
+                    await trx
+                        .update(eventStreamingDestinations)
+                        .set({ config: update.encryptedConfig })
+                        .where(
+                            eq(
+                                eventStreamingDestinations.destinationId,
+                                update.destinationId
+                            )
+                        );
+                }
+
+                // Update alert webhook action entries
+                for (const update of webhookActionUpdates) {
+                    await trx
+                        .update(alertWebhookActions)
+                        .set({ config: update.encryptedConfig })
+                        .where(
+                            eq(
+                                alertWebhookActions.webhookActionId,
+                                update.webhookActionId
+                            )
+                        );
+                }
             });
 
             console.log(`Rotated ${idpUpdates.length} OIDC IdP configuration(s)`);
             console.log(`Rotated ${licenseKeyUpdates.length} license key(s)`);
+            console.log(`Rotated ${certUpdates.length} certificate(s)`);
+            console.log(`Rotated ${streamingDestinationUpdates.length} event streaming destination(s)`);
+            console.log(`Rotated ${webhookActionUpdates.length} alert webhook action(s)`);
 
             // Update config file with new secret
             console.log("\nUpdating config file...");
@@ -270,6 +399,9 @@ export const rotateServerSecret: CommandModule<
             console.log(`\nSummary:`);
             console.log(`  - OIDC IdP configurations: ${idpUpdates.length}`);
             console.log(`  - License keys: ${licenseKeyUpdates.length}`);
+            console.log(`  - Certificates: ${certUpdates.length}`);
+            console.log(`  - Event streaming destinations: ${streamingDestinationUpdates.length}`);
+            console.log(`  - Alert webhook actions: ${webhookActionUpdates.length}`);
             console.log(
                 `\n  IMPORTANT: Restart the server for the new secret to take effect.`
             );

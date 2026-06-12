@@ -29,6 +29,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { useUserContext } from "@app/hooks/useUserContext";
 import { useTranslations } from "next-intl";
+import { build } from "@server/build";
 
 interface OrgSelectorProps {
     orgId?: string;
@@ -50,6 +51,11 @@ export function OrgSelector({
 
     const selectedOrg = orgs?.find((org) => org.orgId === orgId);
 
+    let canCreateOrg = !env.flags.disableUserCreateOrg || user.serverAdmin;
+    if (build === "saas" && user.type !== "internal") {
+        canCreateOrg = false;
+    }
+
     const sortedOrgs = useMemo(() => {
         if (!orgs?.length) return orgs ?? [];
         return [...orgs].sort((a, b) => {
@@ -70,8 +76,8 @@ export function OrgSelector({
                     className={cn(
                         "cursor-pointer transition-colors",
                         isCollapsed
-                            ? "w-full h-16 flex items-center justify-center hover:bg-muted"
-                            : "w-full px-5 py-4 hover:bg-muted"
+                            ? "w-full h-16 flex items-center justify-center hover:bg-sidebar-accent dark:hover:bg-sidebar-accent/50"
+                            : "w-full px-5 py-4 hover:bg-sidebar-accent dark:hover:bg-sidebar-accent/50"
                     )}
                 >
                     {isCollapsed ? (
@@ -80,7 +86,7 @@ export function OrgSelector({
                         <div className="flex items-center justify-between w-full min-w-0">
                             <div className="flex items-center min-w-0 flex-1">
                                 <div className="flex flex-col items-start min-w-0 flex-1 gap-1">
-                                    <span className="font-bold">
+                                    <span className="font-semibold">
                                         {t("org")}
                                     </span>
                                     <span className="text-sm text-muted-foreground truncate w-full text-left">
@@ -161,12 +167,12 @@ export function OrgSelector({
                         </CommandGroup>
                     </CommandList>
                 </Command>
-                {(!env.flags.disableUserCreateOrg || user.serverAdmin) && (
+                {canCreateOrg && (
                     <div className="p-2 border-t border-border">
                         <Button
                             variant="ghost"
                             size="sm"
-                            className="w-full justify-start h-8 font-normal text-muted-foreground hover:text-foreground"
+                            className="w-full justify-start h-8 font-normal text-muted-foreground"
                             onClick={() => {
                                 setOpen(false);
                                 router.push("/setup");

@@ -20,7 +20,7 @@ const checkboxVariants = cva(
                 outlinePrimarySquare:
                     "border rounded-[5px] border-input data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground",
                 outlineSquare:
-                    "border rounded-[5px] border-input data-[state=checked]:border-primary data-[state=checked]:bg-muted data-[state=checked]:text-accent-foreground"
+                    "border rounded-[5px] border-input data-[state=checked]:border-primary data-[state=checked]:bg-muted data-[state=checked]:text-foreground"
             }
         },
         defaultVariants: {
@@ -43,8 +43,8 @@ const Checkbox = React.forwardRef<
         className={cn(checkboxVariants({ variant }), className)}
         {...props}
     >
-        <CheckboxPrimitive.Indicator className="flex items-center justify-center text-current">
-            <Check className="h-4 w-4" />
+        <CheckboxPrimitive.Indicator className="flex items-center justify-center">
+            <Check className="h-4 w-4 text-current" />
         </CheckboxPrimitive.Indicator>
     </CheckboxPrimitive.Root>
 ));

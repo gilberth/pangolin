@@ -27,7 +27,6 @@ import { LockIcon } from "lucide-react";
 import SecurityKeyAuthButton from "@app/components/SecurityKeyAuthButton";
 import { createApiClient } from "@app/lib/api";
 import Link from "next/link";
-import Image from "next/image";
 import { GenerateOidcUrlResponse } from "@server/routers/idp";
 import { Separator } from "./ui/separator";
 import { useTranslations } from "next-intl";
@@ -37,6 +36,7 @@ import {
 } from "@app/actions/server";
 import { redirect as redirectTo } from "next/navigation";
 import { useEnvContext } from "@app/hooks/useEnvContext";
+import IdpTypeIcon from "@app/components/IdpTypeIcon";
 // @ts-ignore
 import { loadReoScript } from "reodotdev";
 import { build } from "@server/build";
@@ -345,6 +345,7 @@ export default function LoginForm({
                     error={error}
                     loading={loading}
                     formId="form"
+                    username={form.getValues("email")}
                 />
             )}
 
@@ -368,7 +369,7 @@ export default function LoginForm({
 
                         {hasIdp && (
                             <>
-                                <div className="relative my-4">
+                                <div className="relative">
                                     <div className="absolute inset-0 flex items-center">
                                         <Separator />
                                     </div>
@@ -393,24 +394,7 @@ export default function LoginForm({
                                                 loginWithIdp(idp.idpId);
                                             }}
                                         >
-                                            {effectiveType === "google" && (
-                                                <Image
-                                                    src="/idp/google.png"
-                                                    alt="Google"
-                                                    width={16}
-                                                    height={16}
-                                                    className="rounded"
-                                                />
-                                            )}
-                                            {effectiveType === "azure" && (
-                                                <Image
-                                                    src="/idp/azure.png"
-                                                    alt="Azure"
-                                                    width={16}
-                                                    height={16}
-                                                    className="rounded"
-                                                />
-                                            )}
+                                            <IdpTypeIcon type={effectiveType} size={16} />
                                             <span>{idp.name}</span>
                                         </Button>
                                     );

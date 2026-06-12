@@ -12,3 +12,4 @@ export * from "./handleOlmUnRelayMessage";
 export * from "./recoverOlmWithFingerprint";
 export * from "./handleOlmDisconnectingMessage";
 export * from "./handleOlmServerInitAddPeerHandshake";
+export * from "./offlineChecker";

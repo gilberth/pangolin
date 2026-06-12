@@ -92,7 +92,7 @@ export default function InitialSetupPage() {
                     />
                 </div>
                 <div className="text-center space-y-1">
-                    <h1 className="text-2xl font-bold mt-1">
+                    <h1 className="text-2xl font-semibold mt-1">
                         {t("initialSetupTitle")}
                     </h1>
                     <CardDescription>

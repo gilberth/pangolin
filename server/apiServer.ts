@@ -121,7 +121,7 @@ export function createApiServer() {
     const httpServer = apiServer.listen(externalPort, (err?: any) => {
         if (err) throw err;
         logger.info(
-            `API server is running on http://localhost:${externalPort}`
+            `Dashboard API server is running on http://localhost:${externalPort}`
         );
     });
 

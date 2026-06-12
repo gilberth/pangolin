@@ -70,7 +70,7 @@ export default function OrganizationLandingCard(
     return (
         <Card>
             <CardHeader>
-                <CardTitle className="flex items-center text-3xl font-bold">
+                <CardTitle className="flex items-center text-3xl font-semibold">
                     {orgData.overview.orgName}
                 </CardTitle>
             </CardHeader>
@@ -82,7 +82,7 @@ export default function OrganizationLandingCard(
                             className="flex flex-col items-center p-4 bg-secondary rounded-lg"
                         >
                             {stat.icon}
-                            <span className="mt-2 text-2xl font-bold">
+                            <span className="mt-2 text-2xl font-semibold">
                                 {stat.value}
                             </span>
                             <span className="text-sm text-muted-foreground">

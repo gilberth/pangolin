@@ -1,0 +1,7 @@
+---
+description: 
+alwaysApply: true
+---
+
+Proxy resources = public resources
+Private resources = client resources = site resources

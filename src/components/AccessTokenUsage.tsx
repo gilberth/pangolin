@@ -58,12 +58,12 @@ export default function AccessTokenSection({
 
                 <TabsContent value="token" className="space-y-4">
                     <div className="space-y-1">
-                        <div className="font-bold">{t("tokenId")}</div>
+                        <div className="font-semibold">{t("tokenId")}</div>
                         <CopyToClipboard text={tokenId} isLink={false} />
                     </div>
 
                     <div className="space-y-1">
-                        <div className="font-bold">{t("token")}</div>
+                        <div className="font-semibold">{t("token")}</div>
                         <CopyToClipboard text={token} isLink={false} />
                     </div>
                 </TabsContent>

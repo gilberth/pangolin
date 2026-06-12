@@ -1,6 +1,7 @@
 export * from "./verifyApiKey";
 export * from "./verifyApiKeyOrgAccess";
 export * from "./verifyApiKeyHasAction";
+export * from "./verifyApiKeyCanSetUserOrgRoles";
 export * from "./verifyApiKeySiteAccess";
 export * from "./verifyApiKeyResourceAccess";
 export * from "./verifyApiKeyTargetAccess";
@@ -15,3 +16,4 @@ export * from "./verifyApiKeyClientAccess";
 export * from "./verifyApiKeySiteResourceAccess";
 export * from "./verifyApiKeyIdpAccess";
 export * from "./verifyApiKeyDomainAccess";
+export * from "./verifyApiKeyResourcePolicyAccess";

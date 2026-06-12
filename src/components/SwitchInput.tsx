@@ -43,8 +43,18 @@ export function SwitchInput({
     );
 
     return (
-        <div>
-            <div className="flex items-center space-x-2 mb-2">
+        <div className="flex flex-col space-y-2">
+            <div className="flex items-center space-x-2">
+                {label && (
+                    <Label
+                        htmlFor={id}
+                        className={
+                            disabled ? "opacity-50 cursor-not-allowed" : ""
+                        }
+                    >
+                        {label}
+                    </Label>
+                )}
                 <Switch
                     id={id}
                     checked={checked}
@@ -52,7 +62,6 @@ export function SwitchInput({
                     onCheckedChange={onCheckedChange}
                     disabled={disabled}
                 />
-                {label && <Label htmlFor={id}>{label}</Label>}
                 {info && (
                     <Popover>
                         <PopoverTrigger asChild>

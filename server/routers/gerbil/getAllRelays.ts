@@ -11,7 +11,7 @@ import {
     ExitNode
 } from "@server/db";
 import { db } from "@server/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
 import logger from "@server/logger";
@@ -97,86 +97,119 @@ export async function generateRelayMappings(exitNode: ExitNode) {
         return {};
     }
 
+    // Filter to sites with the required fields up front so the rest of the
+    // function can safely treat endpoint/subnet/listenPort as defined.
+    const validSites = sitesRes.filter(
+        (s) => s.endpoint && s.subnet && s.listenPort
+    );
+
+    if (validSites.length === 0) {
+        return {};
+    }
+
+    const siteIds = validSites.map((s) => s.siteId);
+    const orgIds = Array.from(
+        new Set(
+            validSites
+                .map((s) => s.orgId)
+                .filter((id): id is NonNullable<typeof id> => id != null)
+        )
+    );
+
+    // Batch fetch all client-site associations for these sites in one query.
+    const clientSitesRes = siteIds.length
+        ? await db
+              .select()
+              .from(clientSitesAssociationsCache)
+              .where(inArray(clientSitesAssociationsCache.siteId, siteIds))
+        : [];
+
+    // Batch fetch all sites in the relevant orgs in one query (covers
+    // site-to-site communication for every site processed below).
+    const orgSitesRes = orgIds.length
+        ? await db.select().from(sites).where(inArray(sites.orgId, orgIds))
+        : [];
+
+    // Index org sites by orgId for O(1) lookup per site.
+    const sitesByOrg = new Map<string, typeof orgSitesRes>();
+    for (const peer of orgSitesRes) {
+        if (
+            peer.orgId == null ||
+            !peer.endpoint ||
+            !peer.subnet ||
+            !peer.listenPort
+        ) {
+            continue;
+        }
+        let arr = sitesByOrg.get(peer.orgId);
+        if (!arr) {
+            arr = [];
+            sitesByOrg.set(peer.orgId, arr);
+        }
+        arr.push(peer);
+    }
+
+    // Index client-site associations by siteId for O(1) lookup per site.
+    const clientSitesBySite = new Map<number, typeof clientSitesRes>();
+    for (const cs of clientSitesRes) {
+        let arr = clientSitesBySite.get(cs.siteId);
+        if (!arr) {
+            arr = [];
+            clientSitesBySite.set(cs.siteId, arr);
+        }
+        arr.push(cs);
+    }
+
     // Initialize mappings object for multi-peer support
     const mappings: { [key: string]: ProxyMapping } = {};
 
-    // Process each site
-    for (const site of sitesRes) {
-        if (!site.endpoint || !site.subnet || !site.listenPort) {
-            continue;
+    // Track destinations per endpoint to deduplicate in O(1).
+    const seen = new Map<string, Set<string>>();
+
+    const addDestination = (endpoint: string, dest: PeerDestination) => {
+        let destSet = seen.get(endpoint);
+        if (!destSet) {
+            destSet = new Set();
+            seen.set(endpoint, destSet);
+            mappings[endpoint] = { destinations: [] };
         }
-
-        // Find all clients associated with this site through clientSites
-        const clientSitesRes = await db
-            .select()
-            .from(clientSitesAssociationsCache)
-            .where(eq(clientSitesAssociationsCache.siteId, site.siteId));
-
-        for (const clientSite of clientSitesRes) {
-            if (!clientSite.endpoint) {
-                continue;
-            }
-
-            // Add this site as a destination for the client
-            if (!mappings[clientSite.endpoint]) {
-                mappings[clientSite.endpoint] = { destinations: [] };
-            }
-
-            // Add site as a destination for this client
-            const destination: PeerDestination = {
-                destinationIP: site.subnet.split("/")[0],
-                destinationPort: site.listenPort || 1 // this satisfies gerbil for now but should be reevaluated
-            };
-
-            // Check if this destination is already in the array to avoid duplicates
-            const isDuplicate = mappings[clientSite.endpoint].destinations.some(
-                (dest) =>
-                    dest.destinationIP === destination.destinationIP &&
-                    dest.destinationPort === destination.destinationPort
-            );
-
-            if (!isDuplicate) {
-                mappings[clientSite.endpoint].destinations.push(destination);
-            }
+        const key = `${dest.destinationIP}:${dest.destinationPort}`;
+        if (!destSet.has(key)) {
+            destSet.add(key);
+            mappings[endpoint].destinations.push(dest);
         }
+    };
 
-        // Also handle site-to-site communication (all sites in the same org)
-        if (site.orgId) {
-            const orgSites = await db
-                .select()
-                .from(sites)
-                .where(eq(sites.orgId, site.orgId));
+    // Process each site using the pre-fetched data.
+    for (const site of validSites) {
+        const siteDestination: PeerDestination = {
+            destinationIP: site.subnet!.split("/")[0],
+            destinationPort: site.listenPort! || 1 // this satisfies gerbil for now but should be reevaluated
+        };
 
-            for (const peer of orgSites) {
-                // Skip self
-                if (
-                    peer.siteId === site.siteId ||
-                    !peer.endpoint ||
-                    !peer.subnet ||
-                    !peer.listenPort
-                ) {
+        // Add this site as a destination for each associated client.
+        const clientSites = clientSitesBySite.get(site.siteId);
+        if (clientSites) {
+            for (const clientSite of clientSites) {
+                if (!clientSite.endpoint) {
                     continue;
                 }
+                addDestination(clientSite.endpoint, siteDestination);
+            }
+        }
 
-                // Add peer site as a destination for this site
-                if (!mappings[site.endpoint]) {
-                    mappings[site.endpoint] = { destinations: [] };
-                }
-
-                const destination: PeerDestination = {
-                    destinationIP: peer.subnet.split("/")[0],
-                    destinationPort: peer.listenPort || 1 // this satisfies gerbil for now but should be reevaluated
-                };
-
-                // Check for duplicates
-                const isDuplicate = mappings[site.endpoint].destinations.some(
-                    (dest) =>
-                        dest.destinationIP === destination.destinationIP &&
-                        dest.destinationPort === destination.destinationPort
-                );
-
-                if (!isDuplicate) {
-                    mappings[site.endpoint].destinations.push(destination);
+        // Site-to-site communication (all sites in the same org).
+        if (site.orgId != null) {
+            const peers = sitesByOrg.get(site.orgId);
+            if (peers) {
+                for (const peer of peers) {
+                    if (peer.siteId === site.siteId) {
+                        continue;
+                    }
+                    addDestination(site.endpoint!, {
+                        destinationIP: peer.subnet!.split("/")[0],
+                        destinationPort: peer.listenPort! || 1 // this satisfies gerbil for now but should be reevaluated
+                    });
                 }
             }
         }

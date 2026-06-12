@@ -16,7 +16,7 @@ export default function SettingsSectionTitle({
             <h2
                 className={`text-${
                     size ? size : "2xl"
-                } font-bold tracking-tight`}
+                } font-semibold tracking-tight`}
             >
                 {title}
             </h2>

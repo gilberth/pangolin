@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -19,12 +19,13 @@ import { eq, and, ne } from "drizzle-orm";
 
 export async function getOrgTierData(
     orgId: string
-): Promise<{ tier: Tier | null; active: boolean }> {
+): Promise<{ tier: Tier | null; active: boolean; isTrial: boolean }> {
     let tier: Tier | null = null;
     let active = false;
+    let isTrial = false;
 
     if (build !== "saas") {
-        return { tier, active };
+        return { tier, active, isTrial };
     }
 
     try {
@@ -35,7 +36,7 @@ export async function getOrgTierData(
             .limit(1);
 
         if (!org) {
-            return { tier, active };
+            return { tier, active, isTrial };
         }
 
         let orgIdToUse = org.orgId;
@@ -44,7 +45,7 @@ export async function getOrgTierData(
                 logger.warn(
                     `Org ${orgId} is not a billing org and does not have a billingOrgId`
                 );
-                return { tier, active };
+                return { tier, active, isTrial };
             }
             orgIdToUse = org.billingOrgId;
         }
@@ -57,7 +58,7 @@ export async function getOrgTierData(
             .limit(1);
 
         if (!customer) {
-            return { tier, active };
+            return { tier, active, isTrial };
         }
 
         // Query for active subscriptions that are not license type
@@ -84,11 +85,13 @@ export async function getOrgTierData(
                 tier = subscription.type;
                 active = true;
             }
+
+            isTrial = subscription.trial ?? false;
         }
     } catch (error) {
         // If org not found or error occurs, return null tier and inactive
         // This is acceptable behavior as per the function signature
     }
 
-    return { tier, active };
+    return { tier, active, isTrial };
 }

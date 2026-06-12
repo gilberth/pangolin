@@ -1,3 +1,5 @@
+// Testing file
+
 /**
  * Compares two objects for deep equality
  * @param actual The actual value to test
@@ -45,7 +47,7 @@ export function assertThrows(
         if (!(error instanceof Error)) {
             throw new Error(`${message}\nUnexpected error type: ${typeof error}`);
         }
-        
+
         if (!error.message.includes(expectedError)) {
             throw new Error(
                 `${message}\nExpected error: ${expectedError}\nActual error: ${error.message}`

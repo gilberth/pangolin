@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -24,7 +24,7 @@ import type { NextFunction, Request, Response } from "express";
 
 const paramsSchema = z.strictObject({
     orgId: z.string(),
-    approvalId: z.string().transform(Number).pipe(z.int().positive())
+    approvalId: z.coerce.number().int().positive()
 });
 
 const bodySchema = z.strictObject({

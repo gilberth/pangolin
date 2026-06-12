@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
+import { createApiResponseSchema } from "@server/lib/openapi/createApiResponseSchema";
 import { db } from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -31,12 +32,17 @@ const bodySchema = z.strictObject({
     autoProvision: z.boolean().optional(),
     defaultRoleMapping: z.string().optional(),
     defaultOrgMapping: z.string().optional(),
-    tags: z.string().optional()
+    tags: z.string().optional(),
+    variant: z.enum(["oidc", "google", "azure"]).optional()
 });
 
 export type UpdateIdpResponse = {
     idpId: number;
 };
+const UpdateIdpResponseDataSchema = z.object({
+    idpId: z.number()
+});
+
 
 registry.registerPath({
     method: "post",
@@ -53,7 +59,16 @@ registry.registerPath({
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: createApiResponseSchema(UpdateIdpResponseDataSchema)
+                }
+            }
+        }
+    }
 });
 
 export async function updateOidcIdp(
@@ -96,7 +111,8 @@ export async function updateOidcIdp(
             autoProvision,
             defaultRoleMapping,
             defaultOrgMapping,
-            tags
+            tags,
+            variant
         } = parsedBody.data;
 
         if (process.env.IDENTITY_PROVIDER_MODE === "org") {
@@ -159,7 +175,8 @@ export async function updateOidcIdp(
                 scopes,
                 identifierPath,
                 emailPath,
-                namePath
+                namePath,
+                variant
             };
 
             keysToUpdate = Object.keys(configData).filter(

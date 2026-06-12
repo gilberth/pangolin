@@ -528,7 +528,7 @@ export default function ResetPasswordForm({
                             )}
 
                             {state === "request" && (
-                                <div className="flex flex-col gap-2">
+                                <div className="flex flex-col gap-4">
                                     {env.email.emailEnabled && (
                                         <Button
                                             type="submit"

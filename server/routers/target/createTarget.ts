@@ -1,6 +1,11 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { db, TargetHealthCheck, targetHealthCheck } from "@server/db";
+import {
+    db,
+    statusHistory,
+    TargetHealthCheck,
+    targetHealthCheck
+} from "@server/db";
 import { newts, resources, sites, Target, targets } from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -14,14 +19,24 @@ import { eq } from "drizzle-orm";
 import { pickPort } from "./helpers";
 import { isTargetValid } from "@server/lib/validators";
 import { OpenAPITags, registry } from "@server/openApi";
+import {
+    fireHealthCheckHealthyAlert,
+    fireHealthCheckUnhealthyAlert,
+    fireHealthCheckUnknownAlert
+} from "@server/lib/alerts";
+import { encrypt } from "@server/lib/crypto";
+import { generateId } from "@server/auth/sessions/app";
+import config from "@server/lib/config";
+import { sendBrowserGatewayTargets } from "@server/routers/newt/targets";
 
 const createTargetParamsSchema = z.strictObject({
-    resourceId: z.string().transform(Number).pipe(z.int().positive())
+    resourceId: z.coerce.number().int().positive()
 });
 
 const createTargetSchema = z.strictObject({
     siteId: z.int().positive(),
     ip: z.string().refine(isTargetValid),
+    mode: z.enum(["http", "tcp", "udp", "ssh", "rdp", "vnc"]).optional(),
     method: z.string().optional().nullable(),
     port: z.int().min(1).max(65535),
     enabled: z.boolean().default(true),
@@ -31,8 +46,8 @@ const createTargetSchema = z.strictObject({
     hcMode: z.string().optional().nullable(),
     hcHostname: z.string().optional().nullable(),
     hcPort: z.int().positive().optional().nullable(),
-    hcInterval: z.int().positive().min(5).optional().nullable(),
-    hcUnhealthyInterval: z.int().positive().min(5).optional().nullable(),
+    hcInterval: z.int().positive().min(1).optional().nullable(),
+    hcUnhealthyInterval: z.int().positive().min(1).optional().nullable(),
     hcTimeout: z.int().positive().min(1).optional().nullable(),
     hcHeaders: z
         .array(z.strictObject({ name: z.string(), value: z.string() }))
@@ -42,6 +57,8 @@ const createTargetSchema = z.strictObject({
     hcMethod: z.string().min(1).optional().nullable(),
     hcStatus: z.int().optional().nullable(),
     hcTlsServerName: z.string().optional().nullable(),
+    hcHealthyThreshold: z.int().positive().min(1).optional().nullable(),
+    hcUnhealthyThreshold: z.int().positive().min(1).optional().nullable(),
     path: z.string().optional().nullable(),
     pathMatchType: z.enum(["exact", "prefix", "regex"]).optional().nullable(),
     rewritePath: z.string().optional().nullable(),
@@ -69,7 +86,22 @@ registry.registerPath({
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function createTarget(
@@ -134,116 +166,168 @@ export async function createTarget(
             );
         }
 
-        const existingTargets = await db
-            .select()
-            .from(targets)
-            .where(eq(targets.resourceId, resourceId));
-
-        const existingTarget = existingTargets.find(
-            (target) =>
-                target.ip === targetData.ip &&
-                target.port === targetData.port &&
-                target.method === targetData.method &&
-                target.siteId === targetData.siteId
+        const plainToken = generateId(48);
+        const encryptedToken = encrypt(
+            plainToken,
+            config.getRawConfig().server.secret!
         );
 
-        if (existingTarget) {
-            // log a warning
-            logger.warn(
-                `Target with IP ${targetData.ip}, port ${targetData.port}, method ${targetData.method} already exists for resource ID ${resourceId}`
-            );
-        }
-
         let newTarget: Target[] = [];
-        let healthCheck: TargetHealthCheck[] = [];
         let targetIps: string[] = [];
-        if (site.type == "local") {
-            newTarget = await db
-                .insert(targets)
-                .values({
-                    resourceId,
-                    ...targetData,
-                    priority: targetData.priority || 100
-                })
-                .returning();
-        } else {
-            // make sure the target is within the site subnet
-            if (
-                site.type == "wireguard" &&
-                !isIpInCidr(targetData.ip, site.subnet!)
-            ) {
-                return next(
-                    createHttpError(
-                        HttpCode.BAD_REQUEST,
-                        `Target IP is not within the site subnet`
-                    )
-                );
-            }
+        let healthCheck: TargetHealthCheck[] = [];
+        await db.transaction(async (trx) => {
+            const existingTargets = await trx
+                .select()
+                .from(targets)
+                .where(eq(targets.resourceId, resourceId));
 
-            const { internalPort, targetIps: newTargetIps } = await pickPort(
-                site.siteId!,
-                db
+            const existingTarget = existingTargets.find(
+                (target) =>
+                    target.ip === targetData.ip &&
+                    target.port === targetData.port &&
+                    target.method === targetData.method &&
+                    target.siteId === targetData.siteId
             );
 
-            if (!internalPort) {
-                return next(
-                    createHttpError(
-                        HttpCode.BAD_REQUEST,
-                        `No available internal port`
-                    )
+            if (existingTarget) {
+                // log a warning
+                logger.warn(
+                    `Target with IP ${targetData.ip}, port ${targetData.port}, method ${targetData.method} already exists for resource ID ${resourceId}`
                 );
             }
 
-            newTarget = await db
-                .insert(targets)
+            if (site.type == "local") {
+                newTarget = await trx
+                    .insert(targets)
+                    .values({
+                        resourceId,
+                        ...targetData,
+                        mode: (targetData.mode ??
+                            resource.mode ??
+                            "http") as Target["mode"],
+                        priority: targetData.priority || 100
+                    })
+                    .returning();
+            } else {
+                // make sure the target is within the site subnet
+                if (
+                    site.type == "wireguard" &&
+                    !isIpInCidr(targetData.ip, site.subnet!)
+                ) {
+                    return next(
+                        createHttpError(
+                            HttpCode.BAD_REQUEST,
+                            `Target IP is not within the site subnet`
+                        )
+                    );
+                }
+
+                const { internalPort, targetIps: newTargetIps } =
+                    await pickPort(site.siteId!, trx);
+
+                if (!internalPort) {
+                    return next(
+                        createHttpError(
+                            HttpCode.BAD_REQUEST,
+                            `No available internal port`
+                        )
+                    );
+                }
+
+                newTarget = await trx
+                    .insert(targets)
+                    .values({
+                        resourceId,
+                        siteId: site.siteId,
+                        ip: targetData.ip,
+                        mode: (targetData.mode ??
+                            resource.mode ??
+                            "http") as Target["mode"],
+                        authToken: encryptedToken,
+                        method: targetData.method,
+                        port: targetData.port,
+                        internalPort,
+                        enabled: targetData.enabled,
+                        path: targetData.path,
+                        pathMatchType: targetData.pathMatchType,
+                        rewritePath: targetData.rewritePath,
+                        rewritePathType: targetData.rewritePathType,
+                        priority: targetData.priority || 100
+                    })
+                    .returning();
+
+                // add the new target to the targetIps array
+                newTargetIps.push(`${targetData.ip}/32`);
+
+                targetIps = newTargetIps;
+            }
+
+            let hcHeaders = null;
+            if (targetData.hcHeaders) {
+                hcHeaders = JSON.stringify(targetData.hcHeaders);
+            }
+
+            healthCheck = await trx
+                .insert(targetHealthCheck)
                 .values({
-                    resourceId,
-                    siteId: site.siteId,
-                    ip: targetData.ip,
-                    method: targetData.method,
-                    port: targetData.port,
-                    internalPort,
-                    enabled: targetData.enabled,
-                    path: targetData.path,
-                    pathMatchType: targetData.pathMatchType,
-                    rewritePath: targetData.rewritePath,
-                    rewritePathType: targetData.rewritePathType,
-                    priority: targetData.priority || 100
+                    orgId: resource.orgId,
+                    targetId: newTarget[0].targetId,
+                    siteId: targetData.siteId,
+                    name: `Resource ${resource.name} - ${targetData.ip}:${targetData.port}`,
+                    hcEnabled: targetData.hcEnabled ?? false,
+                    hcPath: targetData.hcPath ?? null,
+                    hcScheme: targetData.hcScheme ?? null,
+                    hcMode: targetData.hcMode ?? null,
+                    hcHostname: targetData.hcHostname ?? null,
+                    hcPort: targetData.hcPort ?? null,
+                    hcInterval: targetData.hcInterval ?? null,
+                    hcUnhealthyInterval: targetData.hcUnhealthyInterval ?? null,
+                    hcTimeout: targetData.hcTimeout ?? null,
+                    hcHeaders: hcHeaders,
+                    hcFollowRedirects: targetData.hcFollowRedirects ?? null,
+                    hcMethod: targetData.hcMethod ?? null,
+                    hcStatus: targetData.hcStatus ?? null,
+                    hcHealth: targetData.hcEnabled ? "unhealthy" : "unknown",
+                    hcTlsServerName: targetData.hcTlsServerName ?? null,
+                    hcHealthyThreshold: targetData.hcHealthyThreshold ?? null,
+                    hcUnhealthyThreshold:
+                        targetData.hcUnhealthyThreshold ?? null
                 })
                 .returning();
 
-            // add the new target to the targetIps array
-            newTargetIps.push(`${targetData.ip}/32`);
-
-            targetIps = newTargetIps;
-        }
-
-        let hcHeaders = null;
-        if (targetData.hcHeaders) {
-            hcHeaders = JSON.stringify(targetData.hcHeaders);
-        }
-
-        healthCheck = await db
-            .insert(targetHealthCheck)
-            .values({
-                targetId: newTarget[0].targetId,
-                hcEnabled: targetData.hcEnabled ?? false,
-                hcPath: targetData.hcPath ?? null,
-                hcScheme: targetData.hcScheme ?? null,
-                hcMode: targetData.hcMode ?? null,
-                hcHostname: targetData.hcHostname ?? null,
-                hcPort: targetData.hcPort ?? null,
-                hcInterval: targetData.hcInterval ?? null,
-                hcUnhealthyInterval: targetData.hcUnhealthyInterval ?? null,
-                hcTimeout: targetData.hcTimeout ?? null,
-                hcHeaders: hcHeaders,
-                hcFollowRedirects: targetData.hcFollowRedirects ?? null,
-                hcMethod: targetData.hcMethod ?? null,
-                hcStatus: targetData.hcStatus ?? null,
-                hcHealth: "unknown",
-                hcTlsServerName: targetData.hcTlsServerName ?? null
-            })
-            .returning();
+            if (healthCheck[0].hcHealth === "unhealthy") {
+                await fireHealthCheckUnhealthyAlert(
+                    healthCheck[0].orgId,
+                    healthCheck[0].targetHealthCheckId,
+                    healthCheck[0].name || "",
+                    healthCheck[0].targetId,
+                    undefined,
+                    false, // dont send the alert because we just want to create the alert, not notify users yet
+                    trx
+                );
+            } else if (healthCheck[0].hcHealth === "unknown") {
+                // if the health is unknown, we want to fire an alert to notify users to enable health checks
+                await fireHealthCheckUnknownAlert(
+                    healthCheck[0].orgId,
+                    healthCheck[0].targetHealthCheckId,
+                    healthCheck[0].name,
+                    healthCheck[0].targetId,
+                    undefined,
+                    false, // dont send the alert because we just want to create the alert, not notify users yet
+                    trx
+                );
+            } else if (healthCheck[0].hcHealth === "healthy") {
+                await fireHealthCheckHealthyAlert(
+                    healthCheck[0].orgId,
+                    healthCheck[0].targetHealthCheckId,
+                    healthCheck[0].name || "",
+                    healthCheck[0].targetId,
+                    undefined,
+                    false, // dont send the alert because we just want to create the alert, not notify users yet
+                    trx
+                );
+            }
+        });
 
         if (site.pubKey) {
             if (site.type == "wireguard") {
@@ -259,20 +343,28 @@ export async function createTarget(
                     .where(eq(newts.siteId, site.siteId))
                     .limit(1);
 
-                await addTargets(
-                    newt.newtId,
-                    newTarget,
-                    healthCheck,
-                    resource.protocol,
-                    newt.version
-                );
+                if (["http", "tcp", "udp"].includes(newTarget[0].mode)) {
+                    await addTargets(
+                        newt.newtId,
+                        newTarget,
+                        healthCheck,
+                        resource.mode === "udp" ? "udp" : "tcp",
+                        newt.version
+                    );
+                } else if (["ssh", "rdp", "vnc"].includes(newTarget[0].mode)) {
+                    await sendBrowserGatewayTargets(
+                        newt.newtId,
+                        newTarget,
+                        newt.version
+                    );
+                }
             }
         }
 
         return response<CreateTargetResponse>(res, {
             data: {
-                ...newTarget[0],
-                ...healthCheck[0]
+                ...healthCheck[0],
+                ...newTarget[0]
             },
             success: true,
             error: false,

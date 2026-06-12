@@ -7,6 +7,11 @@ import { GetApiKeyResponse } from "@server/routers/apiKeys";
 import ApiKeyProvider from "@app/providers/ApiKeyProvider";
 import { HorizontalTabs } from "@app/components/HorizontalTabs";
 import { getTranslations } from "next-intl/server";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "API Key"
+};
 
 interface SettingsLayoutProps {
     children: React.ReactNode;

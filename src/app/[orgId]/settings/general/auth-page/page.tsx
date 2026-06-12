@@ -11,6 +11,7 @@ import {
     GetLoginPageResponse
 } from "@server/routers/loginPage/types";
 import { AxiosResponse } from "axios";
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 export interface AuthPageProps {

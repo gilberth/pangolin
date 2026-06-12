@@ -1,5 +1,6 @@
 import { drizzle as DrizzleSqlite } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
+import type BetterSqlite3 from "better-sqlite3";
 import * as schema from "./schema/schema";
 import path from "path";
 import fs from "fs";
@@ -11,8 +12,69 @@ export const exists = checkFileExists(location);
 
 bootstrapVolume();
 
+/**
+ * Wraps better-sqlite3 Statement to call `finalize()` immediately after
+ * execution, freeing native sqlite3_stmt memory deterministically instead
+ * of waiting for GC. Fixes steady off-heap growth under load (#2120).
+ * WARNING: Finalizes after first execution — incompatible with drizzle's
+ * reusable .prepare() builders. No such usage exists in this codebase.
+ */
+function autoFinalizeStatement(
+    stmt: BetterSqlite3.Statement
+): BetterSqlite3.Statement {
+    const wrapExec = <T extends (...args: any[]) => any>(fn: T): T => {
+        return function (this: any, ...args: any[]) {
+            try {
+                return fn.apply(this, args);
+            } finally {
+                try {
+                    // finalize() exists on the native Statement at runtime but
+                    // is missing from @types/better-sqlite3.
+                    (stmt as any).finalize();
+                } catch {
+                    // Already finalized — harmless
+                }
+            }
+        } as unknown as T;
+    };
+
+    stmt.run = wrapExec(stmt.run);
+    stmt.get = wrapExec(stmt.get);
+    stmt.all = wrapExec(stmt.all);
+
+    return stmt;
+}
+
 function createDb() {
     const sqlite = new Database(location);
+
+    if (process.env.ENABLE_SQLITE_WAL_MODE == "true") {
+        // Enable WAL mode — allows concurrent readers + single writer, preventing
+        // contention across subsystems (verifySession, Traefik, audit, ping).
+        sqlite.pragma("journal_mode = WAL");
+        // NORMAL sync mode: safe with WAL, reduces write lock hold time.
+        sqlite.pragma("synchronous = NORMAL");
+    }
+
+    // Wait up to 5s on SQLITE_BUSY instead of failing — prevents audit log
+    // retry loops that accumulate memory.
+    sqlite.pragma("busy_timeout = 5000");
+
+    // 64 MB page cache (default 2 MB) — reduces I/O round-trips on large
+    // TraefikConfigManager JOINs that block the event loop.
+    sqlite.pragma("cache_size = -65536");
+
+    // 256 MB memory-mapped I/O — OS serves reads from page cache directly,
+    // reducing event-loop blocking.
+    sqlite.pragma("mmap_size = 268435456");
+
+    // Wrap prepare() so every drizzle-orm statement is auto-finalized after
+    // first use, preventing sqlite3_stmt accumulation between GC cycles.
+    const originalPrepare = sqlite.prepare.bind(sqlite);
+    (sqlite as any).prepare = function autoFinalizePrepare(source: string) {
+        return autoFinalizeStatement(originalPrepare(source));
+    };
+
     return DrizzleSqlite(sqlite, {
         schema
     });
@@ -24,6 +86,7 @@ export const primaryDb = db;
 export type Transaction = Parameters<
     Parameters<(typeof db)["transaction"]>[0]
 >[0];
+export const DB_TYPE: "pg" | "sqlite" = "sqlite";
 
 function checkFileExists(filePath: string): boolean {
     try {

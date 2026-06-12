@@ -1,5 +1,16 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import {
+    Popover,
+    PopoverAnchor,
+    PopoverContent,
+    PopoverTrigger
+} from "../ui/popover";
+import React, {
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState
+} from "react";
 import { TagInputStyleClassesProps, type Tag as TagType } from "./tag-input";
 import { TagList, TagListProps } from "./tag-list";
 import { Button } from "../ui/button";
@@ -33,33 +44,27 @@ export const TagPopover: React.FC<TagPopoverProps> = ({
     ...tagProps
 }) => {
     const triggerContainerRef = useRef<HTMLDivElement | null>(null);
-    const triggerRef = useRef<HTMLButtonElement | null>(null);
     const popoverContentRef = useRef<HTMLDivElement | null>(null);
     const inputRef = useRef<HTMLInputElement | null>(null);
 
     const [popoverWidth, setPopoverWidth] = useState<number>(0);
     const [isPopoverOpen, setIsPopoverOpen] = useState(false);
     const [inputFocused, setInputFocused] = useState(false);
-    const [sideOffset, setSideOffset] = useState<number>(0);
 
     const t = useTranslations();
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const handleResize = () => {
-            if (triggerContainerRef.current && triggerRef.current) {
+            if (triggerContainerRef.current) {
                 setPopoverWidth(triggerContainerRef.current.offsetWidth);
-                setSideOffset(
-                    triggerContainerRef.current.offsetWidth -
-                        triggerRef?.current?.offsetWidth
-                );
             }
         };
 
-        handleResize(); // Call on mount and layout changes
+        handleResize();
 
-        window.addEventListener("resize", handleResize); // Adjust on window resize
+        window.addEventListener("resize", handleResize);
         return () => window.removeEventListener("resize", handleResize);
-    }, [triggerContainerRef, triggerRef]);
+    }, []);
 
     // Close the popover when clicking outside of it
     useEffect(() => {
@@ -135,52 +140,54 @@ export const TagPopover: React.FC<TagPopoverProps> = ({
             onOpenChange={handleOpenChange}
             modal={usePortal}
         >
-            <div
-                className="relative flex items-center rounded-md border border-input bg-transparent pr-3"
-                ref={triggerContainerRef}
-            >
-                {React.cloneElement(children as React.ReactElement<any>, {
-                    onFocus: handleInputFocus,
-                    onBlur: handleInputBlur,
-                    ref: inputRef
-                })}
-                <PopoverTrigger asChild>
-                    <Button
-                        ref={triggerRef}
-                        variant="ghost"
-                        size="icon"
-                        role="combobox"
-                        className={cn(
-                            `hover:bg-transparent`,
-                            classStyleProps?.popoverClasses?.popoverTrigger
-                        )}
-                        onClick={() => setIsPopoverOpen(!isPopoverOpen)}
-                    >
-                        <svg
-                            xmlns="http://www.w3.org/2000/svg"
-                            width="24"
-                            height="24"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            className={`lucide lucide-chevron-down h-4 w-4 shrink-0 opacity-50 ${isPopoverOpen ? "rotate-180" : "rotate-0"}`}
+            <PopoverAnchor asChild>
+                <div
+                    className="relative flex items-center rounded-md border border-input bg-transparent pr-3"
+                    ref={triggerContainerRef}
+                >
+                    {React.cloneElement(children as React.ReactElement<any>, {
+                        onFocus: handleInputFocus,
+                        onBlur: handleInputBlur,
+                        ref: inputRef
+                    })}
+                    <PopoverTrigger asChild>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            role="combobox"
+                            className={cn(
+                                `hover:bg-transparent`,
+                                classStyleProps?.popoverClasses?.popoverTrigger
+                            )}
+                            onClick={() => setIsPopoverOpen(!isPopoverOpen)}
                         >
-                            <path d="m6 9 6 6 6-6"></path>
-                        </svg>
-                    </Button>
-                </PopoverTrigger>
-            </div>
+                            <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                width="24"
+                                height="24"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                className={`lucide lucide-chevron-down h-4 w-4 shrink-0 opacity-50 ${isPopoverOpen ? "rotate-180" : "rotate-0"}`}
+                            >
+                                <path d="m6 9 6 6 6-6"></path>
+                            </svg>
+                        </Button>
+                    </PopoverTrigger>
+                </div>
+            </PopoverAnchor>
             <PopoverContent
                 ref={popoverContentRef}
+                align="start"
+                side="bottom"
                 className={cn(
                     `w-full space-y-3`,
                     classStyleProps?.popoverClasses?.popoverContent
                 )}
                 style={{
-                    marginLeft: `-${sideOffset}px`,
                     width: `${popoverWidth}px`
                 }}
             >

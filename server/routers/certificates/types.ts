@@ -3,6 +3,7 @@ export type GetCertificateResponse = {
     domain: string;
     domainId: string;
     wildcard: boolean;
+    domainType: string;
     status: string; // pending, requested, valid, expired, failed
     expiresAt: string | null;
     lastRenewalAttempt: Date | null;

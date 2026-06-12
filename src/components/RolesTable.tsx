@@ -2,40 +2,60 @@
 
 import CreateRoleForm from "@app/components/CreateRoleForm";
 import DeleteRoleForm from "@app/components/DeleteRoleForm";
-import { RolesDataTable } from "@app/components/RolesDataTable";
 import { Button } from "@app/components/ui/button";
 import { ExtendedColumnDef } from "@app/components/ui/data-table";
+import { useNavigationContext } from "@app/hooks/useNavigationContext";
 import { toast } from "@app/hooks/useToast";
+import { getNextSortOrder, getSortDirection } from "@app/lib/sortColumn";
 import { Role } from "@server/db";
-import { ArrowUpDown, MoreHorizontal } from "lucide-react";
+import type { PaginationState } from "@tanstack/react-table";
+import {
+    ArrowDown01Icon,
+    ArrowUp10Icon,
+    ChevronsUpDownIcon,
+    MoreHorizontal
+} from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
+import { useDebouncedCallback } from "use-debounce";
+import EditRoleForm from "./EditRoleForm";
+import { ControlledDataTable } from "./ui/controlled-data-table";
 import {
     DropdownMenu,
-    DropdownMenuTrigger,
     DropdownMenuContent,
-    DropdownMenuItem
+    DropdownMenuItem,
+    DropdownMenuTrigger
 } from "./ui/dropdown-menu";
-import EditRoleForm from "./EditRoleForm";
 
 export type RoleRow = Role;
 
 type RolesTableProps = {
     roles: RoleRow[];
+    pagination: PaginationState;
+    rowCount: number;
 };
 
-export default function UsersTable({ roles }: RolesTableProps) {
+export default function UsersTable({
+    roles,
+    pagination,
+    rowCount
+}: RolesTableProps) {
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
     const [editingRole, setEditingRole] = useState<RoleRow | null>(null);
     const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
     const router = useRouter();
+    const [isRefreshing, startTransition] = useTransition();
+    const {
+        navigate: filter,
+        isNavigating: isFiltering,
+        searchParams
+    } = useNavigationContext();
 
     const [roleToRemove, setRoleToRemove] = useState<RoleRow | null>(null);
 
     const t = useTranslations();
-    const [isRefreshing, startTransition] = useTransition();
 
     const refreshData = async () => {
         console.log("Data refreshed");
@@ -56,15 +76,17 @@ export default function UsersTable({ roles }: RolesTableProps) {
             enableHiding: false,
             friendlyName: t("name"),
             header: ({ column }) => {
+                const nameOrder = getSortDirection("name", searchParams);
+                const Icon =
+                    nameOrder === "asc"
+                        ? ArrowDown01Icon
+                        : nameOrder === "desc"
+                          ? ArrowUp10Icon
+                          : ChevronsUpDownIcon;
                 return (
-                    <Button
-                        variant="ghost"
-                        onClick={() =>
-                            column.toggleSorting(column.getIsSorted() === "asc")
-                        }
-                    >
+                    <Button variant="ghost" onClick={() => toggleSort("name")}>
                         {t("name")}
-                        <ArrowUpDown className="ml-2 h-4 w-4" />
+                        <Icon className="ml-2 h-4 w-4" />
                     </Button>
                 );
             }
@@ -148,6 +170,30 @@ export default function UsersTable({ roles }: RolesTableProps) {
         }
     ];
 
+    function toggleSort(column: string) {
+        const newSearch = getNextSortOrder(column, searchParams);
+
+        filter({
+            searchParams: newSearch
+        });
+    }
+
+    const handlePaginationChange = (newPage: PaginationState) => {
+        searchParams.set("page", (newPage.pageIndex + 1).toString());
+        searchParams.set("pageSize", newPage.pageSize.toString());
+        filter({
+            searchParams
+        });
+    };
+
+    const handleSearchChange = useDebouncedCallback((query: string) => {
+        searchParams.set("query", query);
+        searchParams.delete("page");
+        filter({
+            searchParams
+        });
+    }, 300);
+
     return (
         <>
             {editingRole && (
@@ -191,10 +237,18 @@ export default function UsersTable({ roles }: RolesTableProps) {
                 />
             )}
 
-            <RolesDataTable
+            <ControlledDataTable
                 columns={columns}
-                data={roles}
-                createRole={() => {
+                rows={roles}
+                tableId="roles-table"
+                searchQuery={searchParams.get("query")?.toString()}
+                onSearch={handleSearchChange}
+                onPaginationChange={handlePaginationChange}
+                searchPlaceholder={t("accessRolesSearch")}
+                addButtonText={t("accessRolesAdd")}
+                rowCount={rowCount}
+                pagination={pagination}
+                onAdd={() => {
                     setIsCreateModalOpen(true);
                 }}
                 onRefresh={() => startTransition(refreshData)}

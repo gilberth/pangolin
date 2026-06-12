@@ -1,10 +1,12 @@
 import { Request, Response, NextFunction } from "express";
 import { db } from "@server/db";
 import { userOrgs, apiKeys, apiKeyOrg } from "@server/db";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import createHttpError from "http-errors";
 import HttpCode from "@server/types/HttpCode";
 import { checkOrgAccessPolicy } from "#dynamic/lib/checkOrgAccessPolicy";
+import { getUserOrgRoleIds } from "@server/lib/userOrgRoles";
+import { getFirstString } from "@server/lib/requestParams";
 
 export async function verifyApiKeyAccess(
     req: Request,
@@ -13,9 +15,24 @@ export async function verifyApiKeyAccess(
 ) {
     try {
         const userId = req.user!.userId;
-        const apiKeyId =
-            req.params.apiKeyId || req.body.apiKeyId || req.query.apiKeyId;
-        const orgId = req.params.orgId;
+        const apiKeyIdFromParams = getFirstString(req.params?.apiKeyId);
+        const apiKeyIdFromBody = getFirstString(req.body?.apiKeyId);
+
+        if (
+            apiKeyIdFromParams &&
+            apiKeyIdFromBody &&
+            apiKeyIdFromParams !== apiKeyIdFromBody
+        ) {
+            return next(
+                createHttpError(
+                    HttpCode.BAD_REQUEST,
+                    "API key ID provided in both URL and body with different values"
+                )
+            );
+        }
+
+        const apiKeyId = apiKeyIdFromParams || apiKeyIdFromBody;
+        const orgId = getFirstString(req.params.orgId);
 
         if (!userId) {
             return next(
@@ -103,8 +120,7 @@ export async function verifyApiKeyAccess(
             }
         }
 
-        const userOrgRoleId = req.userOrg.roleId;
-        req.userOrgRoleId = userOrgRoleId;
+        req.userOrgRoleIds = await getUserOrgRoleIds(req.userOrg.userId, orgId);
 
         return next();
     } catch (error) {

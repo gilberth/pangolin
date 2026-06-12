@@ -71,6 +71,19 @@ export function SubscriptionStatusProvider({
 
     const limitsExceeded = subscriptionStatusState?.limitsExceeded ?? false;
 
+    const trialExpiresAt = (() => {
+        if (subscriptionStatusState?.subscriptions) {
+            for (const { subscription } of subscriptionStatusState.subscriptions) {
+                if (subscription.expiresAt != null) {
+                    return subscription.expiresAt * 1000; // convert seconds to ms
+                }
+            }
+        }
+        return null;
+    })();
+
+    const isTrial = subscriptionStatusState?.subscriptions?.some(({ subscription }) => subscription.trial) ?? false;
+
     return (
         <SubscriptionStatusContext.Provider
             value={{
@@ -79,7 +92,9 @@ export function SubscriptionStatusProvider({
                 getTier,
                 isSubscribed,
                 subscribed,
-                limitsExceeded
+                limitsExceeded,
+                trialExpiresAt,
+                isTrial: isTrial
             }}
         >
             {children}

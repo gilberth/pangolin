@@ -81,6 +81,8 @@ export function pullEnv(): Env {
                 process.env.BRANDING_HIDE_AUTH_LAYOUT_FOOTER === "true"
                     ? true
                     : false,
+            hidePoweredBy:
+                process.env.BRANDING_HIDE_POWERED_BY === "true" ? true : false,
             logo: {
                 lightPath: process.env.BRANDING_LOGO_LIGHT_PATH as string,
                 darkPath: process.env.BRANDING_LOGO_DARK_PATH as string,

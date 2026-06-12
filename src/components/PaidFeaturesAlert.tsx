@@ -10,7 +10,8 @@ import { useEnvContext } from "@app/hooks/useEnvContext";
 import { Tier } from "@server/types/Tiers";
 import { useParams } from "next/navigation";
 
-const TIER_ORDER: Tier[] = ["tier1", "tier2", "tier3", "enterprise"];
+// const TIER_ORDER: Tier[] = ["tier1", "tier2", "tier3", "enterprise"];
+const TIER_ORDER: Tier[] = ["tier2", "tier3", "enterprise"];
 
 const TIER_TRANSLATION_KEYS: Record<
     Tier,
@@ -113,9 +114,10 @@ function getDocsLinkRenderer(href: string) {
 
 type Props = {
     tiers: Tier[];
+    showBookADemo?: boolean;
 };
 
-export function PaidFeaturesAlert({ tiers }: Props) {
+export function PaidFeaturesAlert({ tiers, showBookADemo = true }: Props) {
     const t = useTranslations();
     const params = useParams();
     const orgId = params?.orgId as string | undefined;
@@ -133,7 +135,9 @@ export function PaidFeaturesAlert({ tiers }: Props) {
     const tierLinkRenderer = getTierLinkRenderer(billingHref);
     const pangolinCloudLinkRenderer = getPangolinCloudLinkRenderer();
     const enterpriseDocsLinkRenderer = getDocsLinkRenderer(ENTERPRISE_DOCS_URL);
-    const bookADemoLinkRenderer = getBookADemoLinkRenderer();
+    const bookADemoLinkRenderer = showBookADemo
+        ? getBookADemoLinkRenderer()
+        : () => null;
 
     if (env.flags.disableEnterpriseFeatures) {
         return null;

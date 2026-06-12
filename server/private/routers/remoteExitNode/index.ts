@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -21,3 +21,5 @@ export * from "./deleteRemoteExitNode";
 export * from "./listRemoteExitNodes";
 export * from "./pickRemoteExitNodeDefaults";
 export * from "./quickStartRemoteExitNode";
+export * from "./offlineChecker";
+export * from "./exitNodeReconnectScheduler";

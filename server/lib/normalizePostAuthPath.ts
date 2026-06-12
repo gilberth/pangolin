@@ -1,3 +1,5 @@
+// Normalizes
+
 /**
  * Normalizes a post-authentication path for safe use when building redirect URLs.
  * Returns a path that starts with / and does not allow open redirects (no //, no :).

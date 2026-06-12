@@ -15,7 +15,8 @@ import {
 import { Input } from "@app/components/ui/input";
 import { useForm } from "react-hook-form";
 import { toast } from "@app/hooks/useToast";
-import { useRouter, useParams, redirect } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
+import Link from "next/link";
 import {
     SettingsContainer,
     SettingsSection,
@@ -24,16 +25,14 @@ import {
     SettingsSectionDescription,
     SettingsSectionBody,
     SettingsSectionForm,
-    SettingsSectionFooter,
     SettingsSectionGrid
 } from "@app/components/Settings";
 import { formatAxiosError } from "@app/lib/api";
 import { createApiClient } from "@app/lib/api";
 import { useEnvContext } from "@app/hooks/useEnvContext";
 import { useState, useEffect } from "react";
+import IdpAutoProvisionUsersDescription from "@app/components/IdpAutoProvisionUsersDescription";
 import { SwitchInput } from "@app/components/SwitchInput";
-import { Alert, AlertDescription, AlertTitle } from "@app/components/ui/alert";
-import { InfoIcon, ExternalLink } from "lucide-react";
 import {
     InfoSection,
     InfoSectionContent,
@@ -41,8 +40,7 @@ import {
     InfoSectionTitle
 } from "@app/components/InfoSection";
 import CopyToClipboard from "@app/components/CopyToClipboard";
-import { Badge } from "@app/components/ui/badge";
-import { useLicenseStatusContext } from "@app/hooks/useLicenseStatusContext";
+import IdpTypeBadge from "@app/components/IdpTypeBadge";
 import { useTranslations } from "next-intl";
 
 export default function GeneralPage() {
@@ -52,12 +50,12 @@ export default function GeneralPage() {
     const { idpId } = useParams();
     const [loading, setLoading] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
-    const { isUnlocked } = useLicenseStatusContext();
+    const [variant, setVariant] = useState<"oidc" | "google" | "azure">("oidc");
 
     const redirectUrl = `${env.app.dashboardUrl}/auth/idp/${idpId}/oidc/callback`;
     const t = useTranslations();
 
-    const GeneralFormSchema = z.object({
+    const OidcFormSchema = z.object({
         name: z.string().min(2, { message: t("nameMin", { len: 2 }) }),
         clientId: z.string().min(1, { message: t("idpClientIdRequired") }),
         clientSecret: z
@@ -72,10 +70,46 @@ export default function GeneralPage() {
         autoProvision: z.boolean().default(false)
     });
 
-    type GeneralFormValues = z.infer<typeof GeneralFormSchema>;
+    const GoogleFormSchema = z.object({
+        name: z.string().min(2, { message: t("nameMin", { len: 2 }) }),
+        clientId: z.string().min(1, { message: t("idpClientIdRequired") }),
+        clientSecret: z
+            .string()
+            .min(1, { message: t("idpClientSecretRequired") }),
+        autoProvision: z.boolean().default(false)
+    });
 
-    const form = useForm({
-        resolver: zodResolver(GeneralFormSchema),
+    const AzureFormSchema = z.object({
+        name: z.string().min(2, { message: t("nameMin", { len: 2 }) }),
+        clientId: z.string().min(1, { message: t("idpClientIdRequired") }),
+        clientSecret: z
+            .string()
+            .min(1, { message: t("idpClientSecretRequired") }),
+        tenantId: z.string().min(1, { message: t("idpTenantIdRequired") }),
+        autoProvision: z.boolean().default(false)
+    });
+
+    type OidcFormValues = z.infer<typeof OidcFormSchema>;
+    type GoogleFormValues = z.infer<typeof GoogleFormSchema>;
+    type AzureFormValues = z.infer<typeof AzureFormSchema>;
+    type GeneralFormValues =
+        | OidcFormValues
+        | GoogleFormValues
+        | AzureFormValues;
+
+    const getFormSchema = () => {
+        switch (variant) {
+            case "google":
+                return GoogleFormSchema;
+            case "azure":
+                return AzureFormSchema;
+            default:
+                return OidcFormSchema;
+        }
+    };
+
+    const form = useForm<GeneralFormValues>({
+        resolver: zodResolver(getFormSchema()) as never,
         defaultValues: {
             name: "",
             clientId: "",
@@ -86,9 +120,14 @@ export default function GeneralPage() {
             emailPath: "email",
             namePath: "name",
             scopes: "openid profile email",
-            autoProvision: true
+            autoProvision: true,
+            tenantId: ""
         }
     });
+
+    useEffect(() => {
+        form.clearErrors();
+    }, [variant, form]);
 
     useEffect(() => {
         const loadIdp = async () => {
@@ -96,18 +135,45 @@ export default function GeneralPage() {
                 const res = await api.get(`/idp/${idpId}`);
                 if (res.status === 200) {
                     const data = res.data.data;
-                    form.reset({
+                    const idpVariant =
+                        (data.idpOidcConfig?.variant as
+                            | "oidc"
+                            | "google"
+                            | "azure") || "oidc";
+                    setVariant(idpVariant);
+
+                    let tenantId = "";
+                    if (idpVariant === "azure" && data.idpOidcConfig?.authUrl) {
+                        const tenantMatch = data.idpOidcConfig.authUrl.match(
+                            /login\.microsoftonline\.com\/([^/]+)\/oauth2/
+                        );
+                        if (tenantMatch) {
+                            tenantId = tenantMatch[1];
+                        }
+                    }
+
+                    const formData: Record<string, unknown> = {
                         name: data.idp.name,
                         clientId: data.idpOidcConfig.clientId,
                         clientSecret: data.idpOidcConfig.clientSecret,
-                        authUrl: data.idpOidcConfig.authUrl,
-                        tokenUrl: data.idpOidcConfig.tokenUrl,
-                        identifierPath: data.idpOidcConfig.identifierPath,
-                        emailPath: data.idpOidcConfig.emailPath,
-                        namePath: data.idpOidcConfig.namePath,
-                        scopes: data.idpOidcConfig.scopes,
                         autoProvision: data.idp.autoProvision
-                    });
+                    };
+
+                    if (idpVariant === "oidc") {
+                        formData.authUrl = data.idpOidcConfig.authUrl;
+                        formData.tokenUrl = data.idpOidcConfig.tokenUrl;
+                        formData.identifierPath =
+                            data.idpOidcConfig.identifierPath;
+                        formData.emailPath =
+                            data.idpOidcConfig.emailPath ?? undefined;
+                        formData.namePath =
+                            data.idpOidcConfig.namePath ?? undefined;
+                        formData.scopes = data.idpOidcConfig.scopes;
+                    } else if (idpVariant === "azure") {
+                        formData.tenantId = tenantId;
+                    }
+
+                    form.reset(formData as GeneralFormValues);
                 }
             } catch (e) {
                 toast({
@@ -122,24 +188,75 @@ export default function GeneralPage() {
         };
 
         loadIdp();
-    }, [idpId, api, form, router]);
+    }, [idpId]);
 
     async function onSubmit(data: GeneralFormValues) {
         setLoading(true);
 
         try {
-            const payload = {
+            const schema = getFormSchema();
+            const validationResult = schema.safeParse(data);
+
+            if (!validationResult.success) {
+                const errors = validationResult.error.flatten().fieldErrors;
+                Object.keys(errors).forEach((key) => {
+                    const fieldName = key as keyof GeneralFormValues;
+                    const errorMessage =
+                        (errors as Record<string, string[] | undefined>)[
+                            key
+                        ]?.[0] || t("invalidValue");
+                    form.setError(fieldName, {
+                        type: "manual",
+                        message: errorMessage
+                    });
+                });
+                setLoading(false);
+                return;
+            }
+
+            let payload: Record<string, unknown> = {
                 name: data.name,
                 clientId: data.clientId,
                 clientSecret: data.clientSecret,
-                authUrl: data.authUrl,
-                tokenUrl: data.tokenUrl,
-                identifierPath: data.identifierPath,
-                emailPath: data.emailPath,
-                namePath: data.namePath,
                 autoProvision: data.autoProvision,
-                scopes: data.scopes
+                variant
             };
+
+            if (variant === "oidc") {
+                const oidcData = data as OidcFormValues;
+                payload = {
+                    ...payload,
+                    authUrl: oidcData.authUrl,
+                    tokenUrl: oidcData.tokenUrl,
+                    identifierPath: oidcData.identifierPath,
+                    emailPath: oidcData.emailPath ?? "",
+                    namePath: oidcData.namePath ?? "",
+                    scopes: oidcData.scopes
+                };
+            } else if (variant === "azure") {
+                const azureData = data as AzureFormValues;
+                const authUrl = `https://login.microsoftonline.com/${azureData.tenantId}/oauth2/v2.0/authorize`;
+                const tokenUrl = `https://login.microsoftonline.com/${azureData.tenantId}/oauth2/v2.0/token`;
+                payload = {
+                    ...payload,
+                    authUrl,
+                    tokenUrl,
+                    identifierPath: "email",
+                    emailPath: "email",
+                    namePath: "name",
+                    scopes: "openid profile email"
+                };
+            } else if (variant === "google") {
+                payload = {
+                    ...payload,
+                    authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+                    tokenUrl: "https://oauth2.googleapis.com/token",
+                    identifierPath: "email",
+                    emailPath: "email",
+                    namePath: "name",
+                    scopes: "openid profile email"
+                };
+            }
 
             const res = await api.post(`/idp/${idpId}/oidc`, payload);
 
@@ -189,15 +306,13 @@ export default function GeneralPage() {
                             </InfoSection>
                         </InfoSections>
 
-                        <Alert variant="neutral" className="">
-                            <InfoIcon className="h-4 w-4" />
-                            <AlertTitle className="font-semibold">
-                                {t("redirectUrlAbout")}
-                            </AlertTitle>
-                            <AlertDescription>
-                                {t("redirectUrlAboutDescription")}
-                            </AlertDescription>
-                        </Alert>
+                        <div className="flex items-center space-x-2 mb-4">
+                            <span className="text-sm font-medium text-muted-foreground">
+                                {t("idpTypeLabel")}:
+                            </span>
+                            <IdpTypeBadge type={variant} />
+                        </div>
+
                         <SettingsSectionForm>
                             <Form {...form}>
                                 <form
@@ -223,39 +338,77 @@ export default function GeneralPage() {
                                             </FormItem>
                                         )}
                                     />
-
-                                    <div className="flex items-start mb-0">
-                                        <SwitchInput
-                                            id="auto-provision-toggle"
-                                            label={t("idpAutoProvisionUsers")}
-                                            defaultChecked={form.getValues(
-                                                "autoProvision"
-                                            )}
-                                            onCheckedChange={(checked) => {
-                                                form.setValue(
-                                                    "autoProvision",
-                                                    checked
-                                                );
-                                            }}
-                                        />
-                                    </div>
-                                    <span className="text-sm text-muted-foreground">
-                                        {t("idpAutoProvisionUsersDescription")}
-                                    </span>
                                 </form>
                             </Form>
                         </SettingsSectionForm>
                     </SettingsSectionBody>
                 </SettingsSection>
 
-                <SettingsSectionGrid cols={2}>
+                <SettingsSection>
+                    <SettingsSectionHeader>
+                        <SettingsSectionTitle>
+                            {t("idpAutoProvisionUsers")}
+                        </SettingsSectionTitle>
+                        <SettingsSectionDescription>
+                            <IdpAutoProvisionUsersDescription />
+                        </SettingsSectionDescription>
+                    </SettingsSectionHeader>
+                    <SettingsSectionBody>
+                        <Form {...form}>
+                            <form
+                                onSubmit={form.handleSubmit(onSubmit)}
+                                className="space-y-4"
+                                id="general-settings-form"
+                            >
+                                <div className="flex items-start mb-0">
+                                    <SwitchInput
+                                        id="auto-provision-toggle"
+                                        label={t("idpAutoProvisionUsers")}
+                                        defaultChecked={form.getValues(
+                                            "autoProvision"
+                                        )}
+                                        onCheckedChange={(checked) => {
+                                            form.setValue(
+                                                "autoProvision",
+                                                checked
+                                            );
+                                        }}
+                                    />
+                                </div>
+                                <div className="flex flex-col gap-2">
+                                    {form.watch("autoProvision") && (
+                                        <FormDescription>
+                                            {t.rich(
+                                                "idpAdminAutoProvisionPoliciesTabHint",
+                                                {
+                                                    policiesTabLink: (
+                                                        chunks
+                                                    ) => (
+                                                        <Link
+                                                            href={`/admin/idp/${idpId}/policies`}
+                                                            className="text-primary hover:underline inline-flex items-center gap-1"
+                                                        >
+                                                            {chunks}
+                                                        </Link>
+                                                    )
+                                                }
+                                            )}
+                                        </FormDescription>
+                                    )}
+                                </div>
+                            </form>
+                        </Form>
+                    </SettingsSectionBody>
+                </SettingsSection>
+
+                {variant === "google" && (
                     <SettingsSection>
                         <SettingsSectionHeader>
                             <SettingsSectionTitle>
-                                {t("idpOidcConfigure")}
+                                {t("idpGoogleConfiguration")}
                             </SettingsSectionTitle>
                             <SettingsSectionDescription>
-                                {t("idpOidcConfigureDescription")}
+                                {t("idpGoogleConfigurationDescription")}
                             </SettingsSectionDescription>
                         </SettingsSectionHeader>
                         <SettingsSectionBody>
@@ -279,7 +432,7 @@ export default function GeneralPage() {
                                                     </FormControl>
                                                     <FormDescription>
                                                         {t(
-                                                            "idpClientIdDescription"
+                                                            "idpGoogleClientIdDescription"
                                                         )}
                                                     </FormDescription>
                                                     <FormMessage />
@@ -303,49 +456,7 @@ export default function GeneralPage() {
                                                     </FormControl>
                                                     <FormDescription>
                                                         {t(
-                                                            "idpClientSecretDescription"
-                                                        )}
-                                                    </FormDescription>
-                                                    <FormMessage />
-                                                </FormItem>
-                                            )}
-                                        />
-
-                                        <FormField
-                                            control={form.control}
-                                            name="authUrl"
-                                            render={({ field }) => (
-                                                <FormItem>
-                                                    <FormLabel>
-                                                        {t("idpAuthUrl")}
-                                                    </FormLabel>
-                                                    <FormControl>
-                                                        <Input {...field} />
-                                                    </FormControl>
-                                                    <FormDescription>
-                                                        {t(
-                                                            "idpAuthUrlDescription"
-                                                        )}
-                                                    </FormDescription>
-                                                    <FormMessage />
-                                                </FormItem>
-                                            )}
-                                        />
-
-                                        <FormField
-                                            control={form.control}
-                                            name="tokenUrl"
-                                            render={({ field }) => (
-                                                <FormItem>
-                                                    <FormLabel>
-                                                        {t("idpTokenUrl")}
-                                                    </FormLabel>
-                                                    <FormControl>
-                                                        <Input {...field} />
-                                                    </FormControl>
-                                                    <FormDescription>
-                                                        {t(
-                                                            "idpTokenUrlDescription"
+                                                            "idpGoogleClientSecretDescription"
                                                         )}
                                                     </FormDescription>
                                                     <FormMessage />
@@ -357,14 +468,16 @@ export default function GeneralPage() {
                             </SettingsSectionForm>
                         </SettingsSectionBody>
                     </SettingsSection>
+                )}
 
+                {variant === "azure" && (
                     <SettingsSection>
                         <SettingsSectionHeader>
                             <SettingsSectionTitle>
-                                {t("idpToken")}
+                                {t("idpAzureConfiguration")}
                             </SettingsSectionTitle>
                             <SettingsSectionDescription>
-                                {t("idpTokenDescription")}
+                                {t("idpAzureConfigurationDescription")}
                             </SettingsSectionDescription>
                         </SettingsSectionHeader>
                         <SettingsSectionBody>
@@ -375,43 +488,20 @@ export default function GeneralPage() {
                                         className="space-y-4"
                                         id="general-settings-form"
                                     >
-                                        <Alert variant="neutral">
-                                            <InfoIcon className="h-4 w-4" />
-                                            <AlertTitle className="font-semibold">
-                                                {t("idpJmespathAbout")}
-                                            </AlertTitle>
-                                            <AlertDescription>
-                                                {t(
-                                                    "idpJmespathAboutDescription"
-                                                )}
-                                                <a
-                                                    href="https://jmespath.org"
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    className="text-primary hover:underline inline-flex items-center"
-                                                >
-                                                    {t(
-                                                        "idpJmespathAboutDescriptionLink"
-                                                    )}{" "}
-                                                    <ExternalLink className="ml-1 h-4 w-4" />
-                                                </a>
-                                            </AlertDescription>
-                                        </Alert>
-
                                         <FormField
                                             control={form.control}
-                                            name="identifierPath"
+                                            name="tenantId"
                                             render={({ field }) => (
                                                 <FormItem>
                                                     <FormLabel>
-                                                        {t("idpJmespathLabel")}
+                                                        {t("idpTenantId")}
                                                     </FormLabel>
                                                     <FormControl>
                                                         <Input {...field} />
                                                     </FormControl>
                                                     <FormDescription>
                                                         {t(
-                                                            "idpJmespathLabelDescription"
+                                                            "idpAzureTenantIdDescription"
                                                         )}
                                                     </FormDescription>
                                                     <FormMessage />
@@ -421,20 +511,18 @@ export default function GeneralPage() {
 
                                         <FormField
                                             control={form.control}
-                                            name="emailPath"
+                                            name="clientId"
                                             render={({ field }) => (
                                                 <FormItem>
                                                     <FormLabel>
-                                                        {t(
-                                                            "idpJmespathEmailPathOptional"
-                                                        )}
+                                                        {t("idpClientId")}
                                                     </FormLabel>
                                                     <FormControl>
                                                         <Input {...field} />
                                                     </FormControl>
                                                     <FormDescription>
                                                         {t(
-                                                            "idpJmespathEmailPathOptionalDescription"
+                                                            "idpAzureClientIdDescription"
                                                         )}
                                                     </FormDescription>
                                                     <FormMessage />
@@ -444,43 +532,21 @@ export default function GeneralPage() {
 
                                         <FormField
                                             control={form.control}
-                                            name="namePath"
+                                            name="clientSecret"
                                             render={({ field }) => (
                                                 <FormItem>
                                                     <FormLabel>
-                                                        {t(
-                                                            "idpJmespathNamePathOptional"
-                                                        )}
+                                                        {t("idpClientSecret")}
                                                     </FormLabel>
                                                     <FormControl>
-                                                        <Input {...field} />
+                                                        <Input
+                                                            type="password"
+                                                            {...field}
+                                                        />
                                                     </FormControl>
                                                     <FormDescription>
                                                         {t(
-                                                            "idpJmespathNamePathOptionalDescription"
-                                                        )}
-                                                    </FormDescription>
-                                                    <FormMessage />
-                                                </FormItem>
-                                            )}
-                                        />
-
-                                        <FormField
-                                            control={form.control}
-                                            name="scopes"
-                                            render={({ field }) => (
-                                                <FormItem>
-                                                    <FormLabel>
-                                                        {t(
-                                                            "idpOidcConfigureScopes"
-                                                        )}
-                                                    </FormLabel>
-                                                    <FormControl>
-                                                        <Input {...field} />
-                                                    </FormControl>
-                                                    <FormDescription>
-                                                        {t(
-                                                            "idpOidcConfigureScopesDescription"
+                                                            "idpAzureClientSecretDescription"
                                                         )}
                                                     </FormDescription>
                                                     <FormMessage />
@@ -492,15 +558,263 @@ export default function GeneralPage() {
                             </SettingsSectionForm>
                         </SettingsSectionBody>
                     </SettingsSection>
-                </SettingsSectionGrid>
+                )}
+
+                {variant === "oidc" && (
+                    <SettingsSectionGrid cols={2}>
+                        <SettingsSection>
+                            <SettingsSectionHeader>
+                                <SettingsSectionTitle>
+                                    {t("idpOidcConfigure")}
+                                </SettingsSectionTitle>
+                                <SettingsSectionDescription>
+                                    {t("idpOidcConfigureDescription")}
+                                </SettingsSectionDescription>
+                            </SettingsSectionHeader>
+                            <SettingsSectionBody>
+                                <SettingsSectionForm>
+                                    <Form {...form}>
+                                        <form
+                                            onSubmit={form.handleSubmit(
+                                                onSubmit
+                                            )}
+                                            className="space-y-4"
+                                            id="general-settings-form"
+                                        >
+                                            <FormField
+                                                control={form.control}
+                                                name="clientId"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>
+                                                            {t("idpClientId")}
+                                                        </FormLabel>
+                                                        <FormControl>
+                                                            <Input {...field} />
+                                                        </FormControl>
+                                                        <FormDescription>
+                                                            {t(
+                                                                "idpClientIdDescription"
+                                                            )}
+                                                        </FormDescription>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+
+                                            <FormField
+                                                control={form.control}
+                                                name="clientSecret"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>
+                                                            {t(
+                                                                "idpClientSecret"
+                                                            )}
+                                                        </FormLabel>
+                                                        <FormControl>
+                                                            <Input
+                                                                type="password"
+                                                                {...field}
+                                                            />
+                                                        </FormControl>
+                                                        <FormDescription>
+                                                            {t(
+                                                                "idpClientSecretDescription"
+                                                            )}
+                                                        </FormDescription>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+
+                                            <FormField
+                                                control={form.control}
+                                                name="authUrl"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>
+                                                            {t("idpAuthUrl")}
+                                                        </FormLabel>
+                                                        <FormControl>
+                                                            <Input {...field} />
+                                                        </FormControl>
+                                                        <FormDescription>
+                                                            {t(
+                                                                "idpAuthUrlDescription"
+                                                            )}
+                                                        </FormDescription>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+
+                                            <FormField
+                                                control={form.control}
+                                                name="tokenUrl"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>
+                                                            {t("idpTokenUrl")}
+                                                        </FormLabel>
+                                                        <FormControl>
+                                                            <Input {...field} />
+                                                        </FormControl>
+                                                        <FormDescription>
+                                                            {t(
+                                                                "idpTokenUrlDescription"
+                                                            )}
+                                                        </FormDescription>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </form>
+                                    </Form>
+                                </SettingsSectionForm>
+                            </SettingsSectionBody>
+                        </SettingsSection>
+
+                        <SettingsSection>
+                            <SettingsSectionHeader>
+                                <SettingsSectionTitle>
+                                    {t("idpToken")}
+                                </SettingsSectionTitle>
+                                <SettingsSectionDescription>
+                                    {t("idpTokenDescription")}
+                                </SettingsSectionDescription>
+                            </SettingsSectionHeader>
+                            <SettingsSectionBody>
+                                <SettingsSectionForm>
+                                    <Form {...form}>
+                                        <form
+                                            onSubmit={form.handleSubmit(
+                                                onSubmit
+                                            )}
+                                            className="space-y-4"
+                                            id="general-settings-form"
+                                        >
+                                            <FormField
+                                                control={form.control}
+                                                name="identifierPath"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>
+                                                            {t(
+                                                                "idpJmespathLabel"
+                                                            )}
+                                                        </FormLabel>
+                                                        <FormControl>
+                                                            <Input {...field} />
+                                                        </FormControl>
+                                                        <FormDescription>
+                                                            {t(
+                                                                "idpJmespathLabelDescription"
+                                                            )}
+                                                        </FormDescription>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+
+                                            <FormField
+                                                control={form.control}
+                                                name="emailPath"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>
+                                                            {t(
+                                                                "idpJmespathEmailPathOptional"
+                                                            )}
+                                                        </FormLabel>
+                                                        <FormControl>
+                                                            <Input
+                                                                {...field}
+                                                                value={
+                                                                    field.value ||
+                                                                    ""
+                                                                }
+                                                            />
+                                                        </FormControl>
+                                                        <FormDescription>
+                                                            {t(
+                                                                "idpJmespathEmailPathOptionalDescription"
+                                                            )}
+                                                        </FormDescription>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+
+                                            <FormField
+                                                control={form.control}
+                                                name="namePath"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>
+                                                            {t(
+                                                                "idpJmespathNamePathOptional"
+                                                            )}
+                                                        </FormLabel>
+                                                        <FormControl>
+                                                            <Input
+                                                                {...field}
+                                                                value={
+                                                                    field.value ||
+                                                                    ""
+                                                                }
+                                                            />
+                                                        </FormControl>
+                                                        <FormDescription>
+                                                            {t(
+                                                                "idpJmespathNamePathOptionalDescription"
+                                                            )}
+                                                        </FormDescription>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+
+                                            <FormField
+                                                control={form.control}
+                                                name="scopes"
+                                                render={({ field }) => (
+                                                    <FormItem>
+                                                        <FormLabel>
+                                                            {t(
+                                                                "idpOidcConfigureScopes"
+                                                            )}
+                                                        </FormLabel>
+                                                        <FormControl>
+                                                            <Input {...field} />
+                                                        </FormControl>
+                                                        <FormDescription>
+                                                            {t(
+                                                                "idpOidcConfigureScopesDescription"
+                                                            )}
+                                                        </FormDescription>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </form>
+                                    </Form>
+                                </SettingsSectionForm>
+                            </SettingsSectionBody>
+                        </SettingsSection>
+                    </SettingsSectionGrid>
+                )}
             </SettingsContainer>
 
             <div className="flex justify-end mt-8">
                 <Button
-                    type="submit"
+                    type="button"
                     form="general-settings-form"
                     loading={loading}
                     disabled={loading}
+                    onClick={() => {
+                        form.handleSubmit(onSubmit)();
+                    }}
                 >
                     {t("saveGeneralSettings")}
                 </Button>

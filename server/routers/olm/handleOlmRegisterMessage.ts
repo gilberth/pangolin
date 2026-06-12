@@ -1,4 +1,4 @@
-import { db, orgs } from "@server/db";
+import { db, orgs, primaryDb } from "@server/db";
 import { MessageHandler } from "@server/routers/ws";
 import {
     clients,
@@ -7,7 +7,7 @@ import {
     olms,
     sites
 } from "@server/db";
-import { count, eq } from "drizzle-orm";
+import { and, count, eq, ne, or } from "drizzle-orm";
 import logger from "@server/logger";
 import { checkOrgAccessPolicy } from "#dynamic/lib/checkOrgAccessPolicy";
 import { validateSessionToken } from "@server/auth/sessions/app";
@@ -17,19 +17,27 @@ import { getUserDeviceName } from "@server/db/names";
 import { buildSiteConfigurationForOlmClient } from "./buildConfiguration";
 import { OlmErrorCodes, sendOlmError } from "./error";
 import { handleFingerprintInsertion } from "./fingerprintingUtils";
-import { Alias } from "@server/lib/ip";
 import { build } from "@server/build";
 import { canCompress } from "@server/lib/clientVersionChecks";
+import config from "@server/lib/config";
+import cache from "#dynamic/lib/cache";
+
+const HOLEPUNCH_STALE_CHAIN_THRESHOLD = 18;
+const HOLEPUNCH_STALE_CHAIN_TTL_SECONDS = 1800;
+
+function getHolePunchChainCounterKey(olmId: string, chainId: string): string {
+    return `olm:register:stale_holepunch:${olmId}:${chainId}`;
+}
 
 export const handleOlmRegisterMessage: MessageHandler = async (context) => {
-    logger.info("Handling register olm message!");
+    logger.info("[handleOlmRegisterMessage] Handling register olm message");
     const { message, client: c, sendToClient } = context;
     const olm = c as Olm;
 
     const now = Math.floor(Date.now() / 1000);
 
     if (!olm) {
-        logger.warn("Olm not found");
+        logger.warn("[handleOlmRegisterMessage] Olm not found");
         return;
     }
 
@@ -41,20 +49,24 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
         orgId,
         userToken,
         fingerprint,
-        postures
+        postures,
+        chainId
     } = message.data;
 
     if (!olm.clientId) {
-        logger.warn("Olm client ID not found");
+        logger.warn("[handleOlmRegisterMessage] Olm client ID not found");
         sendOlmError(OlmErrorCodes.CLIENT_ID_NOT_FOUND, olm.olmId);
         return;
     }
 
-    logger.debug("Handling fingerprint insertion for olm register...", {
-        olmId: olm.olmId,
-        fingerprint,
-        postures
-    });
+    logger.debug(
+        "[handleOlmRegisterMessage] Handling fingerprint insertion for olm register...",
+        {
+            olmId: olm.olmId,
+            fingerprint,
+            postures
+        }
+    );
 
     const isUserDevice = olm.userId !== null && olm.userId !== undefined;
 
@@ -77,21 +89,24 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
             .where(eq(olms.olmId, olm.olmId));
     }
 
-    const [client] = await db
+    const [client] = await primaryDb // read from the primary here so there is no latency with the last update on the holepunch
         .select()
         .from(clients)
         .where(eq(clients.clientId, olm.clientId))
         .limit(1);
 
     if (!client) {
-        logger.warn("Client ID not found");
+        logger.warn("[handleOlmRegisterMessage] Client not found", {
+            clientId: olm.clientId
+        });
         sendOlmError(OlmErrorCodes.CLIENT_NOT_FOUND, olm.olmId);
         return;
     }
 
     if (client.blocked) {
         logger.debug(
-            `Client ${client.clientId} is blocked. Ignoring register.`
+            `[handleOlmRegisterMessage] Client ${client.clientId} is blocked. Ignoring register.`,
+            { orgId: client.orgId, clientId: client.clientId }
         );
         sendOlmError(OlmErrorCodes.CLIENT_BLOCKED, olm.olmId);
         return;
@@ -99,7 +114,8 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
 
     if (client.approvalState == "pending") {
         logger.debug(
-            `Client ${client.clientId} approval is pending. Ignoring register.`
+            `[handleOlmRegisterMessage] Client ${client.clientId} approval is pending. Ignoring register.`,
+            { orgId: client.orgId, clientId: client.clientId }
         );
         sendOlmError(OlmErrorCodes.CLIENT_PENDING, olm.olmId);
         return;
@@ -127,14 +143,20 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
         .limit(1);
 
     if (!org) {
-        logger.warn("Org not found");
+        logger.warn("[handleOlmRegisterMessage] Org not found", {
+            orgId: client.orgId,
+            clientId: client.clientId
+        });
         sendOlmError(OlmErrorCodes.ORG_NOT_FOUND, olm.olmId);
         return;
     }
 
     if (orgId) {
         if (!olm.userId) {
-            logger.warn("Olm has no user ID");
+            logger.warn("[handleOlmRegisterMessage] Olm has no user ID", {
+                orgId: client.orgId,
+                clientId: client.clientId
+            });
             sendOlmError(OlmErrorCodes.USER_ID_NOT_FOUND, olm.olmId);
             return;
         }
@@ -142,12 +164,18 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
         const { session: userSession, user } =
             await validateSessionToken(userToken);
         if (!userSession || !user) {
-            logger.warn("Invalid user session for olm register");
+            logger.warn(
+                "[handleOlmRegisterMessage] Invalid user session for olm register",
+                { orgId: client.orgId, clientId: client.clientId }
+            );
             sendOlmError(OlmErrorCodes.INVALID_USER_SESSION, olm.olmId);
             return;
         }
         if (user.userId !== olm.userId) {
-            logger.warn("User ID mismatch for olm register");
+            logger.warn(
+                "[handleOlmRegisterMessage] User ID mismatch for olm register",
+                { orgId: client.orgId, clientId: client.clientId }
+            );
             sendOlmError(OlmErrorCodes.USER_ID_MISMATCH, olm.olmId);
             return;
         }
@@ -162,11 +190,16 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
             sessionId // this is the user token passed in the message
         });
 
-        logger.debug("Policy check result:", policyCheck);
+        logger.debug("[handleOlmRegisterMessage] Policy check result", {
+            orgId: client.orgId,
+            clientId: client.clientId,
+            policyCheck
+        });
 
         if (policyCheck?.error) {
             logger.error(
-                `Error checking access policies for olm user ${olm.userId} in org ${orgId}: ${policyCheck?.error}`
+                `[handleOlmRegisterMessage] Error checking access policies for olm user ${olm.userId} in org ${orgId}: ${policyCheck?.error}`,
+                { orgId: client.orgId, clientId: client.clientId }
             );
             sendOlmError(OlmErrorCodes.ORG_ACCESS_POLICY_DENIED, olm.olmId);
             return;
@@ -174,7 +207,8 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
 
         if (policyCheck.policies?.passwordAge?.compliant === false) {
             logger.warn(
-                `Olm user ${olm.userId} has non-compliant password age for org ${orgId}`
+                `[handleOlmRegisterMessage] Olm user ${olm.userId} has non-compliant password age for org ${orgId}`,
+                { orgId: client.orgId, clientId: client.clientId }
             );
             sendOlmError(
                 OlmErrorCodes.ORG_ACCESS_POLICY_PASSWORD_EXPIRED,
@@ -185,7 +219,8 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
             policyCheck.policies?.maxSessionLength?.compliant === false
         ) {
             logger.warn(
-                `Olm user ${olm.userId} has non-compliant session length for org ${orgId}`
+                `[handleOlmRegisterMessage] Olm user ${olm.userId} has non-compliant session length for org ${orgId}`,
+                { orgId: client.orgId, clientId: client.clientId }
             );
             sendOlmError(
                 OlmErrorCodes.ORG_ACCESS_POLICY_SESSION_EXPIRED,
@@ -194,7 +229,8 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
             return;
         } else if (policyCheck.policies?.requiredTwoFactor === false) {
             logger.warn(
-                `Olm user ${olm.userId} does not have 2FA enabled for org ${orgId}`
+                `[handleOlmRegisterMessage] Olm user ${olm.userId} does not have 2FA enabled for org ${orgId}`,
+                { orgId: client.orgId, clientId: client.clientId }
             );
             sendOlmError(
                 OlmErrorCodes.ORG_ACCESS_POLICY_2FA_REQUIRED,
@@ -203,7 +239,8 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
             return;
         } else if (!policyCheck.allowed) {
             logger.warn(
-                `Olm user ${olm.userId} does not pass access policies for org ${orgId}: ${policyCheck.error}`
+                `[handleOlmRegisterMessage] Olm user ${olm.userId} does not pass access policies for org ${orgId}: ${policyCheck.error}`,
+                { orgId: client.orgId, clientId: client.clientId }
             );
             sendOlmError(OlmErrorCodes.ORG_ACCESS_POLICY_DENIED, olm.olmId);
             return;
@@ -225,29 +262,40 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
         sitesCountResult.length > 0 ? sitesCountResult[0].count : 0;
 
     // Prepare an array to store site configurations
-    logger.debug(`Found ${sitesCount} sites for client ${client.clientId}`);
+    logger.debug(
+        `[handleOlmRegisterMessage] Found ${sitesCount} sites for client ${client.clientId}`,
+        { orgId: client.orgId, clientId: client.clientId }
+    );
 
     let jitMode = false;
     if (sitesCount > 250 && build == "saas") {
         // THIS IS THE MAX ON THE BUSINESS TIER
         // we have too many sites
         // If we have too many sites we need to drop into fully JIT mode by not sending any of the sites
-        logger.info("Too many sites (%d), dropping into JIT mode", sitesCount);
+        logger.info(
+            `[handleOlmRegisterMessage] Too many sites (${sitesCount}), dropping into JIT mode`,
+            { orgId: client.orgId, clientId: client.clientId }
+        );
         jitMode = true;
     }
 
     logger.debug(
-        `Olm client ID: ${client.clientId}, Public Key: ${publicKey}, Relay: ${relay}`
+        `[handleOlmRegisterMessage] Olm client ID: ${client.clientId}, Public Key: ${publicKey}, Relay: ${relay}`,
+        { orgId: client.orgId, clientId: client.clientId }
     );
 
     if (!publicKey) {
-        logger.warn("Public key not provided");
+        logger.warn("[handleOlmRegisterMessage] Public key not provided", {
+            orgId: client.orgId,
+            clientId: client.clientId
+        });
         return;
     }
 
     if (client.pubKey !== publicKey || client.archived) {
         logger.info(
-            "Public key mismatch. Updating public key and clearing session info..."
+            "[handleOlmRegisterMessage] Public key mismatch. Updating public key and clearing session info...",
+            { orgId: client.orgId, clientId: client.clientId }
         );
         // Update the client's public key
         await db
@@ -265,7 +313,36 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
                 isRelayed: relay == true,
                 isJitMode: jitMode
             })
-            .where(eq(clientSitesAssociationsCache.clientId, client.clientId));
+            .where(
+                and(
+                    eq(clientSitesAssociationsCache.clientId, client.clientId),
+                    or(
+                        ne(
+                            clientSitesAssociationsCache.isRelayed,
+                            relay == true
+                        ),
+                        ne(clientSitesAssociationsCache.isJitMode, jitMode)
+                    )
+                )
+            );
+    }
+
+    let staleHolePunchChainCount: number | undefined;
+    const hasChainId =
+        chainId !== undefined && chainId !== null && String(chainId) !== "";
+
+    if (hasChainId) {
+        const cacheKey = getHolePunchChainCounterKey(
+            olm.olmId,
+            String(chainId)
+        );
+        const existingCount = (await cache.get<number>(cacheKey)) ?? 0;
+        staleHolePunchChainCount = existingCount + 1;
+        await cache.set(
+            cacheKey,
+            staleHolePunchChainCount,
+            HOLEPUNCH_STALE_CHAIN_TTL_SECONDS
+        );
     }
 
     // this prevents us from accepting a register from an olm that has not hole punched yet.
@@ -273,12 +350,41 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
     // TODO: I still think there is a better way to do this rather than locking it out here but ???
     if (now - (client.lastHolePunch || 0) > 5 && sitesCount > 0) {
         logger.warn(
-            "Client last hole punch is too old and we have sites to send; skipping this register"
+            `[handleOlmRegisterMessage] Client last hole punch is too old and we have sites to send; skipping this register. The client is failing to hole punch and identify its network address with the server. Can the client reach the server on UDP port ${config.getRawConfig().gerbil.clients_start_port}?`,
+            { orgId: client.orgId, clientId: client.clientId }
         );
+
+        if (!hasChainId) {
+            logger.debug(
+                "[handleOlmRegisterMessage] Skipping HOLEPUNCH_MISSING because chainId is missing",
+                {
+                    orgId: client.orgId,
+                    clientId: client.clientId,
+                    olmId: olm.olmId
+                }
+            );
+            return;
+        }
+
+        if (staleHolePunchChainCount === HOLEPUNCH_STALE_CHAIN_THRESHOLD) {
+            sendOlmError(OlmErrorCodes.HOLEPUNCH_MISSING, olm.olmId);
+        } else {
+            logger.debug(
+                "[handleOlmRegisterMessage] Suppressing HOLEPUNCH_MISSING until chain threshold is met",
+                {
+                    orgId: client.orgId,
+                    clientId: client.clientId,
+                    olmId: olm.olmId,
+                    chainId,
+                    staleHolePunchChainCount,
+                    threshold: HOLEPUNCH_STALE_CHAIN_THRESHOLD
+                }
+            );
+        }
         return;
     }
 
-   // NOTE: its important that the client here is the old client and the public key is the new key
+    // NOTE: its important that the client here is the old client and the public key is the new key
     const siteConfigurations = await buildSiteConfigurationForOlmClient(
         client,
         publicKey,
@@ -293,7 +399,8 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
             data: {
                 sites: siteConfigurations,
                 tunnelIP: client.subnet,
-                utilitySubnet: org.utilitySubnet
+                utilitySubnet: org.utilitySubnet,
+                chainId: chainId
             }
         },
         options: {

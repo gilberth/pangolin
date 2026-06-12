@@ -5,7 +5,7 @@ import { build } from "@server/build";
 // EmailContainer: Wraps the entire email layout
 export function EmailContainer({ children }: { children: React.ReactNode }) {
     return (
-        <Container className="bg-white border border-solid border-gray-200 max-w-lg mx-auto my-8 rounded-lg overflow-hidden shadow-sm">
+        <Container className="bg-white border border-solid border-gray-200 max-w-lg mx-auto my-8 rounded-xl overflow-hidden">
             {children}
         </Container>
     );
@@ -18,7 +18,7 @@ export function EmailLetterHead() {
             <Img
                 src="https://fossorial-public-assets.s3.us-east-1.amazonaws.com/word_mark_black.png"
                 alt="Pangolin Logo"
-                width="120"
+                width="180"
                 height="auto"
                 className="mx-auto"
             />

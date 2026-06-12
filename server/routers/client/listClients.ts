@@ -1,15 +1,20 @@
 import {
+    clientLabels,
     clients,
     clientSitesAssociationsCache,
     currentFingerprint,
     db,
+    labels,
     olms,
     orgs,
     roleClients,
     sites,
     userClients,
-    users
+    users,
+    type Label
 } from "@server/db";
+import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
+import { tierMatrix } from "@server/lib/billing/tierMatrix";
 import response from "@server/lib/response";
 import logger from "@server/logger";
 import { OpenAPITags, registry } from "@server/openApi";
@@ -29,64 +34,8 @@ import {
 } from "drizzle-orm";
 import { NextFunction, Request, Response } from "express";
 import createHttpError from "http-errors";
-import NodeCache from "node-cache";
-import semver from "semver";
 import { z } from "zod";
 import { fromError } from "zod-validation-error";
-
-const olmVersionCache = new NodeCache({ stdTTL: 3600 });
-
-async function getLatestOlmVersion(): Promise<string | null> {
-    try {
-        const cachedVersion = olmVersionCache.get<string>("latestOlmVersion");
-        if (cachedVersion) {
-            return cachedVersion;
-        }
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1500);
-
-        const response = await fetch(
-            "https://api.github.com/repos/fosrl/olm/tags",
-            {
-                signal: controller.signal
-            }
-        );
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-            logger.warn(
-                `Failed to fetch latest Olm version from GitHub: ${response.status} ${response.statusText}`
-            );
-            return null;
-        }
-
-        let tags = await response.json();
-        if (!Array.isArray(tags) || tags.length === 0) {
-            logger.warn("No tags found for Olm repository");
-            return null;
-        }
-        tags = tags.filter((version) => !version.name.includes("rc"));
-        const latestVersion = tags[0].name;
-
-        olmVersionCache.set("latestOlmVersion", latestVersion);
-
-        return latestVersion;
-    } catch (error: any) {
-        if (error.name === "AbortError") {
-            logger.warn("Request to fetch latest Olm version timed out (1.5s)");
-        } else if (error.cause?.code === "UND_ERR_CONNECT_TIMEOUT") {
-            logger.warn("Connection timeout while fetching latest Olm version");
-        } else {
-            logger.warn(
-                "Error fetching latest Olm version:",
-                error.message || error
-            );
-        }
-        return null;
-    }
-}
 
 const listClientsParamsSchema = z.strictObject({
     orgId: z.string()
@@ -169,7 +118,27 @@ const listClientsSchema = z.object({
                 description:
                     "Filter by client status. Can be a comma-separated list of values. Defaults to 'active'."
             })
-    )
+    ),
+    labels: z
+        .preprocess((val) => {
+            if (val === undefined || val === null || val === "") {
+                return undefined;
+            }
+            if (Array.isArray(val)) {
+                return val;
+            }
+            // the array is returned as this
+            if (typeof val === "string") {
+                return val.split(",");
+            }
+            return undefined;
+        }, z.array(z.string()))
+        .optional()
+        .catch([])
+        .openapi({
+            type: "array",
+            description: "Filter by client labels"
+        })
 });
 
 function queryClientsBase() {
@@ -225,6 +194,7 @@ type ClientWithSites = Awaited<ReturnType<typeof queryClientsBase>>[0] & {
         siteNiceId: string | null;
     }>;
     olmUpdateAvailable?: boolean;
+    labels?: Array<Pick<Label, "labelId" | "name" | "color">>;
 };
 
 type OlmWithUpdateAvailable = ClientWithSites;
@@ -242,7 +212,22 @@ registry.registerPath({
         query: listClientsSchema,
         params: listClientsParamsSchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function listClients(
@@ -260,8 +245,16 @@ export async function listClients(
                 )
             );
         }
-        const { page, pageSize, online, query, status, sort_by, order } =
-            parsedQuery.data;
+        const {
+            page,
+            pageSize,
+            online,
+            query,
+            status,
+            sort_by,
+            order,
+            labels: labelFilter
+        } = parsedQuery.data;
 
         const parsedParams = listClientsParamsSchema.safeParse(req.params);
         if (!parsedParams.success) {
@@ -297,7 +290,7 @@ export async function listClients(
                 .where(
                     or(
                         eq(userClients.userId, req.user!.userId),
-                        eq(roleClients.roleId, req.userOrgRoleId!)
+                        inArray(roleClients.roleId, req.userOrgRoleIds!)
                     )
                 );
         } else {
@@ -309,6 +302,11 @@ export async function listClients(
 
         const accessibleClientIds = accessibleClients.map(
             (client) => client.clientId
+        );
+
+        const isLabelFeatureEnabled = await isLicensedOrSubscribed(
+            orgId,
+            tierMatrix.labels
         );
 
         // Get client count with filter
@@ -343,19 +341,46 @@ export async function listClients(
             conditions.push(or(...filterAggregates));
         }
 
-        if (query) {
+        if (isLabelFeatureEnabled && labelFilter && labelFilter.length > 0) {
             conditions.push(
-                or(
-                    like(
-                        sql`LOWER(${clients.name})`,
-                        "%" + query.toLowerCase() + "%"
-                    ),
-                    like(
-                        sql`LOWER(${clients.niceId})`,
-                        "%" + query.toLowerCase() + "%"
-                    )
+                inArray(
+                    clients.clientId,
+                    db
+                        .select({ id: clientLabels.clientId })
+                        .from(clientLabels)
+                        .innerJoin(
+                            labels,
+                            eq(labels.labelId, clientLabels.labelId)
+                        )
+                        .where(inArray(labels.name, labelFilter))
                 )
             );
+        }
+
+        if (query) {
+            const q = "%" + query.toLowerCase() + "%";
+            const queryList = [
+                like(sql`LOWER(${clients.name})`, q),
+                like(sql`LOWER(${clients.niceId})`, q)
+            ];
+
+            if (isLabelFeatureEnabled) {
+                queryList.push(
+                    inArray(
+                        clients.clientId,
+                        db
+                            .select({ id: clientLabels.clientId })
+                            .from(clientLabels)
+                            .innerJoin(
+                                labels,
+                                eq(labels.labelId, clientLabels.labelId)
+                            )
+                            .where(like(sql`LOWER(${labels.name})`, q))
+                    )
+                );
+            }
+
+            conditions.push(or(...queryList));
         }
 
         const baseQuery = queryClientsBase().where(and(...conditions));
@@ -381,6 +406,30 @@ export async function listClients(
         // Get associated sites for all clients
         const clientIds = clientsList.map((client) => client.clientId);
         const siteAssociations = await getSiteAssociations(clientIds);
+
+        let labelsForClients: Array<{
+            labelId: number;
+            name: string;
+            color: string;
+            clientId: number;
+        }> = [];
+
+        if (isLabelFeatureEnabled && clientIds.length > 0) {
+            labelsForClients = await db
+                .select({
+                    labelId: labels.labelId,
+                    name: labels.name,
+                    color: labels.color,
+                    clientId: clientLabels.clientId
+                })
+                .from(labels)
+                .innerJoin(
+                    clientLabels,
+                    eq(clientLabels.labelId, labels.labelId)
+                )
+                .where(inArray(clientLabels.clientId, clientIds))
+                .orderBy(asc(clientLabels.clientLabelId));
+        }
 
         // Group site associations by client ID
         const sitesByClient = siteAssociations.reduce(
@@ -409,48 +458,52 @@ export async function listClients(
         const clientsWithSites = clientsList.map((client) => {
             return {
                 ...client,
-                sites: sitesByClient[client.clientId] || []
+                sites: sitesByClient[client.clientId] || [],
+                labels: labelsForClients.filter(
+                    (l) => l.clientId === client.clientId
+                )
             };
         });
 
-        const latestOlVersionPromise = getLatestOlmVersion();
+        // REMOVING THIS BECAUSE WE HAVE DIFFERENT TYPES OF CLIENTS NOW
+        // const latestOlmVersionPromise = getLatestOlmVersion();
 
-        const olmsWithUpdates: OlmWithUpdateAvailable[] = clientsWithSites.map(
-            (client) => {
-                const OlmWithUpdate: OlmWithUpdateAvailable = { ...client };
-                // Initially set to false, will be updated if version check succeeds
-                OlmWithUpdate.olmUpdateAvailable = false;
-                return OlmWithUpdate;
-            }
-        );
+        // const olmsWithUpdates: OlmWithUpdateAvailable[] = clientsWithSites.map(
+        //     (client) => {
+        //         const OlmWithUpdate: OlmWithUpdateAvailable = { ...client };
+        //         // Initially set to false, will be updated if version check succeeds
+        //         OlmWithUpdate.olmUpdateAvailable = false;
+        //         return OlmWithUpdate;
+        //     }
+        // );
 
         // Try to get the latest version, but don't block if it fails
-        try {
-            const latestOlVersion = await latestOlVersionPromise;
+        // try {
+        //     const latestOlmVersion = await latestOlVersionPromise;
 
-            if (latestOlVersion) {
-                olmsWithUpdates.forEach((client) => {
-                    try {
-                        client.olmUpdateAvailable = semver.lt(
-                            client.olmVersion ? client.olmVersion : "",
-                            latestOlVersion
-                        );
-                    } catch (error) {
-                        client.olmUpdateAvailable = false;
-                    }
-                });
-            }
-        } catch (error) {
-            // Log the error but don't let it block the response
-            logger.warn(
-                "Failed to check for OLM updates, continuing without update info:",
-                error
-            );
-        }
+        //     if (latestOlVersion) {
+        //         olmsWithUpdates.forEach((client) => {
+        //             try {
+        //                 client.olmUpdateAvailable = semver.lt(
+        //                     client.olmVersion ? client.olmVersion : "",
+        //                     latestOlVersion
+        //                 );
+        //             } catch (error) {
+        //                 client.olmUpdateAvailable = false;
+        //             }
+        //         });
+        //     }
+        // } catch (error) {
+        //     // Log the error but don't let it block the response
+        //     logger.warn(
+        //         "Failed to check for OLM updates, continuing without update info:",
+        //         error
+        //     );
+        // }
 
         return response<ListClientsResponse>(res, {
             data: {
-                clients: olmsWithUpdates,
+                clients: clientsWithSites,
                 pagination: {
                     total: totalCount,
                     page,

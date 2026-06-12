@@ -13,6 +13,7 @@ type DismissableBannerProps = {
     titleIcon: ReactNode;
     description: string;
     children?: ReactNode;
+    dismissable?: boolean;
 };
 
 export const DismissableBanner = ({
@@ -21,7 +22,8 @@ export const DismissableBanner = ({
     title,
     titleIcon,
     description,
-    children
+    children,
+    dismissable = true
 }: DismissableBannerProps) => {
     const [isDismissed, setIsDismissed] = useState(true);
     const t = useTranslations();
@@ -66,19 +68,21 @@ export const DismissableBanner = ({
         );
     };
 
-    if (isDismissed) {
+    if (dismissable && isDismissed) {
         return null;
     }
 
     return (
         <Card className="mb-6 relative border-primary/30 bg-linear-to-br from-primary/10 via-background to-background overflow-hidden">
-            <button
-                onClick={handleDismiss}
-                className="absolute top-3 right-3 z-10 p-1.5 rounded-md hover:bg-background/80 transition-colors cursor-pointer"
-                aria-label={t("dismiss")}
-            >
-                <X className="w-4 h-4 text-muted-foreground" />
-            </button>
+            {dismissable && (
+                <button
+                    onClick={handleDismiss}
+                    className="absolute top-3 right-3 z-10 p-1.5 rounded-md hover:bg-background/80 transition-colors cursor-pointer"
+                    aria-label={t("dismiss")}
+                >
+                    <X className="w-4 h-4 text-muted-foreground" />
+                </button>
+            )}
             <CardContent className="p-6">
                 <div className="flex flex-col lg:flex-row lg:items-center gap-6">
                     <div className="flex-1 space-y-2 min-w-0">

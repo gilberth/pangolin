@@ -4,16 +4,17 @@ import (
 	"crypto/rand"
 	"embed"
 	"encoding/base64"
+	"flag"
 	"fmt"
 	"io"
 	"io/fs"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -53,9 +54,13 @@ type Config struct {
 	InstallGerbil             bool
 	TraefikBouncerKey         string
 	DoCrowdsecInstall         bool
-	EnableGeoblocking         bool
+	EnableMaxMind             bool
 	Secret                    string
 	IsEnterprise              bool
+    IsPostgreSQL              bool
+	IsPostgreSQLPass          string
+    IsRedis                   bool
+	IsRedisPass               string
 }
 
 type SupportedContainer string
@@ -66,7 +71,13 @@ const (
 	Undefined SupportedContainer = "undefined"
 )
 
+var redisFlag *bool
+
 func main() {
+
+	crowdsecFlag := flag.Bool("crowdsec", false, "Enable the CrowdSec installation prompt")
+	redisFlag = flag.Bool("redis", false, "Install Redis as cacheing solution. Required for HA. Not required for the Enterprise version.")
+	flag.Parse()
 
 	// print a banner about prerequisites - opening port 80, 443, 51820, and 21820 on the VPS and firewall and pointing your domain to the VPS IP with a records. Docs are at http://localhost:3000/Getting%20Started/dns-networking
 
@@ -90,6 +101,13 @@ func main() {
 	var config Config
 	var alreadyInstalled = false
 
+	// Determine installation directory
+	installDir := findOrSelectInstallDirectory()
+	if err := os.Chdir(installDir); err != nil {
+		fmt.Printf("Error changing to installation directory: %v\n", err)
+		os.Exit(1)
+	}
+
 	// check if there is already a config file
 	if _, err := os.Stat("config/config.yml"); err != nil {
 		config = collectUserInput()
@@ -112,11 +130,11 @@ func main() {
 
 		fmt.Println("\nConfiguration files created successfully!")
 
-		// Download MaxMind database if requested
-		if config.EnableGeoblocking {
-			fmt.Println("\n=== Downloading MaxMind Database ===")
+		// Download MaxMind Country / ASN database if requested
+		if config.EnableMaxMind {
+			fmt.Println("\n=== Downloading MaxMind Country and ASN Databases ===")
 			if err := downloadMaxMindDatabase(); err != nil {
-				fmt.Printf("Error downloading MaxMind database: %v\n", err)
+				fmt.Printf("Error downloading MaxMind databases: %v\n", err)
 				fmt.Println("You can download it manually later if needed.")
 			}
 		}
@@ -177,15 +195,15 @@ func main() {
 		fmt.Println("\n=== MaxMind Database Update ===")
 		if _, err := os.Stat("config/GeoLite2-Country.mmdb"); err == nil {
 			fmt.Println("MaxMind GeoLite2 Country database found.")
-			if readBool("Would you like to update the MaxMind database to the latest version?", false) {
+			if readBool("Would you like to update the MaxMind databases (Country and ASN) to the latest version?", false) {
 				if err := downloadMaxMindDatabase(); err != nil {
 					fmt.Printf("Error updating MaxMind database: %v\n", err)
 					fmt.Println("You can try updating it manually later if needed.")
 				}
 			}
 		} else {
-			fmt.Println("MaxMind GeoLite2 Country database not found.")
-			if readBool("Would you like to download the MaxMind GeoLite2 database for geoblocking functionality?", false) {
+			fmt.Println("MaxMind GeoLite2 Country and ASN databases not found.")
+			if readBool("Would you like to download the MaxMind GeoLite2 databases for blocking functionality?", false) {
 				if err := downloadMaxMindDatabase(); err != nil {
 					fmt.Printf("Error downloading MaxMind database: %v\n", err)
 					fmt.Println("You can try downloading it manually later if needed.")
@@ -193,13 +211,15 @@ func main() {
 				// Now you need to update your config file accordingly to enable geoblocking
 				fmt.Print("Please remember to update your config/config.yml file to enable geoblocking! \n\n")
 				// add   maxmind_db_path: "./config/GeoLite2-Country.mmdb" under server
-				fmt.Println("Add the following line under the 'server' section:")
+				// add   maxmind_asn_path: "./config/GeoLite2-ASN.mmdb" under server
+				fmt.Println("Add the following lines under the 'server' section:")
 				fmt.Println("  maxmind_db_path: \"./config/GeoLite2-Country.mmdb\"")
+				fmt.Println("  maxmind_asn_path: \"./config/GeoLite2-ASN.mmdb\"")
 			}
 		}
 	}
 
-	if !checkIsCrowdsecInstalledInCompose() {
+	if *crowdsecFlag && !checkIsCrowdsecInstalledInCompose() {
 		fmt.Println("\n=== CrowdSec Install ===")
 		// check if crowdsec is installed
 		if readBool("Would you like to install CrowdSec?", false) {
@@ -252,7 +272,7 @@ func main() {
 				}
 
 				config.DoCrowdsecInstall = true
-				err := installCrowdsec(config)
+				err := installCrowdsec(config, installDir)
 				if err != nil {
 					fmt.Printf("Error installing CrowdSec: %v\n", err)
 					return
@@ -285,6 +305,117 @@ func main() {
 	fmt.Println("\nInstallation complete!")
 
 	fmt.Printf("\nTo complete the initial setup, please visit:\nhttps://%s/auth/initial-setup\n", config.DashboardDomain)
+}
+
+func hasExistingInstall(dir string) bool {
+	configPath := filepath.Join(dir, "config", "config.yml")
+	_, err := os.Stat(configPath)
+	return err == nil
+}
+
+func findOrSelectInstallDirectory() string {
+	const defaultInstallDir = "/opt/pangolin"
+
+	// Get current working directory
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("Error getting current directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 1. Check current directory for existing install
+	if hasExistingInstall(cwd) {
+		fmt.Printf("Found existing Pangolin installation in current directory: %s\n", cwd)
+		return cwd
+	}
+
+	// 2. Check default location (/opt/pangolin) for existing install
+	if cwd != defaultInstallDir && hasExistingInstall(defaultInstallDir) {
+		fmt.Printf("\nFound existing Pangolin installation at: %s\n", defaultInstallDir)
+		if readBool(fmt.Sprintf("Would you like to use the existing installation at %s?", defaultInstallDir), true) {
+			return defaultInstallDir
+		}
+	}
+
+	// 3. No existing install found, prompt for installation directory
+	fmt.Println("\n=== Installation Directory ===")
+	fmt.Println("No existing Pangolin installation detected.")
+
+	installDir := readString("Enter the installation directory", defaultInstallDir)
+
+	// Expand ~ to home directory if present
+	if strings.HasPrefix(installDir, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Printf("Error getting home directory: %v\n", err)
+			os.Exit(1)
+		}
+		installDir = filepath.Join(home, installDir[1:])
+	}
+
+	// Convert to absolute path
+	absPath, err := filepath.Abs(installDir)
+	if err != nil {
+		fmt.Printf("Error resolving path: %v\n", err)
+		os.Exit(1)
+	}
+	installDir = absPath
+
+	// Check if directory exists
+	if _, err := os.Stat(installDir); os.IsNotExist(err) {
+		// Directory doesn't exist, create it
+		if readBool(fmt.Sprintf("Directory %s does not exist. Create it?", installDir), true) {
+			if err := os.MkdirAll(installDir, 0755); err != nil {
+				fmt.Printf("Error creating directory: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Printf("Created directory: %s\n", installDir)
+
+			// Offer to change ownership if running via sudo
+			changeDirectoryOwnership(installDir)
+		} else {
+			fmt.Println("Installation cancelled.")
+			os.Exit(0)
+		}
+	}
+
+	fmt.Printf("Installation directory: %s\n", installDir)
+	return installDir
+}
+
+func changeDirectoryOwnership(dir string) {
+	// Check if we're running via sudo by looking for SUDO_USER
+	sudoUser := os.Getenv("SUDO_USER")
+	if sudoUser == "" || os.Geteuid() != 0 {
+		return
+	}
+
+	sudoUID := os.Getenv("SUDO_UID")
+	sudoGID := os.Getenv("SUDO_GID")
+
+	if sudoUID == "" || sudoGID == "" {
+		return
+	}
+
+	fmt.Printf("\nRunning as root via sudo (original user: %s)\n", sudoUser)
+	if readBool(fmt.Sprintf("Would you like to change ownership of %s to user '%s'? This makes it easier to manage config files without sudo.", dir, sudoUser), true) {
+		uid, err := strconv.Atoi(sudoUID)
+		if err != nil {
+			fmt.Printf("Warning: Could not parse SUDO_UID: %v\n", err)
+			return
+		}
+		gid, err := strconv.Atoi(sudoGID)
+		if err != nil {
+			fmt.Printf("Warning: Could not parse SUDO_GID: %v\n", err)
+			return
+		}
+
+		if err := os.Chown(dir, uid, gid); err != nil {
+			fmt.Printf("Warning: Could not change ownership: %v\n", err)
+		} else {
+			fmt.Printf("Changed ownership of %s to %s\n", dir, sudoUser)
+		}
+	}
 }
 
 func podmanOrDocker() SupportedContainer {
@@ -362,6 +493,17 @@ func collectUserInput() Config {
 	fmt.Println("\n=== Basic Configuration ===")
 
 	config.IsEnterprise = readBoolNoDefault("Do you want to install the Enterprise version of Pangolin? The EE is free for personal use or for businesses making less than 100k USD annually.")
+    if config.IsEnterprise {
+        if *redisFlag {
+			config.IsRedis = true
+            config.IsRedisPass = readPassword("Enter a unique password for the Redis service.")
+        }
+    }
+
+    config.IsPostgreSQL = readBool("Do you want to use PostgreSQL (not recommended for most users)?", false)
+	if config.IsPostgreSQL {
+		config.IsPostgreSQLPass = readPassword("Enter a unique password for the PostgreSQL pangolin user.")
+	}
 
 	config.BaseDomain = readString("Enter your base domain (no subdomain e.g. example.com)", "")
 
@@ -405,7 +547,7 @@ func collectUserInput() Config {
 	fmt.Println("\n=== Advanced Configuration ===")
 
 	config.EnableIPv6 = readBool("Is your server IPv6 capable?", true)
-	config.EnableGeoblocking = readBool("Do you want to download the MaxMind GeoLite2 database for geoblocking functionality?", true)
+	config.EnableMaxMind = readBool("Do you want to download the MaxMind GeoLite2 Country and ASN databases for blocking functionality?", true)
 
 	if config.DashboardDomain == "" {
 		fmt.Println("Error: Dashboard Domain name is required")
@@ -430,9 +572,9 @@ func createConfigFiles(config Config) error {
 	}
 
 	// Walk through all embedded files
-	err := fs.WalkDir(configFiles, "config", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	err := fs.WalkDir(configFiles, "config", func(path string, d fs.DirEntry, walkErr error) (err error) {
+		if walkErr != nil {
+			return walkErr
 		}
 
 		// Skip the root fs directory itself
@@ -483,7 +625,11 @@ func createConfigFiles(config Config) error {
 		if err != nil {
 			return fmt.Errorf("failed to create %s: %v", path, err)
 		}
-		defer outFile.Close()
+		defer func() {
+			if cerr := outFile.Close(); cerr != nil && err == nil {
+				err = cerr
+			}
+		}()
 
 		// Execute template
 		if err := tmpl.Execute(outFile, config); err != nil {
@@ -499,18 +645,26 @@ func createConfigFiles(config Config) error {
 	return nil
 }
 
-func copyFile(src, dst string) error {
+func copyFile(src, dst string) (err error) {
 	source, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	defer source.Close()
+	defer func() {
+		if cerr := source.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	destination, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer destination.Close()
+	defer func() {
+		if cerr := destination.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 
 	_, err = io.Copy(destination, source)
 	return err
@@ -622,32 +776,6 @@ func generateRandomSecretKey() string {
 	return base64.StdEncoding.EncodeToString(secret)
 }
 
-func getPublicIP() string {
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	resp, err := client.Get("https://ifconfig.io/ip")
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ""
-	}
-
-	ip := strings.TrimSpace(string(body))
-
-	// Validate that it's a valid IP address
-	if net.ParseIP(ip) != nil {
-		return ip
-	}
-
-	return ""
-}
-
 // Run external commands with stdio/stderr attached.
 func run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
@@ -672,29 +800,42 @@ func checkPortsAvailable(port int) error {
 }
 
 func downloadMaxMindDatabase() error {
-	fmt.Println("Downloading MaxMind GeoLite2 Country database...")
+	fmt.Println("Downloading MaxMind GeoLite2 Country and ASN databases...")
 
-	// Download the GeoLite2 Country database
+	// Download the GeoLite2 Country databases
 	if err := run("curl", "-L", "-o", "GeoLite2-Country.tar.gz",
 		"https://github.com/GitSquared/node-geolite2-redist/raw/refs/heads/master/redist/GeoLite2-Country.tar.gz"); err != nil {
-		return fmt.Errorf("failed to download GeoLite2 database: %v", err)
+		return fmt.Errorf("failed to download GeoLite2 Country database: %v", err)
+	}
+	if err := run("curl", "-L", "-o", "GeoLite2-ASN.tar.gz",
+		"https://github.com/GitSquared/node-geolite2-redist/raw/refs/heads/master/redist/GeoLite2-ASN.tar.gz"); err != nil {
+		return fmt.Errorf("failed to download GeoLite2 ASN database: %v", err)
 	}
 
-	// Extract the database
+	// Extract the Country database
 	if err := run("tar", "-xzf", "GeoLite2-Country.tar.gz"); err != nil {
-		return fmt.Errorf("failed to extract GeoLite2 database: %v", err)
+		return fmt.Errorf("failed to extract GeoLite2 Country database: %v", err)
+	}
+	if err := run("tar", "-xzf", "GeoLite2-ASN.tar.gz"); err != nil {
+		return fmt.Errorf("failed to extract GeoLite2 ASN database: %v", err)
 	}
 
 	// Find the .mmdb file and move it to the config directory
 	if err := run("bash", "-c", "mv GeoLite2-Country_*/GeoLite2-Country.mmdb config/"); err != nil {
-		return fmt.Errorf("failed to move GeoLite2 database to config directory: %v", err)
+		return fmt.Errorf("failed to move GeoLite2 Country database to config directory: %v", err)
+	}
+	if err := run("bash", "-c", "mv GeoLite2-ASN_*/GeoLite2-ASN.mmdb config/"); err != nil {
+		return fmt.Errorf("failed to move GeoLite2 ASN database to config directory: %v", err)
 	}
 
 	// Clean up the downloaded files
-	if err := run("rm", "-rf", "GeoLite2-Country.tar.gz", "GeoLite2-Country_*"); err != nil {
-		fmt.Printf("Warning: failed to clean up temporary files: %v\n", err)
+	if err := run("sh", "-c", "rm -rf GeoLite2-Country.tar.gz GeoLite2-Country_*"); err != nil {
+		fmt.Printf("Warning: failed to clean up temporary country files: %v\n", err)
+	}
+	if err := run("sh", "-c", "rm -rf GeoLite2-ASN.tar.gz GeoLite2-ASN_*"); err != nil {
+		fmt.Printf("Warning: failed to clean up temporary ASN files: %v\n", err)
 	}
 
-	fmt.Println("MaxMind GeoLite2 Country database downloaded successfully!")
+	fmt.Println("MaxMind GeoLite2 Country and ASN database downloaded successfully!")
 	return nil
 }

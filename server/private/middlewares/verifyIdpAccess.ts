@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -13,9 +13,11 @@
 
 import { Request, Response, NextFunction } from "express";
 import { userOrgs, db, idp, idpOrg } from "@server/db";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import createHttpError from "http-errors";
 import HttpCode from "@server/types/HttpCode";
+import { getUserOrgRoleIds } from "@server/lib/userOrgRoles";
+import { getFirstString } from "@server/lib/requestParams";
 
 export async function verifyIdpAccess(
     req: Request,
@@ -24,8 +26,12 @@ export async function verifyIdpAccess(
 ) {
     try {
         const userId = req.user!.userId;
-        const idpId = req.params.idpId || req.body.idpId || req.query.idpId;
-        const orgId = req.params.orgId;
+        const idpIdRaw =
+            getFirstString(req.params.idpId) ||
+            getFirstString(req.body?.idpId) ||
+            getFirstString(req.query?.idpId);
+        const idpId = Number.parseInt(idpIdRaw ?? "", 10);
+        const orgId = getFirstString(req.params.orgId);
 
         if (!userId) {
             return next(
@@ -39,7 +45,7 @@ export async function verifyIdpAccess(
             );
         }
 
-        if (!idpId) {
+        if (Number.isNaN(idpId)) {
             return next(
                 createHttpError(HttpCode.BAD_REQUEST, "Invalid key ID")
             );
@@ -84,8 +90,10 @@ export async function verifyIdpAccess(
             );
         }
 
-        const userOrgRoleId = req.userOrg.roleId;
-        req.userOrgRoleId = userOrgRoleId;
+        req.userOrgRoleIds = await getUserOrgRoleIds(
+            req.userOrg.userId,
+            idpRes.idpOrg.orgId
+        );
 
         return next();
     } catch (error) {

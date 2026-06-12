@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -96,6 +96,13 @@ export class PrivateConfig {
                 this.rawPrivateConfig.branding?.footer
             );
         }
+
+        process.env.BRANDING_HIDE_POWERED_BY =
+            this.rawPrivateConfig.branding?.hide_powered_by === true ||
+            this.rawPrivateConfig.branding?.resource_auth_page
+                ?.hide_powered_by === true
+                ? "true"
+                : "false";
 
         process.env.LOGIN_PAGE_SUBTITLE_TEXT =
             this.rawPrivateConfig.branding?.login_page?.subtitle_text || "";

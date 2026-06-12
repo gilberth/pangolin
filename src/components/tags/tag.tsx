@@ -57,7 +57,7 @@ export const tagVariants = cva(
             },
             textStyle: {
                 normal: "font-normal",
-                bold: "font-bold",
+                bold: "font-semibold",
                 italic: "italic",
                 underline: "underline",
                 lineThrough: "line-through"

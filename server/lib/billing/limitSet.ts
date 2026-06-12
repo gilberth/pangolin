@@ -25,7 +25,7 @@ export const tier1LimitSet: LimitSet = {
 
 export const tier2LimitSet: LimitSet = {
     [FeatureId.USERS]: {
-        value: 100,
+        value: 50,
         description: "Team limit"
     },
     [FeatureId.SITES]: {
@@ -48,7 +48,7 @@ export const tier2LimitSet: LimitSet = {
 
 export const tier3LimitSet: LimitSet = {
     [FeatureId.USERS]: {
-        value: 500,
+        value: 250,
         description: "Business limit"
     },
     [FeatureId.SITES]: {

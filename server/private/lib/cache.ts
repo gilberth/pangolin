@@ -1,6 +1,19 @@
+/*
+ * This file is part of a proprietary work.
+ *
+ * Copyright (c) 2025-2026 Fossorial, Inc.
+ * All rights reserved.
+ *
+ * This file is licensed under the Fossorial Commercial License.
+ * You may not use this file except in compliance with the License.
+ * Unauthorized use, copying, modification, or distribution is strictly prohibited.
+ *
+ * This file is not licensed under the AGPLv3.
+ */
+
 import NodeCache from "node-cache";
 import logger from "@server/logger";
-import { redisManager } from "@server/private/lib/redis";
+import { redisManager, regionalRedisManager } from "@server/private/lib/redis";
 
 // Create local cache with maxKeys limit to prevent memory leaks
 // With ~10k requests/day and 5min TTL, 10k keys should be more than sufficient
@@ -24,23 +37,31 @@ setInterval(() => {
  */
 class AdaptiveCache {
     private useRedis(): boolean {
-        return redisManager.isRedisEnabled() && redisManager.getHealthStatus().isHealthy;
+        return (
+            redisManager.isRedisEnabled() &&
+            redisManager.getHealthStatus().isHealthy
+        );
     }
 
     /**
      * Set a value in the cache
      * @param key - Cache key
      * @param value - Value to cache (will be JSON stringified for Redis)
-     * @param ttl - Time to live in seconds (0 = no expiration)
+     * @param ttl - Time to live in seconds (0 = no expiration; omit = 3600s for Redis)
      * @returns boolean indicating success
      */
     async set(key: string, value: any, ttl?: number): Promise<boolean> {
         const effectiveTtl = ttl === 0 ? undefined : ttl;
+        const redisTtl = ttl === 0 ? undefined : (ttl ?? 3600);
 
         if (this.useRedis()) {
             try {
                 const serialized = JSON.stringify(value);
-                const success = await redisManager.set(key, serialized, effectiveTtl);
+                const success = await redisManager.set(
+                    key,
+                    serialized,
+                    redisTtl
+                );
 
                 if (success) {
                     logger.debug(`Set key in Redis: ${key}`);
@@ -48,7 +69,9 @@ class AdaptiveCache {
                 }
 
                 // Redis failed, fall through to local cache
-                logger.debug(`Redis set failed for key ${key}, falling back to local cache`);
+                logger.debug(
+                    `Redis set failed for key ${key}, falling back to local cache`
+                );
             } catch (error) {
                 logger.error(`Redis set error for key ${key}:`, error);
                 // Fall through to local cache
@@ -120,9 +143,14 @@ class AdaptiveCache {
                 }
 
                 // Some Redis deletes failed, fall through to local cache
-                logger.debug(`Some Redis deletes failed, falling back to local cache`);
+                logger.debug(
+                    `Some Redis deletes failed, falling back to local cache`
+                );
             } catch (error) {
-                logger.error(`Redis del error for keys ${keys.join(", ")}:`, error);
+                logger.error(
+                    `Redis del error for keys ${keys.join(", ")}:`,
+                    error
+                );
                 // Fall through to local cache
                 deletedCount = 0;
             }
@@ -195,7 +223,9 @@ class AdaptiveCache {
      */
     async flushAll(): Promise<void> {
         if (this.useRedis()) {
-            logger.warn("Adaptive cache flushAll called - Redis flush not implemented, only local cache will be flushed");
+            logger.warn(
+                "Adaptive cache flushAll called - Redis flush not implemented, only local cache will be flushed"
+            );
         }
 
         localCache.flushAll();
@@ -239,7 +269,9 @@ class AdaptiveCache {
     getTtl(key: string): number {
         // Note: This only works for local cache, Redis TTL is not supported
         if (this.useRedis()) {
-            logger.warn(`getTtl called for key ${key} but Redis TTL lookup is not implemented`);
+            logger.warn(
+                `getTtl called for key ${key} but Redis TTL lookup is not implemented`
+            );
         }
 
         const ttl = localCache.getTtl(key);
@@ -255,7 +287,9 @@ class AdaptiveCache {
      */
     keys(): string[] {
         if (this.useRedis()) {
-            logger.warn("keys() called but Redis keys are not included, only local cache keys returned");
+            logger.warn(
+                "keys() called but Redis keys are not included, only local cache keys returned"
+            );
         }
         return localCache.keys();
     }
@@ -264,3 +298,147 @@ class AdaptiveCache {
 // Export singleton instance
 export const cache = new AdaptiveCache();
 export default cache;
+
+/**
+ * Regional adaptive cache backed by the in-cluster Redis instance.
+ * Falls back to a local NodeCache when the regional Redis is unavailable.
+ * Use this for data that is regional in nature (e.g. status history) so
+ * reads are served from the same cluster the user is hitting.
+ */
+const regionalLocalCache = new NodeCache({
+    stdTTL: 3600,
+    checkperiod: 120,
+    maxKeys: 10000
+});
+
+class RegionalAdaptiveCache {
+    private useRedis(): boolean {
+        return (
+            regionalRedisManager.isRedisEnabled() &&
+            regionalRedisManager.getHealthStatus().isHealthy
+        );
+    }
+
+    async set(key: string, value: any, ttl?: number): Promise<boolean> {
+        const effectiveTtl = ttl === 0 ? undefined : ttl;
+        const redisTtl = ttl === 0 ? undefined : (ttl ?? 3600);
+
+        if (this.useRedis()) {
+            try {
+                const serialized = JSON.stringify(value);
+                const success = await regionalRedisManager.set(
+                    key,
+                    serialized,
+                    redisTtl
+                );
+                if (success) {
+                    logger.debug(`[regional] Set key in Redis: ${key}`);
+                    return true;
+                }
+            } catch (error) {
+                logger.error(
+                    `[regional] Redis set error for key ${key}:`,
+                    error
+                );
+            }
+        }
+
+        const success = regionalLocalCache.set(key, value, effectiveTtl || 0);
+        if (success) logger.debug(`[regional] Set key in local cache: ${key}`);
+        return success;
+    }
+
+    async get<T = any>(key: string): Promise<T | undefined> {
+        if (this.useRedis()) {
+            try {
+                const value = await regionalRedisManager.get(key);
+                if (value !== null) {
+                    logger.debug(`[regional] Cache hit in Redis: ${key}`);
+                    return JSON.parse(value) as T;
+                }
+                logger.debug(`[regional] Cache miss in Redis: ${key}`);
+                return undefined;
+            } catch (error) {
+                logger.error(
+                    `[regional] Redis get error for key ${key}:`,
+                    error
+                );
+            }
+        }
+
+        const value = regionalLocalCache.get<T>(key);
+        if (value !== undefined) {
+            logger.debug(`[regional] Cache hit in local cache: ${key}`);
+        } else {
+            logger.debug(`[regional] Cache miss in local cache: ${key}`);
+        }
+        return value;
+    }
+
+    async del(key: string | string[]): Promise<number> {
+        const keys = Array.isArray(key) ? key : [key];
+        let deletedCount = 0;
+
+        if (this.useRedis()) {
+            try {
+                for (const k of keys) {
+                    const success = await regionalRedisManager.del(k);
+                    if (success) {
+                        deletedCount++;
+                        logger.debug(`[regional] Deleted key from Redis: ${k}`);
+                    }
+                }
+                if (deletedCount === keys.length) return deletedCount;
+                deletedCount = 0;
+            } catch (error) {
+                logger.error(`[regional] Redis del error:`, error);
+                deletedCount = 0;
+            }
+        }
+
+        for (const k of keys) {
+            const count = regionalLocalCache.del(k);
+            if (count > 0) {
+                deletedCount++;
+                logger.debug(`[regional] Deleted key from local cache: ${k}`);
+            }
+        }
+        return deletedCount;
+    }
+
+    async has(key: string): Promise<boolean> {
+        if (this.useRedis()) {
+            try {
+                const value = await regionalRedisManager.get(key);
+                return value !== null;
+            } catch (error) {
+                logger.error(
+                    `[regional] Redis has error for key ${key}:`,
+                    error
+                );
+            }
+        }
+        return regionalLocalCache.has(key);
+    }
+
+    /**
+     * Returns keys matching the given prefix from whichever backend is active.
+     * Redis uses a KEYS scan; local cache filters in-memory keys.
+     */
+    async keysWithPrefix(prefix: string): Promise<string[]> {
+        if (this.useRedis()) {
+            try {
+                return await regionalRedisManager.keys(`${prefix}*`);
+            } catch (error) {
+                logger.error(`[regional] Redis keys error:`, error);
+            }
+        }
+        return regionalLocalCache.keys().filter((k) => k.startsWith(prefix));
+    }
+
+    getCurrentBackend(): "redis" | "local" {
+        return this.useRedis() ? "redis" : "local";
+    }
+}
+
+export const regionalCache = new RegionalAdaptiveCache();

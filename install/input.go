@@ -85,33 +85,6 @@ func readString(prompt string, defaultValue string) string {
 	return value
 }
 
-func readStringNoDefault(prompt string) string {
-	var value string
-
-	for {
-		input := huh.NewInput().
-			Title(prompt).
-			Value(&value).
-			Validate(func(s string) error {
-				if s == "" {
-					return fmt.Errorf("this field is required")
-				}
-				return nil
-			})
-
-		err := runField(input)
-		handleAbort(err)
-
-		if value != "" {
-			// Print the answer so it remains visible in terminal history
-			if !isAccessibleMode() {
-				fmt.Printf("%s: %s\n", prompt, value)
-			}
-			return value
-		}
-	}
-}
-
 func readPassword(prompt string) string {
 	var value string
 

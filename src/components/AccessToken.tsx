@@ -143,7 +143,7 @@ export default function AccessToken({ token, resourceId }: AccessTokenProps) {
     ) : (
         <Card className="w-full max-w-md">
             <CardHeader>
-                <CardTitle className="text-center text-2xl font-bold">
+                <CardTitle className="text-center text-2xl font-semibold">
                     {renderTitle()}
                 </CardTitle>
             </CardHeader>

@@ -1,14 +1,10 @@
 "use client";
 
-import Image from "next/image";
-import { Separator } from "@app/components/ui/separator";
+// THIS IS DEPRECATED AND IS NO LONGER SHOWED TO THE USER WITH THE DISCONTINUATION
+// OF THE SUPPORTER PROGRAM. IT MAY BE REMOVED IN A FUTURE UPDATE.
+
 import { useSupporterStatusContext } from "@app/hooks/useSupporterStatusContext";
 import { useState, useTransition } from "react";
-import {
-    Popover,
-    PopoverContent,
-    PopoverTrigger
-} from "@app/components/ui/popover";
 import {
     Tooltip,
     TooltipContent,
@@ -44,7 +40,6 @@ import { useEnvContext } from "@app/hooks/useEnvContext";
 import { AxiosResponse } from "axios";
 import { ValidateSupporterKeyResponse } from "@server/routers/supporterKey";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
     Card,
     CardContent,
@@ -228,9 +223,12 @@ export default function SupporterStatus({
 
                         <div className="my-4 p-4 border border-blue-500/50 bg-blue-500/10 rounded-lg">
                             <p className="text-sm">
-                                <strong>Business & Enterprise Users:</strong> For larger organizations or teams requiring advanced features, consider our self-serve enterprise license and Enterprise Edition.{" "}
+                                <strong>Business & Enterprise Users:</strong>{" "}
+                                For larger organizations or teams requiring
+                                advanced features, consider our self-serve
+                                enterprise license and Enterprise Edition.{" "}
                                 <Link
-                                    href="https://pangolin.net/pricing?hosting=self-host"
+                                    href="https://pangolin.net/pricing#Self-Hosted"
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="underline inline-flex items-center gap-1"

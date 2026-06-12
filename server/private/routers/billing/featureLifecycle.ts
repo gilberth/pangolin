@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -26,9 +26,14 @@ import {
     orgs,
     resources,
     roles,
-    siteResources
+    siteResources,
+    userOrgRoles,
+    siteProvisioningKeyOrg,
+    siteProvisioningKeys,
+    alertRules,
+    targetHealthCheck
 } from "@server/db";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 /**
  * Get the maximum allowed retention days for a given tier
@@ -114,6 +119,18 @@ async function capRetentionDays(
         needsUpdate = true;
         logger.info(
             `Capping action log retention from ${org.settingsLogRetentionDaysAction} to ${maxRetentionDays} days for org ${orgId}`
+        );
+    }
+
+    // Cap action log retention if it exceeds the limit
+    if (
+        org.settingsLogRetentionDaysConnection !== null &&
+        org.settingsLogRetentionDaysConnection > maxRetentionDays
+    ) {
+        updates.settingsLogRetentionDaysConnection = maxRetentionDays;
+        needsUpdate = true;
+        logger.info(
+            `Capping connection log retention from ${org.settingsLogRetentionDaysConnection} to ${maxRetentionDays} days for org ${orgId}`
         );
     }
 
@@ -259,6 +276,10 @@ async function disableFeature(
                 await disableActionLogs(orgId);
                 break;
 
+            case TierFeature.ConnectionLogs:
+                await disableConnectionLogs(orgId);
+                break;
+
             case TierFeature.RotateCredentials:
                 await disableRotateCredentials(orgId);
                 break;
@@ -287,8 +308,24 @@ async function disableFeature(
                 await disableAutoProvisioning(orgId);
                 break;
 
-            case TierFeature.SshPam:
-                await disableSshPam(orgId);
+            case TierFeature.AdvancedPrivateResources:
+                await disableAdvancedPrivateResources(orgId);
+                break;
+
+            case TierFeature.FullRbac:
+                await disableFullRbac(orgId);
+                break;
+
+            case TierFeature.SiteProvisioningKeys:
+                await disableSiteProvisioningKeys(orgId);
+                break;
+
+            case TierFeature.AlertingRules:
+                await disableAlertingRules(orgId);
+                break;
+
+            case TierFeature.StandaloneHealthChecks:
+                await disableStandaloneHealthChecks(orgId);
                 break;
 
             default:
@@ -320,9 +357,64 @@ async function disableDeviceApprovals(orgId: string): Promise<void> {
     logger.info(`Disabled device approvals on all roles for org ${orgId}`);
 }
 
-async function disableSshPam(orgId: string): Promise<void> {
+async function disableAdvancedPrivateResources(orgId: string): Promise<void> {
+    // TODO: implement logic to disable advanced private resourcs like ssh and ssh pam
+    // logger.info(
+    //     `Disabled advanced private resources on all roles and site resources for org ${orgId}`
+    // );
+}
+
+async function disableFullRbac(orgId: string): Promise<void> {
+    logger.info(`Disabled full RBAC for org ${orgId}`);
+}
+
+async function disableSiteProvisioningKeys(orgId: string): Promise<void> {
+    const rows = await db
+        .select({
+            siteProvisioningKeyId: siteProvisioningKeyOrg.siteProvisioningKeyId
+        })
+        .from(siteProvisioningKeyOrg)
+        .where(eq(siteProvisioningKeyOrg.orgId, orgId));
+
+    for (const { siteProvisioningKeyId } of rows) {
+        await db.transaction(async (trx) => {
+            await trx
+                .delete(siteProvisioningKeyOrg)
+                .where(
+                    and(
+                        eq(
+                            siteProvisioningKeyOrg.siteProvisioningKeyId,
+                            siteProvisioningKeyId
+                        ),
+                        eq(siteProvisioningKeyOrg.orgId, orgId)
+                    )
+                );
+
+            const remaining = await trx
+                .select()
+                .from(siteProvisioningKeyOrg)
+                .where(
+                    eq(
+                        siteProvisioningKeyOrg.siteProvisioningKeyId,
+                        siteProvisioningKeyId
+                    )
+                );
+
+            if (remaining.length === 0) {
+                await trx
+                    .delete(siteProvisioningKeys)
+                    .where(
+                        eq(
+                            siteProvisioningKeys.siteProvisioningKeyId,
+                            siteProvisioningKeyId
+                        )
+                    );
+            }
+        });
+    }
+
     logger.info(
-        `Disabled SSH PAM options on all roles and site resources for org ${orgId}`
+        `Removed site provisioning keys for org ${orgId} after tier downgrade`
     );
 }
 
@@ -392,6 +484,15 @@ async function disableActionLogs(orgId: string): Promise<void> {
     logger.info(`Disabled action logs for org ${orgId}`);
 }
 
+async function disableConnectionLogs(orgId: string): Promise<void> {
+    await db
+        .update(orgs)
+        .set({ settingsLogRetentionDaysConnection: 0 })
+        .where(eq(orgs.orgId, orgId));
+
+    logger.info(`Disabled connection logs for org ${orgId}`);
+}
+
 async function disableRotateCredentials(orgId: string): Promise<void> {}
 
 async function disableMaintencePage(orgId: string): Promise<void> {
@@ -432,6 +533,29 @@ async function disablePasswordExpirationPolicies(orgId: string): Promise<void> {
         .where(eq(orgs.orgId, orgId));
 
     logger.info(`Disabled password expiration policies for org ${orgId}`);
+}
+
+async function disableAlertingRules(orgId: string): Promise<void> {
+    await db
+        .update(alertRules)
+        .set({ enabled: false })
+        .where(eq(alertRules.orgId, orgId));
+
+    logger.info(`Disabled all alert rules for org ${orgId}`);
+}
+
+async function disableStandaloneHealthChecks(orgId: string): Promise<void> {
+    await db
+        .update(targetHealthCheck)
+        .set({ hcEnabled: false })
+        .where(
+            and(
+                eq(targetHealthCheck.orgId, orgId),
+                isNull(targetHealthCheck.targetId)
+            )
+        );
+
+    logger.info(`Disabled standalone health checks for org ${orgId}`);
 }
 
 async function disableAutoProvisioning(orgId: string): Promise<void> {

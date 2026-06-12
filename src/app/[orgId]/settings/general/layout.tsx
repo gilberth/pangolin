@@ -11,6 +11,11 @@ import { getCachedOrg } from "@app/lib/api/getCachedOrg";
 import { getCachedOrgUser } from "@app/lib/api/getCachedOrgUser";
 import { build } from "@server/build";
 import { pullEnv } from "@app/lib/pullEnv";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Organization"
+};
 
 type GeneralSettingsProps = {
     children: React.ReactNode;

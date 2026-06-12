@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -39,7 +39,22 @@ const getOrgSchema = z.strictObject({
 //     request: {
 //         params: getOrgSchema
 //     },
-//     responses: {}
+// responses: {
+// 200: {
+// description: "Successful response",
+// content: {
+// "application/json": {
+// schema: z.object({
+// data: z.record(z.string(), z.any()).nullable(),
+// success: z.boolean(),
+// error: z.boolean(),
+// message: z.string(),
+// status: z.number()
+// })
+// }
+// }
+// }
+// }
 // });
 
 export async function getOrgUsage(

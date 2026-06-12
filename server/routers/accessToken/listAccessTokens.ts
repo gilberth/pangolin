@@ -129,7 +129,22 @@ registry.registerPath({
         }),
         query: listAccessTokensSchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 registry.registerPath({
@@ -143,7 +158,22 @@ registry.registerPath({
         }),
         query: listAccessTokensSchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function listAccessTokens(
@@ -208,7 +238,7 @@ export async function listAccessTokens(
                 .where(
                     or(
                         eq(userResources.userId, req.user!.userId),
-                        eq(roleResources.roleId, req.userOrgRoleId!)
+                        inArray(roleResources.roleId, req.userOrgRoleIds!)
                     )
                 );
         } else {

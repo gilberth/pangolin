@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -23,8 +23,10 @@ import { z } from "zod";
 import { fromError } from "zod-validation-error";
 import {
     createRemoteExitNodeSession,
-    validateRemoteExitNodeSessionToken
+    validateRemoteExitNodeSessionToken,
+    EXPIRES
 } from "#private/auth/sessions/remoteExitNode";
+import { getOrCreateCachedToken } from "@server/private/lib/tokenCache";
 import { verifyPassword } from "@server/auth/password";
 import logger from "@server/logger";
 import config from "@server/lib/config";
@@ -103,13 +105,22 @@ export async function getRemoteExitNodeToken(
             );
         }
 
-        const resToken = generateSessionToken();
-        await createRemoteExitNodeSession(
-            resToken,
-            existingRemoteExitNode.remoteExitNodeId
+        // Return a cached token if one exists to prevent thundering herd on
+        // simultaneous restarts; falls back to creating a fresh session when
+        // Redis is unavailable or the cache has expired.
+        const resToken = await getOrCreateCachedToken(
+            `remote_exit_node:token_cache:${existingRemoteExitNode.remoteExitNodeId}`,
+            config.getRawConfig().server.secret!,
+            Math.floor(EXPIRES / 1000),
+            async () => {
+                const token = generateSessionToken();
+                await createRemoteExitNodeSession(
+                    token,
+                    existingRemoteExitNode.remoteExitNodeId
+                );
+                return token;
+            }
         );
-
-        // logger.debug(`Created RemoteExitNode token response: ${JSON.stringify(resToken)}`);
 
         return response<{ token: string }>(res, {
             data: {

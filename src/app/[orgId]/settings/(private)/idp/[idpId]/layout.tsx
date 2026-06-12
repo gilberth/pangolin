@@ -6,6 +6,11 @@ import { authCookieHeader } from "@app/lib/api/cookies";
 import { HorizontalTabs, TabItem } from "@app/components/HorizontalTabs";
 import SettingsSectionTitle from "@app/components/SettingsSectionTitle";
 import { getTranslations } from "next-intl/server";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Identity Provider"
+};
 
 interface SettingsLayoutProps {
     children: React.ReactNode;

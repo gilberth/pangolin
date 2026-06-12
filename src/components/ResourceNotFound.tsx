@@ -15,7 +15,7 @@ export default async function ResourceNotFound() {
     return (
         <Card className="w-full max-w-md">
             <CardHeader>
-                <CardTitle className="text-center text-2xl font-bold">
+                <CardTitle className="text-center text-2xl font-semibold">
                     {t("resourceNotFound")}
                 </CardTitle>
             </CardHeader>

@@ -3,6 +3,11 @@ import { internal } from "@app/lib/api";
 import { authCookieHeader } from "@app/lib/api/cookies";
 import { ListGeneratedLicenseKeysResponse } from "@server/routers/generatedLicense/types";
 import { AxiosResponse } from "axios";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Enterprise Licenses"
+};
 
 type Props = {
     params: Promise<{ orgId: string }>;

@@ -1,7 +1,7 @@
 import { drizzle as DrizzlePostgres } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
 import { readConfigFile } from "@server/lib/readConfigFile";
 import { withReplicas } from "drizzle-orm/pg-core";
+import { createPool } from "./poolConfig";
 
 function createDb() {
     const config = readConfigFile();
@@ -39,12 +39,17 @@ function createDb() {
 
     // Create connection pools instead of individual connections
     const poolConfig = config.postgres.pool;
-    const primaryPool = new Pool({
+    const maxConnections = poolConfig?.max_connections || 20;
+    const idleTimeoutMs = poolConfig?.idle_timeout_ms || 30000;
+    const connectionTimeoutMs = poolConfig?.connection_timeout_ms || 5000;
+
+    const primaryPool = createPool(
         connectionString,
-        max: poolConfig?.max_connections || 20,
-        idleTimeoutMillis: poolConfig?.idle_timeout_ms || 30000,
-        connectionTimeoutMillis: poolConfig?.connection_timeout_ms || 5000
-    });
+        maxConnections,
+        idleTimeoutMs,
+        connectionTimeoutMs,
+        "primary"
+    );
 
     const replicas = [];
 
@@ -55,14 +60,15 @@ function createDb() {
             })
         );
     } else {
+        const maxReplicaConnections = poolConfig?.max_replica_connections || 20;
         for (const conn of replicaConnections) {
-            const replicaPool = new Pool({
-                connectionString: conn.connection_string,
-                max: poolConfig?.max_replica_connections || 20,
-                idleTimeoutMillis: poolConfig?.idle_timeout_ms || 30000,
-                connectionTimeoutMillis:
-                    poolConfig?.connection_timeout_ms || 5000
-            });
+            const replicaPool = createPool(
+                conn.connection_string,
+                maxReplicaConnections,
+                idleTimeoutMs,
+                connectionTimeoutMs,
+                "replica"
+            );
             replicas.push(
                 DrizzlePostgres(replicaPool, {
                     logger: process.env.QUERY_LOGGING == "true"
@@ -81,7 +87,8 @@ function createDb() {
 
 export const db = createDb();
 export default db;
-export const primaryDb = db.$primary;
+export const primaryDb = db.$primary as typeof db; // is this typeof a problem - technically they are different types
 export type Transaction = Parameters<
     Parameters<(typeof db)["transaction"]>[0]
 >[0];
+export const DB_TYPE: "pg" | "sqlite" = "pg";

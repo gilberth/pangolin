@@ -6,7 +6,7 @@ import { fromError } from "zod-validation-error";
 import logger from "@server/logger";
 import { resourceAccessToken, resources, sessions } from "@server/db";
 import { db } from "@server/db";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import {
     createResourceSession,
     serializeResourceSessionCookie,
@@ -65,11 +65,31 @@ export async function exchangeSession(
 
         const clientIp = requestIp ? stripPortFromHost(requestIp) : undefined;
 
-        const [resource] = await db
+        const parts = cleanHost.split(".");
+        const wildcardCandidates: string[] = [];
+        for (let i = 1; i < parts.length; i++) {
+            wildcardCandidates.push(`*.${parts.slice(i).join(".")}`);
+        }
+
+        const potentialResources = await db
             .select()
             .from(resources)
-            .where(eq(resources.fullDomain, cleanHost))
-            .limit(1);
+            .where(
+                or(
+                    eq(resources.fullDomain, cleanHost),
+                    wildcardCandidates.length > 0
+                        ? and(
+                              eq(resources.wildcard, true),
+                              inArray(resources.fullDomain, wildcardCandidates)
+                          )
+                        : sql`false`
+                )
+            );
+
+        const exactMatch = potentialResources.find(
+            (r) => r.fullDomain === cleanHost
+        );
+        const resource = exactMatch ?? potentialResources[0];
 
         if (!resource) {
             return next(
@@ -168,6 +188,9 @@ export async function exchangeSession(
                 userSessionId: requestSession.userSessionId,
                 whitelistId: requestSession.whitelistId,
                 accessTokenId: requestSession.accessTokenId,
+                policyPasswordId: requestSession.policyPasswordId,
+                policyPincodeId: requestSession.policyPincodeId,
+                policyWhitelistId: requestSession.policyWhitelistId,
                 doNotExtend: false,
                 expiresAt: expires,
                 sessionLength: RESOURCE_SESSION_COOKIE_EXPIRES
@@ -178,7 +201,7 @@ export async function exchangeSession(
         const cookieName = `${config.getRawConfig().server.session_cookie_name}`;
         const cookie = serializeResourceSessionCookie(
             cookieName,
-            resource.fullDomain!,
+            cleanHost,
             token,
             !resource.ssl,
             expiresAt ? new Date(expiresAt) : undefined

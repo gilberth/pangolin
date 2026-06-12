@@ -2,7 +2,14 @@ import { PostHog } from "posthog-node";
 import config from "./config";
 import { getHostMeta } from "./hostMeta";
 import logger from "@server/logger";
-import { apiKeys, db, roles, siteResources } from "@server/db";
+import {
+    alertRules,
+    apiKeys,
+    blueprints,
+    db,
+    roles,
+    siteResources
+} from "@server/db";
 import { sites, users, orgs, resources, clients, idp } from "@server/db";
 import { eq, count, notInArray, and, isNotNull, isNull } from "drizzle-orm";
 import { APP_VERSION } from "./consts";
@@ -15,6 +22,7 @@ class TelemetryClient {
     private client: PostHog | null = null;
     private enabled: boolean;
     private intervalId: NodeJS.Timeout | null = null;
+    private collectionIntervalDays = 14;
 
     constructor() {
         const enabled = config.getRawConfig().app.telemetry.anonymous_usage;
@@ -33,7 +41,7 @@ class TelemetryClient {
             this.client = new PostHog(
                 "phc_QYuATSSZt6onzssWcYJbXLzQwnunIpdGGDTYhzK3VjX",
                 {
-                    host: "https://pangolin.net/relay-O7yI"
+                    host: "https://telemetry.fossorial.io/relay-O7yI"
                 }
             );
 
@@ -72,7 +80,7 @@ class TelemetryClient {
                         logger.debug("Successfully sent analytics data");
                     });
             },
-            48 * 60 * 60 * 1000
+            this.collectionIntervalDays * 24 * 60 * 60 * 1000 // Convert days to milliseconds
         );
 
         this.collectAndSendAnalytics().catch((err) => {
@@ -142,8 +150,7 @@ class TelemetryClient {
                 .select({
                     name: resources.name,
                     sso: resources.sso,
-                    protocol: resources.protocol,
-                    http: resources.http
+                    mode: resources.mode
                 })
                 .from(resources);
 
@@ -157,6 +164,14 @@ class TelemetryClient {
                 })
                 .from(sites);
 
+            const [numAlertRules] = await db
+                .select({ count: count() })
+                .from(alertRules);
+
+            const [blueprintsCount] = await db
+                .select({ count: count() })
+                .from(blueprints);
+
             const supporterKey = config.getSupporterData();
 
             const allPrivateResources = await db.select().from(siteResources);
@@ -165,11 +180,17 @@ class TelemetryClient {
             let numPrivResourceAliases = 0;
             let numPrivResourceHosts = 0;
             let numPrivResourceCidr = 0;
+            let numPrivResourceHttp = 0;
+            let numPrivResourceSsh = 0;
             for (const res of allPrivateResources) {
                 if (res.mode === "host") {
                     numPrivResourceHosts += 1;
                 } else if (res.mode === "cidr") {
                     numPrivResourceCidr += 1;
+                } else if (res.mode === "http") {
+                    numPrivResourceHttp += 1;
+                } else if (res.mode === "ssh") {
+                    numPrivResourceSsh += 1;
                 }
 
                 if (res.alias) {
@@ -187,6 +208,10 @@ class TelemetryClient {
                 numPrivateResources: numPrivResources,
                 numPrivateResourceAliases: numPrivResourceAliases,
                 numPrivateResourceHosts: numPrivResourceHosts,
+                numPrivateResourceCidr: numPrivResourceCidr,
+                numPrivateResourceHttp: numPrivResourceHttp,
+                numPrivateResourceSsh: numPrivResourceSsh,
+                numAlertRules: numAlertRules.count,
                 numUserDevices: userDevicesCount.count,
                 numMachineClients: machineClients.count,
                 numIdentityProviders: idpCount.count,
@@ -197,6 +222,7 @@ class TelemetryClient {
                 appVersion: APP_VERSION,
                 numApiKeys: numApiKeys.count,
                 numCustomRoles: customRoles.count,
+                numBlueprints: blueprintsCount.count,
                 supporterStatus: {
                     valid: supporterKey?.valid || false,
                     tier: supporterKey?.tier || "None",
@@ -285,15 +311,17 @@ class TelemetryClient {
                     num_private_resource_aliases:
                         stats.numPrivateResourceAliases,
                     num_private_resource_hosts: stats.numPrivateResourceHosts,
+                    num_private_resource_cidr: stats.numPrivateResourceCidr,
                     num_user_devices: stats.numUserDevices,
                     num_machine_clients: stats.numMachineClients,
                     num_identity_providers: stats.numIdentityProviders,
                     num_sites_online: stats.numSitesOnline,
+                    num_blueprint_runs: stats.numBlueprints,
                     num_resources_sso_enabled: stats.resources.filter(
                         (r) => r.sso
                     ).length,
                     num_resources_non_http: stats.resources.filter(
-                        (r) => !r.http
+                        (r) => r.mode !== "http"
                     ).length,
                     num_newt_sites: stats.sites.filter((s) => s.type === "newt")
                         .length,

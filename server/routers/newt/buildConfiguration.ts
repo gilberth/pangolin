@@ -4,20 +4,23 @@ import {
     clientSitesAssociationsCache,
     db,
     ExitNode,
+    networks,
     resources,
     Site,
+    siteNetworks,
     siteResources,
     targetHealthCheck,
     targets
 } from "@server/db";
 import logger from "@server/logger";
 import { initPeerAddHandshake, updatePeer } from "../olm/peers";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import config from "@server/lib/config";
+import { decrypt } from "@server/lib/crypto";
 import {
     formatEndpoint,
-    generateSubnetProxyTargets,
-    SubnetProxyTarget
+    generateSubnetProxyTargetV2,
+    SubnetProxyTargetV2
 } from "@server/lib/ip";
 
 export async function buildClientConfigurationForNewtClient(
@@ -84,7 +87,8 @@ export async function buildClientConfigurationForNewtClient(
                     //         )
                     //     );
 
-                    if (!client.clientSitesAssociationsCache.isJitMode) { // if we are adding sites through jit then dont add the site to the olm
+                    if (!client.clientSitesAssociationsCache.isJitMode) {
+                        // if we are adding sites through jit then dont add the site to the olm
                         // update the peer info on the olm
                         // if the peer has not been added yet this will be a no-op
                         await updatePeer(client.clients.clientId, {
@@ -137,43 +141,78 @@ export async function buildClientConfigurationForNewtClient(
     // Filter out any null values from peers that didn't have an olm
     const validPeers = peers.filter((peer) => peer !== null);
 
-    // Get all enabled site resources for this site
+    // Get all enabled site resources for this site by joining through siteNetworks and networks
     const allSiteResources = await db
         .select()
         .from(siteResources)
-        .where(eq(siteResources.siteId, siteId));
+        .innerJoin(networks, eq(siteResources.networkId, networks.networkId))
+        .innerJoin(siteNetworks, eq(networks.networkId, siteNetworks.networkId))
+        .where(eq(siteNetworks.siteId, siteId))
+        .then((rows) => rows.map((r) => r.siteResources));
 
-    const targetsToSend: SubnetProxyTarget[] = [];
+    const targetsToSend: SubnetProxyTargetV2[] = [];
 
-    for (const resource of allSiteResources) {
-        // Get clients associated with this specific resource
-        const resourceClients = await db
-            .select({
-                clientId: clients.clientId,
-                pubKey: clients.pubKey,
-                subnet: clients.subnet
-            })
-            .from(clients)
-            .innerJoin(
-                clientSiteResourcesAssociationsCache,
-                eq(
-                    clients.clientId,
-                    clientSiteResourcesAssociationsCache.clientId
-                )
+    if (allSiteResources.length === 0) {
+        return {
+            peers: validPeers,
+            targets: targetsToSend
+        };
+    }
+
+    // Batch fetch all client associations for every site resource in one query
+    // to avoid an N+1 lookup that would issue thousands of queries when a site
+    // has many resources.
+    const siteResourceIds = allSiteResources.map((r) => r.siteResourceId);
+
+    const resourceClientRows = await db
+        .select({
+            siteResourceId: clientSiteResourcesAssociationsCache.siteResourceId,
+            clientId: clients.clientId,
+            pubKey: clients.pubKey,
+            subnet: clients.subnet
+        })
+        .from(clients)
+        .innerJoin(
+            clientSiteResourcesAssociationsCache,
+            eq(clients.clientId, clientSiteResourcesAssociationsCache.clientId)
+        )
+        .where(
+            inArray(
+                clientSiteResourcesAssociationsCache.siteResourceId,
+                siteResourceIds
             )
-            .where(
-                eq(
-                    clientSiteResourcesAssociationsCache.siteResourceId,
-                    resource.siteResourceId
-                )
-            );
-
-        const resourceTargets = generateSubnetProxyTargets(
-            resource,
-            resourceClients
         );
 
-        targetsToSend.push(...resourceTargets);
+    const clientsByResourceId = new Map<
+        number,
+        { clientId: number; pubKey: string | null; subnet: string | null }[]
+    >();
+    for (const row of resourceClientRows) {
+        let list = clientsByResourceId.get(row.siteResourceId);
+        if (!list) {
+            list = [];
+            clientsByResourceId.set(row.siteResourceId, list);
+        }
+        list.push({
+            clientId: row.clientId,
+            pubKey: row.pubKey,
+            subnet: row.subnet
+        });
+    }
+
+    const resourceTargetsArr = await Promise.all(
+        allSiteResources.map((resource) =>
+            generateSubnetProxyTargetV2(
+                resource,
+                clientsByResourceId.get(resource.siteResourceId) ?? []
+            )
+        )
+    );
+
+    for (const resourceTargets of resourceTargetsArr) {
+        if (resourceTargets) {
+            targetsToSend.push(...resourceTargets);
+        }
     }
 
     return {
@@ -182,8 +221,11 @@ export async function buildClientConfigurationForNewtClient(
     };
 }
 
-export async function buildTargetConfigurationForNewtClient(siteId: number) {
-    // Get all enabled targets with their resource protocol information
+export async function buildTargetConfigurationForNewtClient(
+    siteId: number,
+    version?: string | null
+) {
+    // Get all enabled targets with their resource mode information
     const allTargets = await db
         .select({
             resourceId: targets.resourceId,
@@ -193,7 +235,21 @@ export async function buildTargetConfigurationForNewtClient(siteId: number) {
             port: targets.port,
             internalPort: targets.internalPort,
             enabled: targets.enabled,
-            protocol: resources.protocol,
+            mode: resources.mode
+        })
+        .from(targets)
+        .innerJoin(resources, eq(targets.resourceId, resources.resourceId))
+        .where(
+            and(
+                eq(targets.siteId, siteId),
+                eq(targets.enabled, true),
+                inArray(targets.mode, ["http", "udp", "tcp"])
+            )
+        );
+
+    const allHealthChecks = await db
+        .select({
+            targetHealthCheckId: targetHealthCheck.targetHealthCheckId,
             hcEnabled: targetHealthCheck.hcEnabled,
             hcPath: targetHealthCheck.hcPath,
             hcScheme: targetHealthCheck.hcScheme,
@@ -204,17 +260,37 @@ export async function buildTargetConfigurationForNewtClient(siteId: number) {
             hcUnhealthyInterval: targetHealthCheck.hcUnhealthyInterval,
             hcTimeout: targetHealthCheck.hcTimeout,
             hcHeaders: targetHealthCheck.hcHeaders,
+            hcFollowRedirects: targetHealthCheck.hcFollowRedirects,
             hcMethod: targetHealthCheck.hcMethod,
             hcTlsServerName: targetHealthCheck.hcTlsServerName,
-            hcStatus: targetHealthCheck.hcStatus
+            hcStatus: targetHealthCheck.hcStatus,
+            hcHealthyThreshold: targetHealthCheck.hcHealthyThreshold,
+            hcUnhealthyThreshold: targetHealthCheck.hcUnhealthyThreshold
+        })
+        .from(targetHealthCheck)
+        .where(eq(targetHealthCheck.siteId, siteId));
+
+    // Get all enabled targets with their resource mode information
+    const allBrowserGatewayTargets = await db
+        .select({
+            resourceId: targets.resourceId,
+            targetId: targets.targetId,
+            ip: targets.ip,
+            method: targets.method,
+            port: targets.port,
+            enabled: targets.enabled,
+            mode: resources.mode,
+            authToken: targets.authToken
         })
         .from(targets)
         .innerJoin(resources, eq(targets.resourceId, resources.resourceId))
-        .leftJoin(
-            targetHealthCheck,
-            eq(targets.targetId, targetHealthCheck.targetId)
-        )
-        .where(and(eq(targets.siteId, siteId), eq(targets.enabled, true)));
+        .where(
+            and(
+                eq(targets.siteId, siteId),
+                eq(targets.enabled, true),
+                inArray(targets.mode, ["ssh", "rdp", "vnc"])
+            )
+        );
 
     const { tcpTargets, udpTargets } = allTargets.reduce(
         (acc, target) => {
@@ -227,10 +303,11 @@ export async function buildTargetConfigurationForNewtClient(siteId: number) {
             const formattedTarget = `${target.internalPort}:${formatEndpoint(target.ip, target.port)}`;
 
             // Add to the appropriate protocol array
-            if (target.protocol === "tcp") {
-                acc.tcpTargets.push(formattedTarget);
-            } else {
+            if (target.mode === "udp") {
                 acc.udpTargets.push(formattedTarget);
+            } else {
+                // all other modes are tcp
+                acc.tcpTargets.push(formattedTarget);
             }
 
             return acc;
@@ -238,19 +315,14 @@ export async function buildTargetConfigurationForNewtClient(siteId: number) {
         { tcpTargets: [] as string[], udpTargets: [] as string[] }
     );
 
-    const healthCheckTargets = allTargets.map((target) => {
+    const healthCheckTargets = allHealthChecks.map((target) => {
         // make sure the stuff is defined
-        if (
-            !target.hcPath ||
-            !target.hcHostname ||
-            !target.hcPort ||
-            !target.hcInterval ||
-            !target.hcMethod
-        ) {
-            // logger.debug(
-            //     `Skipping adding target health check ${target.targetId} due to missing health check fields`
-            // );
-            return null; // Skip targets with missing health check fields
+        const isTCP = target.hcMode?.toLowerCase() === "tcp";
+        if (!target.hcHostname || !target.hcPort || !target.hcInterval) {
+            return null;
+        }
+        if (!isTCP && (!target.hcPath || !target.hcMethod)) {
+            return null;
         }
 
         // parse headers
@@ -267,7 +339,7 @@ export async function buildTargetConfigurationForNewtClient(siteId: number) {
         }
 
         return {
-            id: target.targetId,
+            id: target.targetHealthCheckId,
             hcEnabled: target.hcEnabled,
             hcPath: target.hcPath,
             hcScheme: target.hcScheme,
@@ -278,9 +350,12 @@ export async function buildTargetConfigurationForNewtClient(siteId: number) {
             hcUnhealthyInterval: target.hcUnhealthyInterval, // in seconds
             hcTimeout: target.hcTimeout, // in seconds
             hcHeaders: hcHeadersSend,
+            hcFollowRedirects: target.hcFollowRedirects,
             hcMethod: target.hcMethod,
             hcTlsServerName: target.hcTlsServerName,
-            hcStatus: target.hcStatus
+            hcStatus: target.hcStatus,
+            hcHealthyThreshold: target.hcHealthyThreshold,
+            hcUnhealthyThreshold: target.hcUnhealthyThreshold
         };
     });
 
@@ -289,9 +364,25 @@ export async function buildTargetConfigurationForNewtClient(siteId: number) {
         (target) => target !== null
     );
 
+    const serverSecret = config.getRawConfig().server.secret!;
+    const browserGatewayTargets = allBrowserGatewayTargets.map((t) => {
+        if (!t.ip || !t.port || !t.authToken) {
+            return null;
+        }
+        const decryptAuthToken = decrypt(t.authToken, serverSecret);
+        return {
+            id: t.targetId,
+            type: t.mode,
+            destination: t.ip,
+            destinationPort: t.port,
+            authToken: decryptAuthToken
+        };
+    });
+
     return {
         validHealthCheckTargets,
         tcpTargets,
-        udpTargets
+        udpTargets,
+        browserGatewayTargets
     };
 }

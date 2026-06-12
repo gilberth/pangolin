@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -174,6 +174,19 @@ export async function handleSubscriptionCreated(
                     // TODO: update user in Sendy
                 }
             }
+
+            // delete the trial subscrition if we have one
+            await db
+                .delete(subscriptions)
+                .where(
+                    and(
+                        eq(
+                            subscriptions.customerId,
+                            subscription.customer as string
+                        ),
+                        eq(subscriptions.trial, true)
+                    )
+                );
         } else if (type === "license") {
             logger.debug(
                 `License subscription created for org ${customer.orgId}, no lifecycle handling needed.`
@@ -217,7 +230,7 @@ export async function handleSubscriptionCreated(
                     subscriptionPriceId === priceSet[LicenseId.BIG_LICENSE]
                 ) {
                     numUsers = 50;
-                    numSites = 50;
+                    numSites = 100;
                 } else {
                     logger.error(
                         `Unknown price ID ${subscriptionPriceId} for subscription ${subscription.id}`

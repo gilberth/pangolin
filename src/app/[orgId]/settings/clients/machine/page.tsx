@@ -8,6 +8,11 @@ import { ListClientsResponse } from "@server/routers/client";
 import { AxiosResponse } from "axios";
 import { getTranslations } from "next-intl/server";
 import type { Pagination } from "@server/types/Pagination";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Machine Clients"
+};
 
 type ClientsPageProps = {
     params: Promise<{ orgId: string }>;
@@ -71,7 +76,8 @@ export default async function ClientsPage(props: ClientsPageProps) {
             agent: client.agent,
             archived: client.archived || false,
             blocked: client.blocked || false,
-            approvalState: client.approvalState ?? "approved"
+            approvalState: client.approvalState ?? "approved",
+            labels: client.labels ?? []
         };
     };
 

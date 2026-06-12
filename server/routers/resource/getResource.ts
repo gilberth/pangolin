@@ -1,15 +1,14 @@
-import { Request, Response, NextFunction } from "express";
-import { z } from "zod";
-import { db } from "@server/db";
-import { Resource, resources, sites } from "@server/db";
-import { eq, and } from "drizzle-orm";
+import { db, resourcePolicies, resources } from "@server/db";
 import response from "@server/lib/response";
-import HttpCode from "@server/types/HttpCode";
-import createHttpError from "http-errors";
-import { fromError } from "zod-validation-error";
-import logger from "@server/logger";
 import stoi from "@server/lib/stoi";
+import logger from "@server/logger";
 import { OpenAPITags, registry } from "@server/openApi";
+import HttpCode from "@server/types/HttpCode";
+import { and, eq } from "drizzle-orm";
+import { NextFunction, Request, Response } from "express";
+import createHttpError from "http-errors";
+import { z } from "zod";
+import { fromError } from "zod-validation-error";
 
 const getResourceSchema = z.strictObject({
     resourceId: z
@@ -42,6 +41,15 @@ async function query(resourceId?: number, niceId?: string, orgId?: string) {
     }
 }
 
+async function queryInlinePolicy(resourcePolicyId: number) {
+    const [res] = await db
+        .select()
+        .from(resourcePolicies)
+        .where(eq(resourcePolicies.resourcePolicyId, resourcePolicyId))
+        .limit(1);
+    return res;
+}
+
 export type GetResourceResponse = Omit<
     NonNullable<Awaited<ReturnType<typeof query>>>,
     "headers"
@@ -61,7 +69,22 @@ registry.registerPath({
             niceId: z.string()
         })
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 registry.registerPath({
@@ -74,7 +97,22 @@ registry.registerPath({
             resourceId: z.number()
         })
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function getResource(
@@ -103,12 +141,31 @@ export async function getResource(
             );
         }
 
+        const isInlinePolicy =
+            resource.resourcePolicyId === null &&
+            resource.defaultResourcePolicyId !== null;
+
+        let returnData = resource;
+        if (isInlinePolicy) {
+            // get the policy
+            const policy = await queryInlinePolicy(
+                resource.defaultResourcePolicyId!
+            );
+            returnData = {
+                ...returnData,
+                sso: policy?.sso || null,
+                emailWhitelistEnabled: policy?.emailWhitelistEnabled || null,
+                applyRules: policy?.applyRules || null,
+                skipToIdpId: policy?.idpId || null
+            };
+        }
+
         return response<GetResourceResponse>(res, {
             data: {
-                ...resource,
-                headers: resource.headers
-                    ? JSON.parse(resource.headers)
-                    : resource.headers
+                ...returnData,
+                headers: returnData.headers
+                    ? JSON.parse(returnData.headers)
+                    : returnData.headers
             },
             success: true,
             error: false,

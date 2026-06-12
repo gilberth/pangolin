@@ -8,6 +8,7 @@ type UserDisplayNameInput =
           email?: string | null;
           name?: string | null;
           username?: string | null;
+          idpName?: string | null;
       };
 
 /**
@@ -21,16 +22,25 @@ export function getUserDisplayName(input: UserDisplayNameInput): string {
     let email: string | null | undefined;
     let name: string | null | undefined;
     let username: string | null | undefined;
+    let idpName: string | null | undefined;
 
     if ("user" in input) {
         email = input.user.email;
         name = input.user.name;
         username = input.user.username;
+        idpName = input.user.idpName;
     } else {
         email = input.email;
         name = input.name;
         username = input.username;
+        idpName = input.idpName;
     }
 
-    return email || name || username || "";
+    let nameShown = email || name || username || "";
+
+    if (idpName) {
+        nameShown = `${nameShown} (${idpName})`;
+    }
+
+    return nameShown;
 }

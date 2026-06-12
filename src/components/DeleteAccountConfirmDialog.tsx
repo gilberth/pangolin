@@ -252,7 +252,7 @@ export default function DeleteAccountConfirmDialog({
                                                 </>
                                             )}
                                         </div>
-                                        <p className="text-sm font-bold text-destructive">
+                                        <p className="text-sm font-semibold text-destructive">
                                             {t("cannotbeUndone")}
                                         </p>
                                     </>

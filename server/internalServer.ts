@@ -36,7 +36,7 @@ export function createInternalServer() {
     internalServer.listen(internalPort, (err?: any) => {
         if (err) throw err;
         logger.info(
-            `Internal server is running on http://localhost:${internalPort}`
+            `Internal API server is running on http://localhost:${internalPort}`
         );
     });
 

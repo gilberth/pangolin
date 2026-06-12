@@ -1,19 +1,31 @@
 "use client";
 
-import { ColumnDef } from "@tanstack/react-table";
-import { ExtendedColumnDef } from "@app/components/ui/data-table";
-import { UsersDataTable } from "@app/components/AdminUsersDataTable";
-import { Button } from "@app/components/ui/button";
-import { ArrowRight, ArrowUpDown, MoreHorizontal } from "lucide-react";
-import { useRouter } from "next/navigation";
-import { useState, useEffect } from "react";
 import ConfirmDeleteDialog from "@app/components/ConfirmDeleteDialog";
-import { toast } from "@app/hooks/useToast";
-import { formatAxiosError } from "@app/lib/api";
-import { createApiClient } from "@app/lib/api";
-import { getUserDisplayName } from "@app/lib/getUserDisplayName";
+import { ColumnFilterButton } from "@app/components/ColumnFilterButton";
+import { Button } from "@app/components/ui/button";
+import {
+    ControlledDataTable,
+    type ExtendedColumnDef
+} from "@app/components/ui/controlled-data-table";
 import { useEnvContext } from "@app/hooks/useEnvContext";
+import { useNavigationContext } from "@app/hooks/useNavigationContext";
+import { toast } from "@app/hooks/useToast";
+import { createApiClient, formatAxiosError } from "@app/lib/api";
+import { getUserDisplayName } from "@app/lib/getUserDisplayName";
+import { getNextSortOrder, getSortDirection } from "@app/lib/sortColumn";
+import { type PaginationState } from "@tanstack/react-table";
+import {
+    ArrowDown01Icon,
+    ArrowRight,
+    ArrowUp10Icon,
+    ChevronsUpDownIcon,
+    MoreHorizontal
+} from "lucide-react";
 import { useTranslations } from "next-intl";
+import { useRouter } from "next/navigation";
+import { useState, useTransition } from "react";
+import { useDebouncedCallback } from "use-debounce";
+import z from "zod";
 import {
     DropdownMenu,
     DropdownMenuItem,
@@ -31,7 +43,6 @@ import {
     CredenzaClose
 } from "@app/components/Credenza";
 import CopyToClipboard from "@app/components/CopyToClipboard";
-import { AxiosResponse } from "axios";
 
 export type GlobalUserRow = {
     id: string;
@@ -44,10 +55,16 @@ export type GlobalUserRow = {
     dateCreated: string;
     twoFactorEnabled: boolean | null;
     twoFactorSetupRequested: boolean | null;
+    serverAdmin?: boolean;
 };
+
+type FilterOption = { value: string; label: string };
 
 type Props = {
     users: GlobalUserRow[];
+    pagination: PaginationState;
+    rowCount: number;
+    idpFilterOptions: FilterOption[];
 };
 
 type AdminGeneratePasswordResetCodeResponse = {
@@ -56,74 +73,103 @@ type AdminGeneratePasswordResetCodeResponse = {
     url: string;
 };
 
-export default function UsersTable({ users }: Props) {
+export default function UsersTable({
+    users,
+    pagination,
+    rowCount,
+    idpFilterOptions
+}: Props) {
     const router = useRouter();
     const t = useTranslations();
+    const api = createApiClient(useEnvContext());
 
     const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
     const [selected, setSelected] = useState<GlobalUserRow | null>(null);
-    const [rows, setRows] = useState<GlobalUserRow[]>(users);
-
-    const api = createApiClient(useEnvContext());
-
-    const [isRefreshing, setIsRefreshing] = useState(false);
     const [isPasswordResetCodeDialogOpen, setIsPasswordResetCodeDialogOpen] =
         useState(false);
     const [passwordResetCodeData, setPasswordResetCodeData] =
         useState<AdminGeneratePasswordResetCodeResponse | null>(null);
     const [isGeneratingCode, setIsGeneratingCode] = useState(false);
 
-    // Update local state when props change (e.g., after refresh)
-    useEffect(() => {
-        setRows(users);
-    }, [users]);
+    const [isRefreshing, startTransition] = useTransition();
+    const {
+        navigate: filter,
+        isNavigating: isFiltering,
+        searchParams,
+        pathname
+    } = useNavigationContext();
+
+    const idpIdParamSchema = z
+        .union([z.literal("internal"), z.string().regex(/^\d+$/)])
+        .optional()
+        .catch(undefined);
+
+    const twoFactorFilterSchema = z
+        .enum(["true", "false"])
+        .optional()
+        .catch(undefined);
+
+    function handleFilterChange(
+        column: string,
+        value: string | undefined | null
+    ) {
+        const sp = new URLSearchParams(searchParams);
+        sp.delete(column);
+        sp.delete("page");
+
+        if (value) {
+            sp.set(column, value);
+        }
+        startTransition(() => router.push(`${pathname}?${sp.toString()}`));
+    }
 
     const refreshData = async () => {
-        console.log("Data refreshed");
-        setIsRefreshing(true);
-        try {
-            await new Promise((resolve) => setTimeout(resolve, 200));
-            router.refresh();
-        } catch (error) {
-            toast({
-                title: t("error"),
-                description: t("refreshError"),
-                variant: "destructive"
-            });
-        } finally {
-            setIsRefreshing(false);
-        }
+        startTransition(async () => {
+            try {
+                await new Promise((resolve) => setTimeout(resolve, 200));
+                router.refresh();
+            } catch (error) {
+                toast({
+                    title: t("error"),
+                    description: t("refreshError"),
+                    variant: "destructive"
+                });
+            }
+        });
     };
 
     const deleteUser = (id: string) => {
-        api.delete(`/user/${id}`)
-            .catch((e) => {
-                console.error(t("userErrorDelete"), e);
-                toast({
-                    variant: "destructive",
-                    title: t("userErrorDelete"),
-                    description: formatAxiosError(e, t("userErrorDelete"))
+        startTransition(() => {
+            void api
+                .delete(`/user/${id}`)
+                .catch((e) => {
+                    console.error(t("userErrorDelete"), e);
+                    toast({
+                        variant: "destructive",
+                        title: t("userErrorDelete"),
+                        description: formatAxiosError(e, t("userErrorDelete"))
+                    });
+                })
+                .then(() => {
+                    router.refresh();
+                    setIsDeleteModalOpen(false);
+                    setSelected(null);
                 });
-            })
-            .then(() => {
-                router.refresh();
-                setIsDeleteModalOpen(false);
-
-                const newRows = rows.filter((row) => row.id !== id);
-
-                setRows(newRows);
-            });
+        });
     };
 
     const generatePasswordResetCode = async (userId: string) => {
         setIsGeneratingCode(true);
         try {
-            const res = await api.post<
-                AxiosResponse<AdminGeneratePasswordResetCodeResponse>
-            >(`/user/${userId}/generate-password-reset-code`);
+            const res = await api.post(
+                `/user/${userId}/generate-password-reset-code`
+            );
 
-            if (res.data?.data) {
-                setPasswordResetCodeData(res.data.data);
+            const envelope = res.data as {
+                data?: AdminGeneratePasswordResetCodeResponse;
+            };
+            if (envelope?.data) {
+                setPasswordResetCodeData(envelope.data);
                 setIsPasswordResetCodeDialogOpen(true);
             }
         } catch (e) {
@@ -138,37 +184,55 @@ export default function UsersTable({ users }: Props) {
         }
     };
 
+    function toggleSort(column: string) {
+        const newSearch = getNextSortOrder(column, searchParams);
+        filter({
+            searchParams: newSearch
+        });
+    }
+
+    const handlePaginationChange = (newPage: PaginationState) => {
+        searchParams.set("page", (newPage.pageIndex + 1).toString());
+        searchParams.set("pageSize", newPage.pageSize.toString());
+        filter({
+            searchParams
+        });
+    };
+
+    const handleSearchChange = useDebouncedCallback((query: string) => {
+        searchParams.set("query", query);
+        searchParams.delete("page");
+        filter({
+            searchParams
+        });
+    }, 300);
+
     const columns: ExtendedColumnDef<GlobalUserRow>[] = [
         {
             accessorKey: "id",
             friendlyName: "ID",
-            header: ({ column }) => {
-                return (
-                    <Button
-                        variant="ghost"
-                        onClick={() =>
-                            column.toggleSorting(column.getIsSorted() === "asc")
-                        }
-                    >
-                        ID
-                    </Button>
-                );
-            }
+            header: () => <span className="p-3">ID</span>
         },
         {
             accessorKey: "username",
             enableHiding: false,
             friendlyName: t("username"),
-            header: ({ column }) => {
+            header: () => {
+                const sortOrder = getSortDirection("username", searchParams);
+                const Icon =
+                    sortOrder === "asc"
+                        ? ArrowDown01Icon
+                        : sortOrder === "desc"
+                          ? ArrowUp10Icon
+                          : ChevronsUpDownIcon;
                 return (
                     <Button
                         variant="ghost"
-                        onClick={() =>
-                            column.toggleSorting(column.getIsSorted() === "asc")
-                        }
+                        className="p-3"
+                        onClick={() => toggleSort("username")}
                     >
                         {t("username")}
-                        <ArrowUpDown className="ml-2 h-4 w-4" />
+                        <Icon className="ml-2 h-4 w-4" />
                     </Button>
                 );
             }
@@ -176,16 +240,22 @@ export default function UsersTable({ users }: Props) {
         {
             accessorKey: "email",
             friendlyName: t("email"),
-            header: ({ column }) => {
+            header: () => {
+                const sortOrder = getSortDirection("email", searchParams);
+                const Icon =
+                    sortOrder === "asc"
+                        ? ArrowDown01Icon
+                        : sortOrder === "desc"
+                          ? ArrowUp10Icon
+                          : ChevronsUpDownIcon;
                 return (
                     <Button
                         variant="ghost"
-                        onClick={() =>
-                            column.toggleSorting(column.getIsSorted() === "asc")
-                        }
+                        className="p-3"
+                        onClick={() => toggleSort("email")}
                     >
                         {t("email")}
-                        <ArrowUpDown className="ml-2 h-4 w-4" />
+                        <Icon className="ml-2 h-4 w-4" />
                     </Button>
                 );
             }
@@ -193,16 +263,22 @@ export default function UsersTable({ users }: Props) {
         {
             accessorKey: "name",
             friendlyName: t("name"),
-            header: ({ column }) => {
+            header: () => {
+                const sortOrder = getSortDirection("name", searchParams);
+                const Icon =
+                    sortOrder === "asc"
+                        ? ArrowDown01Icon
+                        : sortOrder === "desc"
+                          ? ArrowUp10Icon
+                          : ChevronsUpDownIcon;
                 return (
                     <Button
                         variant="ghost"
-                        onClick={() =>
-                            column.toggleSorting(column.getIsSorted() === "asc")
-                        }
+                        className="p-3"
+                        onClick={() => toggleSort("name")}
                     >
                         {t("name")}
-                        <ArrowUpDown className="ml-2 h-4 w-4" />
+                        <Icon className="ml-2 h-4 w-4" />
                     </Button>
                 );
             }
@@ -210,39 +286,45 @@ export default function UsersTable({ users }: Props) {
         {
             accessorKey: "idpName",
             friendlyName: t("identityProvider"),
-            header: ({ column }) => {
-                return (
-                    <Button
-                        variant="ghost"
-                        onClick={() =>
-                            column.toggleSorting(column.getIsSorted() === "asc")
-                        }
-                    >
-                        {t("identityProvider")}
-                        <ArrowUpDown className="ml-2 h-4 w-4" />
-                    </Button>
-                );
-            }
+            header: () => (
+                <ColumnFilterButton
+                    options={idpFilterOptions}
+                    selectedValue={idpIdParamSchema.parse(
+                        searchParams.get("idp_id") ?? undefined
+                    )}
+                    onValueChange={(value) =>
+                        handleFilterChange("idp_id", value)
+                    }
+                    searchPlaceholder={t("searchPlaceholder")}
+                    emptyMessage={t("emptySearchOptions")}
+                    label={t("identityProvider")}
+                    className="p-3"
+                />
+            )
         },
         {
             accessorKey: "twoFactorEnabled",
             friendlyName: t("twoFactor"),
-            header: ({ column }) => {
-                return (
-                    <Button
-                        variant="ghost"
-                        onClick={() =>
-                            column.toggleSorting(column.getIsSorted() === "asc")
-                        }
-                    >
-                        {t("twoFactor")}
-                        <ArrowUpDown className="ml-2 h-4 w-4" />
-                    </Button>
-                );
-            },
+            header: () => (
+                <ColumnFilterButton
+                    options={[
+                        { value: "true", label: t("enabled") },
+                        { value: "false", label: t("disabled") }
+                    ]}
+                    selectedValue={twoFactorFilterSchema.parse(
+                        searchParams.get("two_factor") ?? undefined
+                    )}
+                    onValueChange={(value) =>
+                        handleFilterChange("two_factor", value)
+                    }
+                    searchPlaceholder={t("searchPlaceholder")}
+                    emptyMessage={t("emptySearchOptions")}
+                    label={t("twoFactor")}
+                    className="p-3"
+                />
+            ),
             cell: ({ row }) => {
                 const userRow = row.original;
-
                 return (
                     <div className="flex flex-row items-center gap-2">
                         <span>
@@ -277,8 +359,11 @@ export default function UsersTable({ users }: Props) {
                             <DropdownMenuContent align="end">
                                 {r.type === "internal" && (
                                     <DropdownMenuItem
+                                        disabled={isGeneratingCode}
                                         onClick={() => {
-                                            generatePasswordResetCode(r.id);
+                                            void generatePasswordResetCode(
+                                                r.id
+                                            );
                                         }}
                                     >
                                         {t("generatePasswordResetCode")}
@@ -350,11 +435,21 @@ export default function UsersTable({ users }: Props) {
                 />
             )}
 
-            <UsersDataTable
+            <ControlledDataTable
                 columns={columns}
-                data={rows}
+                rows={users}
+                tableId="admin-users-table"
+                searchPlaceholder={t("userSearch")}
+                pagination={pagination}
+                onPaginationChange={handlePaginationChange}
+                searchQuery={searchParams.get("query")?.toString()}
+                onSearch={handleSearchChange}
                 onRefresh={refreshData}
-                isRefreshing={isRefreshing}
+                isRefreshing={isRefreshing || isFiltering}
+                rowCount={rowCount}
+                enableColumnVisibility
+                stickyLeftColumn="username"
+                stickyRightColumn="actions"
             />
 
             <Credenza

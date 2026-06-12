@@ -12,11 +12,13 @@ import { useTranslations } from "next-intl";
 interface RestartDomainButtonProps {
     orgId: string;
     domainId: string;
+    onSuccess?: () => void;
 }
 
 export default function RestartDomainButton({
     orgId,
-    domainId
+    domainId,
+    onSuccess
 }: RestartDomainButtonProps) {
     const router = useRouter();
     const api = createApiClient(useEnvContext());
@@ -35,7 +37,11 @@ export default function RestartDomainButton({
             });
             // Wait a bit before refreshing to allow the restart to take effect
             await new Promise((resolve) => setTimeout(resolve, 200));
-            router.refresh();
+            if (onSuccess) {
+                onSuccess();
+            } else {
+                router.refresh();
+            }
         } catch (e) {
             toast({
                 title: t("error"),

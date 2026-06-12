@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { db, idp, idpOidcConfig } from "@server/db";
-import { roles, userOrgs, users } from "@server/db";
+import { roles, userOrgRoles, userOrgs, users } from "@server/db";
 import { and, eq } from "drizzle-orm";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -14,7 +14,7 @@ import { checkOrgAccessPolicy } from "#dynamic/lib/checkOrgAccessPolicy";
 import { CheckOrgAccessPolicyResult } from "@server/lib/checkOrgAccessPolicy";
 
 async function queryUser(orgId: string, userId: string) {
-    const [user] = await db
+    const [userRow] = await db
         .select({
             orgId: userOrgs.orgId,
             userId: users.userId,
@@ -22,10 +22,7 @@ async function queryUser(orgId: string, userId: string) {
             username: users.username,
             name: users.name,
             type: users.type,
-            roleId: userOrgs.roleId,
-            roleName: roles.name,
             isOwner: userOrgs.isOwner,
-            isAdmin: roles.isAdmin,
             twoFactorEnabled: users.twoFactorEnabled,
             autoProvisioned: userOrgs.autoProvisioned,
             idpId: users.idpId,
@@ -35,13 +32,37 @@ async function queryUser(orgId: string, userId: string) {
             idpAutoProvision: idp.autoProvision
         })
         .from(userOrgs)
-        .leftJoin(roles, eq(userOrgs.roleId, roles.roleId))
         .leftJoin(users, eq(userOrgs.userId, users.userId))
         .leftJoin(idp, eq(users.idpId, idp.idpId))
         .leftJoin(idpOidcConfig, eq(idp.idpId, idpOidcConfig.idpId))
         .where(and(eq(userOrgs.userId, userId), eq(userOrgs.orgId, orgId)))
         .limit(1);
-    return user;
+
+    if (!userRow) return undefined;
+
+    const roleRows = await db
+        .select({
+            roleId: userOrgRoles.roleId,
+            roleName: roles.name,
+            isAdmin: roles.isAdmin
+        })
+        .from(userOrgRoles)
+        .leftJoin(roles, eq(userOrgRoles.roleId, roles.roleId))
+        .where(
+            and(eq(userOrgRoles.userId, userId), eq(userOrgRoles.orgId, orgId))
+        );
+
+    const isAdmin = roleRows.some((r) => r.isAdmin);
+
+    return {
+        ...userRow,
+        isAdmin,
+        roleIds: roleRows.map((r) => r.roleId),
+        roles: roleRows.map((r) => ({
+            roleId: r.roleId,
+            name: r.roleName ?? ""
+        }))
+    };
 }
 
 export type CheckOrgUserAccessResponse = CheckOrgAccessPolicyResult;
@@ -59,7 +80,22 @@ registry.registerPath({
     request: {
         params: paramsSchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function checkOrgUserAccess(

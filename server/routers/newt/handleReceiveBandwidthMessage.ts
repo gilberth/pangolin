@@ -88,7 +88,7 @@ export async function flushBandwidthToDb(): Promise<void> {
     const currentTime = new Date().toISOString();
 
     // Sort by publicKey for consistent lock ordering across concurrent
-    // writers — this is the same deadlock-prevention strategy used in the
+    // writers - this is the same deadlock-prevention strategy used in the
     // original per-message implementation.
     const sortedEntries = [...snapshot.entries()].sort(([a], [b]) =>
         a.localeCompare(b)
@@ -143,7 +143,7 @@ const flushTimer = setInterval(async () => {
 }, FLUSH_INTERVAL_MS);
 
 // Calling unref() means this timer will not keep the Node.js event loop alive
-// on its own — the process can still exit normally when there is no other work
+// on its own - the process can still exit normally when there is no other work
 // left.  The graceful-shutdown path (see server/cleanup.ts) will call
 // flushBandwidthToDb() explicitly before process.exit(), so no data is lost.
 flushTimer.unref();
@@ -167,7 +167,7 @@ export const handleReceiveBandwidthMessage: MessageHandler = async (
     // Accumulate the incoming data in memory; the periodic timer (and the
     // shutdown hook) will take care of writing it to the database.
     for (const { publicKey, bytesIn, bytesOut } of bandwidthData) {
-        // Skip peers that haven't transferred any data — writing zeros to the
+        // Skip peers that haven't transferred any data - writing zeros to the
         // database would be a no-op anyway.
         if (bytesIn <= 0 && bytesOut <= 0) {
             continue;

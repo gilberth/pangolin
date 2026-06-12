@@ -25,3 +25,22 @@ export type ListOrgIdpsResponse = {
         offset: number;
     };
 };
+
+export type ListUserAdminOrgIdpsEntry = {
+    idpId: number;
+    orgId: string;
+    orgName: string;
+    name: string;
+    type: string;
+    variant: string;
+    tags: string | null;
+};
+
+export type ListUserAdminOrgIdpsResponse = {
+    idps: ListUserAdminOrgIdpsEntry[];
+    pagination: {
+        total: number;
+        limit: number;
+        offset: number;
+    };
+};

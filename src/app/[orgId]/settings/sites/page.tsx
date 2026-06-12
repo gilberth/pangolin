@@ -5,7 +5,12 @@ import { AxiosResponse } from "axios";
 import SitesTable, { SiteRow } from "@app/components/SitesTable";
 import SettingsSectionTitle from "@app/components/SettingsSectionTitle";
 import SitesBanner from "@app/components/SitesBanner";
+import type { Metadata } from "next";
 import { getTranslations } from "next-intl/server";
+
+export const metadata: Metadata = {
+    title: "Sites"
+};
 
 type SitesPageProps = {
     params: Promise<{ orgId: string }>;
@@ -18,6 +23,7 @@ export default async function SitesPage(props: SitesPageProps) {
     const params = await props.params;
 
     const searchParams = new URLSearchParams(await props.searchParams);
+    searchParams.set("status", "approved");
 
     let sites: ListSitesResponse["sites"] = [];
     let pagination: ListSitesResponse["pagination"] = {
@@ -54,10 +60,12 @@ export default async function SitesPage(props: SitesPageProps) {
         return {
             name: site.name,
             id: site.siteId,
+            labels: site.labels,
             nice: site.niceId.toString(),
             address: site.address?.split("/")[0],
             mbIn: formatSize(site.megabytesIn || 0, site.type),
             mbOut: formatSize(site.megabytesOut || 0, site.type),
+            resourceCount: Number(site.resourceCount ?? 0),
             orgId: params.orgId,
             type: site.type as any,
             online: site.online,

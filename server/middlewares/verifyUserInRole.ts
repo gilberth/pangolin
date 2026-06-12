@@ -12,7 +12,7 @@ export async function verifyUserInRole(
         const roleId = parseInt(
             req.params.roleId || req.body.roleId || req.query.roleId
         );
-        const userRoleId = req.userOrgRoleId;
+        const userOrgRoleIds = req.userOrgRoleIds ?? [];
 
         if (isNaN(roleId)) {
             return next(
@@ -20,7 +20,7 @@ export async function verifyUserInRole(
             );
         }
 
-        if (!userRoleId) {
+        if (userOrgRoleIds.length === 0) {
             return next(
                 createHttpError(
                     HttpCode.FORBIDDEN,
@@ -29,7 +29,7 @@ export async function verifyUserInRole(
             );
         }
 
-        if (userRoleId !== roleId) {
+        if (!userOrgRoleIds.includes(roleId)) {
             return next(
                 createHttpError(
                     HttpCode.FORBIDDEN,

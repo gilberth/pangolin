@@ -27,7 +27,7 @@ import {
     TableHeader,
     TableRow
 } from "@app/components/ui/table";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@app/components/ui/tabs";
+import { HorizontalTabs } from "@app/components/HorizontalTabs";
 import { Loader2, RefreshCw } from "lucide-react";
 import moment from "moment";
 import { useUserContext } from "@app/hooks/useUserContext";
@@ -58,7 +58,6 @@ export default function ViewDevicesDialog({
 
     const [devices, setDevices] = useState<Device[]>([]);
     const [loading, setLoading] = useState(false);
-    const [activeTab, setActiveTab] = useState<"available" | "archived">("available");
 
     const fetchDevices = async () => {
         setLoading(true);
@@ -177,34 +176,21 @@ export default function ViewDevicesDialog({
                                 <Loader2 className="h-6 w-6 animate-spin" />
                             </div>
                         ) : (
-                            <Tabs
-                                value={activeTab}
-                                onValueChange={(value) =>
-                                    setActiveTab(value as "available" | "archived")
-                                }
-                                className="w-full"
+                            <HorizontalTabs
+                                clientSide
+                                defaultTab={0}
+                                items={[
+                                    {
+                                        title: `${t("available") || "Available"} (${devices.filter((d) => !d.archived).length})`,
+                                        href: "#available"
+                                    },
+                                    {
+                                        title: `${t("archived") || "Archived"} (${devices.filter((d) => d.archived).length})`,
+                                        href: "#archived"
+                                    }
+                                ]}
                             >
-                                <TabsList className="grid w-full grid-cols-2">
-                                    <TabsTrigger value="available">
-                                        {t("available") || "Available"} (
-                                        {
-                                            devices.filter(
-                                                (d) => !d.archived
-                                            ).length
-                                        }
-                                        )
-                                    </TabsTrigger>
-                                    <TabsTrigger value="archived">
-                                        {t("archived") || "Archived"} (
-                                        {
-                                            devices.filter(
-                                                (d) => d.archived
-                                            ).length
-                                        }
-                                        )
-                                    </TabsTrigger>
-                                </TabsList>
-                                <TabsContent value="available" className="mt-4">
+                                <div>
                                     {devices.filter((d) => !d.archived)
                                         .length === 0 ? (
                             <div className="text-center py-8 text-muted-foreground">
@@ -271,8 +257,8 @@ export default function ViewDevicesDialog({
                                 </Table>
                             </div>
                                     )}
-                                </TabsContent>
-                                <TabsContent value="archived" className="mt-4">
+                                </div>
+                                <div>
                                     {devices.filter((d) => d.archived)
                                         .length === 0 ? (
                                         <div className="text-center py-8 text-muted-foreground">
@@ -336,8 +322,8 @@ export default function ViewDevicesDialog({
                                             </Table>
                                         </div>
                                     )}
-                                </TabsContent>
-                            </Tabs>
+                                </div>
+                            </HorizontalTabs>
                         )}
                     </CredenzaBody>
                     <CredenzaFooter>

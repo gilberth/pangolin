@@ -4,7 +4,7 @@ import { useTranslations } from "next-intl";
 import { ColumnDef } from "@tanstack/react-table";
 import { ExtendedColumnDef } from "@app/components/ui/data-table";
 import { Button } from "./ui/button";
-import { ArrowUpDown } from "lucide-react";
+import { ArrowUpDown, MoreHorizontal } from "lucide-react";
 import CopyToClipboard from "./CopyToClipboard";
 import { Badge } from "./ui/badge";
 import moment from "moment";
@@ -16,6 +16,12 @@ import { toast } from "@app/hooks/useToast";
 import { createApiClient, formatAxiosError } from "@app/lib/api";
 import { useEnvContext } from "@app/hooks/useEnvContext";
 import NewPricingLicenseForm from "./NewPricingLicenseForm";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuItem,
+    DropdownMenuTrigger
+} from "@app/components/ui/dropdown-menu";
 
 type GnerateLicenseKeysTableProps = {
     licenseKeys: GeneratedLicenseKey[];
@@ -44,6 +50,7 @@ export default function GenerateLicenseKeysTable({
 
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [showGenerateForm, setShowGenerateForm] = useState(false);
+    const [isClearingInstanceName, setIsClearingInstanceName] = useState(false);
 
     useEffect(() => {
         if (searchParams.get(GENERATE_QUERY) !== null) {
@@ -61,6 +68,28 @@ export default function GenerateLicenseKeysTable({
     const handleLicenseGenerated = () => {
         // Refresh the data after license is generated
         refreshData();
+    };
+
+    const clearInstanceName = async (licenseKey: string) => {
+        setIsClearingInstanceName(true);
+        try {
+            await api.post(
+                `/org/${orgId}/license/${encodeURIComponent(licenseKey)}/clear-instance-name`
+            );
+            toast({
+                title: t("success"),
+                description: "Instance name cleared successfully"
+            });
+            await refreshData();
+        } catch (error) {
+            toast({
+                title: t("error"),
+                description: formatAxiosError(error, "Failed to clear instance name"),
+                variant: "destructive"
+            });
+        } finally {
+            setIsClearingInstanceName(false);
+        }
     };
 
     const refreshData = async () => {
@@ -236,6 +265,39 @@ export default function GenerateLicenseKeysTable({
                 const termianteAt = row.original.expiresAt;
                 return moment(termianteAt).format("lll");
             }
+        },
+        {
+            id: "actions",
+            enableHiding: false,
+            header: () => <span className="p-3"></span>,
+            cell: ({ row }) => {
+                const key = row.original;
+                return (
+                    <div className="flex items-center gap-2 justify-end">
+                        <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" className="h-8 w-8 p-0">
+                                    <span className="sr-only">Open menu</span>
+                                    <MoreHorizontal className="h-4 w-4" />
+                                </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                                <DropdownMenuItem
+                                    disabled={
+                                        !key.instanceName ||
+                                        isClearingInstanceName
+                                    }
+                                    onClick={() =>
+                                        clearInstanceName(key.licenseKey)
+                                    }
+                                >
+                                    Clear Instance Name
+                                </DropdownMenuItem>
+                            </DropdownMenuContent>
+                        </DropdownMenu>
+                    </div>
+                );
+            }
         }
     ];
 
@@ -254,6 +316,7 @@ export default function GenerateLicenseKeysTable({
                 onAdd={() => {
                     setShowGenerateForm(true);
                 }}
+                stickyRightColumn="actions"
             />
 
             <NewPricingLicenseForm

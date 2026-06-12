@@ -10,12 +10,15 @@ import { formatAxiosError } from "@app/lib/api";
 import { AxiosResponse } from "axios";
 import {
     SettingsContainer,
+    SettingsFormCell,
+    SettingsFormGrid,
     SettingsSection,
     SettingsSectionHeader,
     SettingsSectionTitle,
     SettingsSectionDescription,
     SettingsSectionBody,
-    SettingsSectionFooter
+    SettingsSectionFooter,
+    SettingsSectionForm
 } from "@app/components/Settings";
 import {
     InfoSection,
@@ -35,6 +38,7 @@ import {
 } from "@app/components/Credenza";
 import { cn } from "@app/lib/cn";
 import { CreditCard, ExternalLink, Check, AlertTriangle } from "lucide-react";
+import { Badge } from "@app/components/ui/badge";
 import { Alert, AlertTitle, AlertDescription } from "@app/components/ui/alert";
 import {
     Tooltip,
@@ -55,6 +59,7 @@ import {
     tier3LimitSet
 } from "@server/lib/billing/limitSet";
 import { FeatureId } from "@server/lib/billing/features";
+import TrialBillingBanner from "@app/components/TrialBillingBanner";
 
 // Plan tier definitions matching the mockup
 type PlanId = "basic" | "home" | "team" | "business" | "enterprise";
@@ -219,6 +224,7 @@ export default function BillingPage() {
     );
 
     const [hasSubscription, setHasSubscription] = useState(false);
+    const [isTrial, setIsTrial] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [currentTier, setCurrentTier] = useState<Tier | null>(null);
 
@@ -263,6 +269,7 @@ export default function BillingPage() {
                     setHasSubscription(
                         tierSub.subscription.status === "active"
                     );
+                    setIsTrial(tierSub.subscription.expiresAt != null);
                 }
 
                 // Find license subscription
@@ -477,7 +484,7 @@ export default function BillingPage() {
     };
 
     const handleContactUs = () => {
-        window.open("https://pangolin.net/talk-to-us", "_blank");
+        window.open("https://pangolin.net/contact", "_blank");
     };
 
     // Get current plan ID from tier
@@ -490,6 +497,10 @@ export default function BillingPage() {
     };
 
     const currentPlanId = getCurrentPlanId();
+
+    const visiblePlanOptions = planOptions.filter(
+        (plan) => plan.id !== "home" || currentPlanId === "home"
+    );
 
     // Check if subscription is in a problematic state that requires attention
     const hasProblematicSubscription = (): boolean => {
@@ -554,6 +565,14 @@ export default function BillingPage() {
     // Get button label and action for each plan
     const getPlanAction = (plan: PlanOption) => {
         if (plan.id === "enterprise") {
+            if (plan.id === currentPlanId && !isTrial) {
+                return {
+                    label: "Manage Current Plan",
+                    action: handleModifySubscription,
+                    variant: "default" as const,
+                    disabled: false
+                };
+            }
             return {
                 label: "Contact Us",
                 action: handleContactUs,
@@ -585,6 +604,19 @@ export default function BillingPage() {
                     disabled: false
                 };
             }
+            // If this is a trial subscription, show an upgrade button that starts a real checkout
+            if (isTrial) {
+                return {
+                    label: "Upgrade",
+                    action: () => {
+                        if (plan.tierType) {
+                            handleStartSubscription(plan.tierType);
+                        }
+                    },
+                    variant: "default" as const,
+                    disabled: isProblematicState
+                };
+            }
             return {
                 label: "Manage Current Plan",
                 action: handleModifySubscription,
@@ -598,7 +630,8 @@ export default function BillingPage() {
         );
         const planIndex = planOptions.findIndex((p) => p.id === plan.id);
 
-        if (planIndex < currentIndex) {
+        // During a trial, never show a downgrade option — all non-current plans are upgrades
+        if (!isTrial && planIndex < currentIndex) {
             return {
                 label: "Downgrade",
                 action: () => {
@@ -630,18 +663,23 @@ export default function BillingPage() {
             label: "Upgrade",
             action: () => {
                 if (plan.tierType) {
-                    showTierConfirmation(
-                        plan.tierType,
-                        "upgrade",
-                        plan.name,
-                        plan.price + (" " + plan.priceDetail || "")
-                    );
+                    // During a trial, go straight to checkout instead of the tier-change flow
+                    if (isTrial) {
+                        handleStartSubscription(plan.tierType);
+                    } else {
+                        showTierConfirmation(
+                            plan.tierType,
+                            "upgrade",
+                            plan.name,
+                            plan.price + (" " + plan.priceDetail || "")
+                        );
+                    }
                 } else {
                     handleModifySubscription();
                 }
             },
             variant: "outline" as const,
-            disabled: isProblematicState
+            disabled: isProblematicState || (isTrial && plan.id == "basic")
         };
     };
 
@@ -772,6 +810,20 @@ export default function BillingPage() {
 
     return (
         <SettingsContainer>
+            {/* Trial Banner */}
+            {isTrial && (
+                <TrialBillingBanner
+                    onUpgrade={() => {
+                        const currentPlan = planOptions.find(
+                            (p) => p.id === currentPlanId
+                        );
+                        if (currentPlan?.tierType) {
+                            handleStartSubscription(currentPlan.tierType);
+                        }
+                    }}
+                />
+            )}
+
             {/* Subscription Status Alert */}
             {isProblematicState && statusMessage && (
                 <Alert variant="destructive" className="mb-6">
@@ -803,8 +855,15 @@ export default function BillingPage() {
                 </SettingsSectionHeader>
                 <SettingsSectionBody>
                     {/* Plan Cards Grid */}
-                    <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-                        {planOptions.map((plan) => {
+                    <div
+                        className={cn(
+                            "grid grid-cols-1 gap-4",
+                            visiblePlanOptions.length === 5
+                                ? "md:grid-cols-5"
+                                : "md:grid-cols-4"
+                        )}
+                    >
+                        {visiblePlanOptions.map((plan) => {
                             const isCurrentPlan = plan.id === currentPlanId;
                             const planAction = getPlanAction(plan);
 
@@ -819,8 +878,19 @@ export default function BillingPage() {
                                     )}
                                 >
                                     <div className="flex-1">
-                                        <div className="text-2xl">
-                                            {plan.name}
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="text-2xl">
+                                                {plan.name}
+                                            </span>
+                                            {isCurrentPlan && isTrial && (
+                                                <Badge
+                                                    variant="outlinePrimary"
+                                                    className="text-xs"
+                                                >
+                                                    {t("billingTrialBadge") ||
+                                                        "Free Trial"}
+                                                </Badge>
+                                            )}
                                         </div>
                                         <div className="mt-1">
                                             <span className="text-xl">
@@ -934,7 +1004,7 @@ export default function BillingPage() {
                                 {t("billingCurrentUsage") || "Current Usage"}
                             </div>
                             <div className="flex items-baseline gap-2">
-                                <span className="text-3xl font-bold">
+                                <span className="text-3xl font-semibold">
                                     {getUserCount()}
                                 </span>
                                 <span className="text-lg">
@@ -1257,36 +1327,46 @@ export default function BillingPage() {
                         </SettingsSectionDescription>
                     </SettingsSectionHeader>
                     <SettingsSectionBody>
-                        <div className="w-full md:w-1/2">
-                            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border rounded-lg p-4">
-                                <div>
-                                    <div className="text-sm text-muted-foreground mb-1">
-                                        {t("billingCurrentKeys") ||
-                                            "Current Keys"}
+                        <SettingsSectionForm variant="half">
+                            <SettingsFormGrid>
+                                <SettingsFormCell span="full">
+                                    <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 border rounded-lg p-4">
+                                        <div>
+                                            <div className="text-sm text-muted-foreground mb-1">
+                                                {t("billingCurrentKeys") ||
+                                                    "Current Keys"}
+                                            </div>
+                                            <div className="flex items-baseline gap-2">
+                                                <span className="text-3xl font-semibold">
+                                                    {getLicenseKeyCount()}
+                                                </span>
+                                                <span className="text-lg">
+                                                    {getLicenseKeyCount() === 1
+                                                        ? "key"
+                                                        : "keys"}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <Button
+                                            variant="outline"
+                                            onClick={handleModifySubscription}
+                                            disabled={isLoading}
+                                            loading={isLoading}
+                                        >
+                                            <CreditCard className="mr-2 h-4 w-4" />
+                                            {t("billingModifyCurrentPlan") ||
+                                                "Modify Current Plan"}
+                                        </Button>
+                                        <p className="text-sm text-muted-foreground mt-2">
+                                            {t(
+                                                "billingManageLicenseSubscriptionDescription"
+                                            ) ||
+                                                "Manage your subscription for paid self-hosted license keys and download invoices."}
+                                        </p>
                                     </div>
-                                    <div className="flex items-baseline gap-2">
-                                        <span className="text-3xl font-bold">
-                                            {getLicenseKeyCount()}
-                                        </span>
-                                        <span className="text-lg">
-                                            {getLicenseKeyCount() === 1
-                                                ? "key"
-                                                : "keys"}
-                                        </span>
-                                    </div>
-                                </div>
-                                <Button
-                                    variant="outline"
-                                    onClick={handleModifySubscription}
-                                    disabled={isLoading}
-                                    loading={isLoading}
-                                >
-                                    <CreditCard className="mr-2 h-4 w-4" />
-                                    {t("billingModifyCurrentPlan") ||
-                                        "Modify Current Plan"}
-                                </Button>
-                            </div>
-                        </div>
+                                </SettingsFormCell>
+                            </SettingsFormGrid>
+                        </SettingsSectionForm>
                     </SettingsSectionBody>
                 </SettingsSection>
             )}

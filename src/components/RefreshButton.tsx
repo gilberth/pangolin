@@ -7,7 +7,11 @@ import { Button } from "@app/components/ui/button";
 import { useTranslations } from "next-intl";
 import { toast } from "@app/hooks/useToast";
 
-export default function RefreshButton() {
+interface RefreshButtonProps {
+    onRefresh?: () => void;
+}
+
+export default function RefreshButton({ onRefresh }: RefreshButtonProps = {}) {
     const router = useRouter();
     const [isRefreshing, setIsRefreshing] = useState(false);
     const t = useTranslations();
@@ -16,7 +20,11 @@ export default function RefreshButton() {
         setIsRefreshing(true);
         try {
             await new Promise((resolve) => setTimeout(resolve, 200));
-            router.refresh();
+            if (onRefresh) {
+                onRefresh();
+            } else {
+                router.refresh();
+            }
         } catch {
             toast({
                 title: t("error"),

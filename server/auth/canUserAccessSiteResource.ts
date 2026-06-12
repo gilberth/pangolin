@@ -1,26 +1,29 @@
 import { db } from "@server/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { roleSiteResources, userSiteResources } from "@server/db";
 
 export async function canUserAccessSiteResource({
     userId,
     resourceId,
-    roleId
+    roleIds
 }: {
     userId: string;
     resourceId: number;
-    roleId: number;
+    roleIds: number[];
 }): Promise<boolean> {
-    const roleResourceAccess = await db
-        .select()
-        .from(roleSiteResources)
-        .where(
-            and(
-                eq(roleSiteResources.siteResourceId, resourceId),
-                eq(roleSiteResources.roleId, roleId)
-            )
-        )
-        .limit(1);
+    const roleResourceAccess =
+        roleIds.length > 0
+            ? await db
+                  .select()
+                  .from(roleSiteResources)
+                  .where(
+                      and(
+                          eq(roleSiteResources.siteResourceId, resourceId),
+                          inArray(roleSiteResources.roleId, roleIds)
+                      )
+                  )
+                  .limit(1)
+            : [];
 
     if (roleResourceAccess.length > 0) {
         return true;

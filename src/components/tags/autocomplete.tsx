@@ -1,10 +1,29 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-// import { Command, CommandList, CommandItem, CommandGroup, CommandEmpty } from '../ui/command';
+import React, {
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState
+} from "react";
 import { TagInputStyleClassesProps, type Tag as TagType } from "./tag-input";
-import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import {
+    Command,
+    CommandEmpty,
+    CommandGroup,
+    CommandInput,
+    CommandItem,
+    CommandList
+} from "../ui/command";
+import {
+    Popover,
+    PopoverAnchor,
+    PopoverContent,
+    PopoverTrigger
+} from "../ui/popover";
 import { Button } from "../ui/button";
 import { cn } from "@app/lib/cn";
 import { useTranslations } from "next-intl";
+import { Check } from "lucide-react";
 
 type AutocompleteProps = {
     tags: TagType[];
@@ -20,6 +39,8 @@ type AutocompleteProps = {
     inlineTags?: boolean;
     classStyleProps: TagInputStyleClassesProps["autoComplete"];
     usePortal?: boolean;
+    /** Narrows the dropdown list from the main field (cmdk search filters further). */
+    filterQuery?: string;
 };
 
 export const Autocomplete: React.FC<AutocompleteProps> = ({
@@ -35,10 +56,10 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
     inlineTags,
     children,
     classStyleProps,
-    usePortal
+    usePortal,
+    filterQuery = ""
 }) => {
     const triggerContainerRef = useRef<HTMLDivElement | null>(null);
-    const triggerRef = useRef<HTMLButtonElement | null>(null);
     const inputRef = useRef<HTMLInputElement | null>(null);
     const popoverContentRef = useRef<HTMLDivElement | null>(null);
     const t = useTranslations();
@@ -46,17 +67,21 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
     const [popoverWidth, setPopoverWidth] = useState<number>(0);
     const [isPopoverOpen, setIsPopoverOpen] = useState(false);
     const [inputFocused, setInputFocused] = useState(false);
-    const [popooverContentTop, setPopoverContentTop] = useState<number>(0);
-    const [selectedIndex, setSelectedIndex] = useState<number>(-1);
+    const [commandResetKey, setCommandResetKey] = useState(0);
 
-    // Dynamically calculate the top position for the popover content
-    useEffect(() => {
-        if (!triggerContainerRef.current || !triggerRef.current) return;
-        setPopoverContentTop(
-            triggerContainerRef.current?.getBoundingClientRect().bottom -
-                triggerRef.current?.getBoundingClientRect().bottom
+    const visibleOptions = useMemo(() => {
+        const q = filterQuery.trim().toLowerCase();
+        if (!q) return autocompleteOptions;
+        return autocompleteOptions.filter((option) =>
+            option.text.toLowerCase().includes(q)
         );
-    }, [tags]);
+    }, [autocompleteOptions, filterQuery]);
+
+    useEffect(() => {
+        if (isPopoverOpen) {
+            setCommandResetKey((k) => k + 1);
+        }
+    }, [isPopoverOpen]);
 
     // Close the popover when clicking outside of it
     useEffect(() => {
@@ -135,36 +160,6 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
         if (userOnBlur) userOnBlur(event);
     };
 
-    const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-        if (!isPopoverOpen) return;
-
-        switch (event.key) {
-            case "ArrowUp":
-                event.preventDefault();
-                setSelectedIndex((prevIndex) =>
-                    prevIndex <= 0
-                        ? autocompleteOptions.length - 1
-                        : prevIndex - 1
-                );
-                break;
-            case "ArrowDown":
-                event.preventDefault();
-                setSelectedIndex((prevIndex) =>
-                    prevIndex === autocompleteOptions.length - 1
-                        ? 0
-                        : prevIndex + 1
-                );
-                break;
-            case "Enter":
-                event.preventDefault();
-                if (selectedIndex !== -1) {
-                    toggleTag(autocompleteOptions[selectedIndex]);
-                    setSelectedIndex(-1);
-                }
-                break;
-        }
-    };
-
     const toggleTag = (option: TagType) => {
         // Check if the tag already exists in the array
         const index = tags.findIndex((tag) => tag.text === option.text);
@@ -197,18 +192,25 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
                 }
             }
         }
-        setSelectedIndex(-1);
     };
 
-    const childrenWithProps = React.cloneElement(
-        children as React.ReactElement<any>,
-        {
-            onKeyDown: handleKeyDown,
-            onFocus: handleInputFocus,
-            onBlur: handleInputBlur,
-            ref: inputRef
+    const child = children as React.ReactElement<
+        React.InputHTMLAttributes<HTMLInputElement> & {
+            ref?: React.Ref<HTMLInputElement>;
         }
-    );
+    >;
+    const userOnKeyDown = child.props.onKeyDown;
+
+    const childrenWithProps = React.cloneElement(child, {
+        onKeyDown: userOnKeyDown,
+        onFocus: handleInputFocus,
+        onBlur: handleInputBlur,
+        ref: inputRef
+    } as Partial<
+        React.InputHTMLAttributes<HTMLInputElement> & {
+            ref?: React.Ref<HTMLInputElement>;
+        }
+    >);
 
     return (
         <div
@@ -222,132 +224,104 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
                 onOpenChange={handleOpenChange}
                 modal={usePortal}
             >
-                <div
-                    className="relative h-full flex items-center rounded-md border border-input bg-transparent pr-3"
-                    ref={triggerContainerRef}
-                >
-                    {childrenWithProps}
-                    <PopoverTrigger asChild ref={triggerRef}>
-                        <Button
-                            variant="ghost"
-                            size="icon"
-                            role="combobox"
-                            className={cn(
-                                `hover:bg-transparent ${!inlineTags ? "ml-auto" : ""}`,
-                                classStyleProps?.popoverTrigger
-                            )}
-                            onClick={() => {
-                                setIsPopoverOpen(!isPopoverOpen);
-                            }}
-                        >
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                width="24"
-                                height="24"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                className={`lucide lucide-chevron-down h-4 w-4 shrink-0 opacity-50 ${isPopoverOpen ? "rotate-180" : "rotate-0"}`}
+                <PopoverAnchor asChild>
+                    <div
+                        className="relative h-full flex items-center rounded-md border border-input bg-transparent pr-1"
+                        ref={triggerContainerRef}
+                    >
+                        {childrenWithProps}
+                        <PopoverTrigger asChild>
+                            <Button
+                                variant="ghost"
+                                size="icon"
+                                role="combobox"
+                                className={cn(
+                                    `hover:bg-transparent ${!inlineTags ? "ml-auto" : ""}`,
+                                    classStyleProps?.popoverTrigger
+                                )}
+                                onClick={() => {
+                                    setIsPopoverOpen(!isPopoverOpen);
+                                }}
                             >
-                                <path d="m6 9 6 6 6-6"></path>
-                            </svg>
-                        </Button>
-                    </PopoverTrigger>
-                </div>
+                                <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="24"
+                                    height="24"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    className={`lucide lucide-chevron-down h-4 w-4 shrink-0 opacity-50 ${isPopoverOpen ? "rotate-180" : "rotate-0"}`}
+                                >
+                                    <path d="m6 9 6 6 6-6"></path>
+                                </svg>
+                            </Button>
+                        </PopoverTrigger>
+                    </div>
+                </PopoverAnchor>
                 <PopoverContent
                     ref={popoverContentRef}
                     side="bottom"
                     align="start"
                     forceMount
-                    className={cn(
-                        `p-0 relative`,
-                        classStyleProps?.popoverContent
-                    )}
+                    className={cn("p-0", classStyleProps?.popoverContent)}
                     style={{
-                        top: `${popooverContentTop}px`,
-                        marginLeft: `calc(-${popoverWidth}px + 36px)`,
                         width: `${popoverWidth}px`,
                         minWidth: `${popoverWidth}px`,
                         zIndex: 9999
                     }}
                 >
-                    <div
+                    <Command
+                        key={commandResetKey}
                         className={cn(
-                            "max-h-[300px] overflow-y-auto overflow-x-hidden",
-                            classStyleProps?.commandList
+                            "rounded-lg border-0 shadow-none",
+                            classStyleProps?.command
                         )}
-                        style={{
-                            minHeight: "68px"
-                        }}
-                        key={autocompleteOptions.length}
                     >
-                        {autocompleteOptions.length > 0 ? (
-                            <div
-                                key={autocompleteOptions.length}
-                                role="group"
-                                className={cn(
-                                    "overflow-y-auto overflow-hidden p-1 text-foreground",
-                                    classStyleProps?.commandGroup
-                                )}
-                                style={{
-                                    minHeight: "68px"
-                                }}
+                        <CommandInput
+                            placeholder={t("searchPlaceholder")}
+                            className="h-9"
+                        />
+                        <CommandList
+                            className={cn(
+                                "max-h-[300px]",
+                                classStyleProps?.commandList
+                            )}
+                        >
+                            <CommandEmpty>{t("noResults")}</CommandEmpty>
+                            <CommandGroup
+                                className={classStyleProps?.commandGroup}
                             >
-                                <span className="text-muted-foreground font-medium text-sm py-1.5 px-2 pb-2">
-                                    Suggestions
-                                </span>
-                                <div role="separator" className="py-0.5" />
-                                {autocompleteOptions.map((option, index) => {
-                                    const isSelected = index === selectedIndex;
+                                {visibleOptions.map((option) => {
+                                    const isChosen = tags.some(
+                                        (tag) => tag.text === option.text
+                                    );
                                     return (
-                                        <div
+                                        <CommandItem
                                             key={option.id}
-                                            role="option"
-                                            aria-selected={isSelected}
-                                            className={cn(
-                                                "relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none aria-selected:bg-accent aria-selected:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 hover:bg-accent",
-                                                isSelected &&
-                                                    "bg-accent text-accent-foreground",
+                                            value={`${option.text} ${option.id}`}
+                                            onSelect={() => toggleTag(option)}
+                                            className={
                                                 classStyleProps?.commandItem
-                                            )}
-                                            data-value={option.text}
-                                            onClick={() => toggleTag(option)}
+                                            }
                                         >
-                                            <div className="w-full flex items-center gap-2">
-                                                {option.text}
-                                                {tags.some(
-                                                    (tag) =>
-                                                        tag.text === option.text
-                                                ) && (
-                                                    <svg
-                                                        xmlns="http://www.w3.org/2000/svg"
-                                                        width="14"
-                                                        height="14"
-                                                        viewBox="0 0 24 24"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        strokeWidth="2"
-                                                        strokeLinecap="round"
-                                                        strokeLinejoin="round"
-                                                        className="lucide lucide-check"
-                                                    >
-                                                        <path d="M20 6 9 17l-5-5"></path>
-                                                    </svg>
+                                            <Check
+                                                className={cn(
+                                                    "mr-2 h-4 w-4 shrink-0",
+                                                    isChosen
+                                                        ? "opacity-100"
+                                                        : "opacity-0"
                                                 )}
-                                            </div>
-                                        </div>
+                                            />
+                                            {option.text}
+                                        </CommandItem>
                                     );
                                 })}
-                            </div>
-                        ) : (
-                            <div className="py-6 text-center text-sm">
-                                {t("noResults")}
-                            </div>
-                        )}
-                    </div>
+                            </CommandGroup>
+                        </CommandList>
+                    </Command>
                 </PopoverContent>
             </Popover>
         </div>

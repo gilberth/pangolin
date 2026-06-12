@@ -399,11 +399,10 @@ function AuthPageSettings({
                                         </div>
                                     )}
 
-                                    {env.flags.usePangolinDns &&
-                                        (build === "enterprise" ||
-                                            !isPaidUser(
-                                                tierMatrix.loginPageDomain
-                                            )) &&
+                                    {build !== "oss" && (build === "enterprise" ||
+                                        !isPaidUser(
+                                            tierMatrix.loginPageDomain
+                                        )) &&
                                         loginPage?.domainId &&
                                         loginPage?.fullDomain &&
                                         !hasUnsavedChanges && (

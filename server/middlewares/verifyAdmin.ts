@@ -1,10 +1,11 @@
 import { Request, Response, NextFunction } from "express";
 import { db } from "@server/db";
 import { roles, userOrgs } from "@server/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import createHttpError from "http-errors";
 import HttpCode from "@server/types/HttpCode";
 import { checkOrgAccessPolicy } from "#dynamic/lib/checkOrgAccessPolicy";
+import { getUserOrgRoleIds } from "@server/lib/userOrgRoles";
 
 export async function verifyAdmin(
     req: Request,
@@ -62,13 +63,29 @@ export async function verifyAdmin(
         }
     }
 
-    const userRole = await db
+    req.userOrgRoleIds = await getUserOrgRoleIds(req.userOrg.userId, orgId!);
+
+    if (req.userOrgRoleIds.length === 0) {
+        return next(
+            createHttpError(
+                HttpCode.FORBIDDEN,
+                "User does not have Admin access"
+            )
+        );
+    }
+
+    const userAdminRoles = await db
         .select()
         .from(roles)
-        .where(eq(roles.roleId, req.userOrg.roleId))
+        .where(
+            and(
+                inArray(roles.roleId, req.userOrgRoleIds),
+                eq(roles.isAdmin, true)
+            )
+        )
         .limit(1);
 
-    if (userRole.length === 0 || !userRole[0].isAdmin) {
+    if (userAdminRoles.length === 0) {
         return next(
             createHttpError(
                 HttpCode.FORBIDDEN,

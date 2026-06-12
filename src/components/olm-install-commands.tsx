@@ -122,9 +122,7 @@ curl -o olm.exe -L "https://github.com/fosrl/olm/releases/download/${version}/ol
 
                 <OptionSelect<string>
                     label={
-                        platform === "docker"
-                            ? t("method")
-                            : t("architecture")
+                        platform === "docker" ? t("method") : t("architecture")
                     }
                     options={getArchitectures(platform).map((arch) => ({
                         value: arch,
@@ -137,33 +135,31 @@ curl -o olm.exe -L "https://github.com/fosrl/olm/releases/download/${version}/ol
                 />
 
                 <div className="pt-4">
-                        <p className="font-bold mb-3">{t("commands")}</p>
-                        <div className="mt-2 space-y-3">
-                            {commands.map((item, index) => {
-                                const commandText =
-                                    typeof item === "string"
-                                        ? item
-                                        : item.command;
-                                const title =
-                                    typeof item === "string"
-                                        ? undefined
-                                        : item.title;
+                    <p className="font-semibold mb-3">{t("commands")}</p>
+                    <div className="mt-2 space-y-3">
+                        {commands.map((item, index) => {
+                            const commandText =
+                                typeof item === "string" ? item : item.command;
+                            const title =
+                                typeof item === "string"
+                                    ? undefined
+                                    : item.title;
 
-                                return (
-                                    <div key={index}>
-                                        {title && (
-                                            <p className="text-sm font-medium mb-1.5">
-                                                {title}
-                                            </p>
-                                        )}
-                                        <CopyTextBox
-                                            text={commandText}
-                                            outline={true}
-                                        />
-                                    </div>
-                                );
-                            })}
-                        </div>
+                            return (
+                                <div key={index}>
+                                    {title && (
+                                        <p className="text-sm font-medium mb-1.5">
+                                            {title}
+                                        </p>
+                                    )}
+                                    <CopyTextBox
+                                        text={commandText}
+                                        outline={true}
+                                    />
+                                </div>
+                            );
+                        })}
+                    </div>
                 </div>
             </SettingsSectionBody>
         </SettingsSection>

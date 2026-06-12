@@ -10,6 +10,10 @@ type SubscriptionStatusContextType = {
     subscribed: boolean;
     /** True when org has exceeded plan limits (sites, users, etc.). Only set when build === saas. */
     limitsExceeded: boolean;
+    /** Unix timestamp (ms) when the trial expires, or null if not in trial. */
+    trialExpiresAt: number | null;
+    /** True if the organization is currently in a trial period. */
+    isTrial: boolean;
 };
 
 const SubscriptionStatusContext = createContext<

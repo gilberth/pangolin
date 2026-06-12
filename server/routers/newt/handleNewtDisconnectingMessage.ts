@@ -2,6 +2,7 @@ import { MessageHandler } from "@server/routers/ws";
 import { db, Newt, sites } from "@server/db";
 import { eq } from "drizzle-orm";
 import logger from "@server/logger";
+import { fireSiteOfflineAlert } from "@server/lib/alerts";
 
 /**
  * Handles disconnecting messages from sites to show disconnected in the ui
@@ -24,12 +25,23 @@ export const handleNewtDisconnectingMessage: MessageHandler = async (
 
     try {
         // Update the client's last ping timestamp
-        await db
-            .update(sites)
-            .set({
-                online: false
-            })
-            .where(eq(sites.siteId, newt.siteId));
+        await db.transaction(async (trx) => {
+            const [site] = await trx
+                .update(sites)
+                .set({
+                    online: false
+                })
+                .where(eq(sites.siteId, newt.siteId!))
+                .returning();
+
+            await fireSiteOfflineAlert(
+                site.orgId,
+                site.siteId,
+                site.name,
+                undefined,
+                trx
+            );
+        });
     } catch (error) {
         logger.error("Error handling disconnecting message", { error });
     }

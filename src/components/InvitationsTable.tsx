@@ -1,6 +1,5 @@
 "use client";
 
-import { ColumnDef } from "@tanstack/react-table";
 import { ExtendedColumnDef } from "@app/components/ui/data-table";
 import {
     DropdownMenu,
@@ -21,13 +20,14 @@ import { useEnvContext } from "@app/hooks/useEnvContext";
 import { useTranslations } from "next-intl";
 import moment from "moment";
 import { useRouter } from "next/navigation";
+import UserRoleBadges from "@app/components/UserRoleBadges";
 
 export type InvitationRow = {
     id: string;
     email: string;
     expiresAt: string;
-    role: string;
-    roleId: number;
+    roleLabels: string[];
+    roleIds: number[];
 };
 
 type InvitationsTableProps = {
@@ -90,9 +90,13 @@ export default function InvitationsTable({
             }
         },
         {
-            accessorKey: "role",
+            id: "roles",
+            accessorFn: (row) => row.roleLabels.join(", "),
             friendlyName: t("role"),
-            header: () => <span className="p-3">{t("role")}</span>
+            header: () => <span className="p-3">{t("role")}</span>,
+            cell: ({ row }) => (
+                <UserRoleBadges roleLabels={row.original.roleLabels} />
+            )
         },
         {
             id: "dots",

@@ -17,6 +17,11 @@ import { priv } from "@app/lib/api";
 import { AxiosResponse } from "axios";
 import { LoginFormIDP } from "@app/components/LoginForm";
 import { ListIdpsResponse } from "@server/routers/idp";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Log In"
+};
 
 export const dynamic = "force-dynamic";
 
@@ -104,7 +109,7 @@ export default async function Page(props: {
                     {t.rich("loginLegalDisclaimer", {
                         termsOfService: (chunks) => (
                             <Link
-                                href="https://pangolin.net/terms-of-service.html"
+                                href="https://pangolin.net/tos"
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="underline"
@@ -114,7 +119,7 @@ export default async function Page(props: {
                         ),
                         privacyPolicy: (chunks) => (
                             <Link
-                                href="https://pangolin.net/privacy-policy.html"
+                                href="https://pangolin.net/privacy"
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="underline"
@@ -130,7 +135,7 @@ export default async function Page(props: {
                 <div className="border rounded-md p-3 mb-4 bg-card">
                     <div className="flex flex-col items-center">
                         <Mail className="w-12 h-12 mb-4 text-primary" />
-                        <h2 className="text-2xl font-bold mb-2 text-center">
+                        <h2 className="text-2xl font-semibold mb-2 text-center">
                             {t("inviteAlready")}
                         </h2>
                         <p className="text-center">
@@ -155,6 +160,18 @@ export default async function Page(props: {
                                 redirect={redirectUrl}
                                 forceLogin={forceLogin}
                                 defaultUser={defaultUser}
+                                orgSignIn={
+                                    !isInvite &&
+                                    (build === "saas" ||
+                                        env.app.identityProviderMode === "org")
+                                        ? {
+                                              href: `/auth/org${buildQueryString(searchParams)}`,
+                                              linkText: t("orgAuthSignInToOrg"),
+                                              descriptionText:
+                                                  t("needToSignInToOrg")
+                                          }
+                                        : undefined
+                                }
                             />
                         </CardContent>
                     </Card>
@@ -190,7 +207,8 @@ export default async function Page(props: {
                 </p>
             )}
 
-            {!isInvite &&
+            {!useSmartLogin &&
+            !isInvite &&
             (build === "saas" || env.app.identityProviderMode === "org") ? (
                 <OrgSignInLink
                     href={`/auth/org${buildQueryString(searchParams)}`}

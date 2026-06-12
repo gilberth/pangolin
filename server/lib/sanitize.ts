@@ -1,3 +1,5 @@
+// Sanitizes
+
 /**
  * Sanitize a string field before inserting into a database TEXT column.
  *

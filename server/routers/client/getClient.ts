@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { db, olms, users } from "@server/db";
+import { db, idp, idpOidcConfig, olms, users } from "@server/db";
 import { clients, currentFingerprint } from "@server/db";
-import { eq, and } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
@@ -236,6 +236,9 @@ export type GetClientResponse = NonNullable<
         lastSeen: number | null;
     } | null;
     posture: PostureData | null;
+    userType: string | null;
+    idpName: string | null;
+    idpVariant: string | null;
 };
 
 registry.registerPath({
@@ -243,14 +246,29 @@ registry.registerPath({
     path: "/org/{orgId}/client/{niceId}",
     description:
         "Get a client by orgId and niceId. NiceId is a readable ID for the site and unique on a per org basis.",
-    tags: [OpenAPITags.Site],
+    tags: [OpenAPITags.Client],
     request: {
         params: z.object({
             orgId: z.string(),
             niceId: z.string()
         })
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 registry.registerPath({
@@ -263,7 +281,22 @@ registry.registerPath({
             clientId: z.number()
         })
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function getClient(
@@ -307,18 +340,18 @@ export async function getClient(
         // Build fingerprint data if available
         const fingerprintData = client.currentFingerprint
             ? {
-                username: client.currentFingerprint.username || null,
-                hostname: client.currentFingerprint.hostname || null,
-                platform: client.currentFingerprint.platform || null,
-                osVersion: client.currentFingerprint.osVersion || null,
-                kernelVersion:
-                    client.currentFingerprint.kernelVersion || null,
-                arch: client.currentFingerprint.arch || null,
-                deviceModel: client.currentFingerprint.deviceModel || null,
-                serialNumber: client.currentFingerprint.serialNumber || null,
-                firstSeen: client.currentFingerprint.firstSeen || null,
-                lastSeen: client.currentFingerprint.lastSeen || null
-            }
+                  username: client.currentFingerprint.username || null,
+                  hostname: client.currentFingerprint.hostname || null,
+                  platform: client.currentFingerprint.platform || null,
+                  osVersion: client.currentFingerprint.osVersion || null,
+                  kernelVersion:
+                      client.currentFingerprint.kernelVersion || null,
+                  arch: client.currentFingerprint.arch || null,
+                  deviceModel: client.currentFingerprint.deviceModel || null,
+                  serialNumber: client.currentFingerprint.serialNumber || null,
+                  firstSeen: client.currentFingerprint.firstSeen || null,
+                  lastSeen: client.currentFingerprint.lastSeen || null
+              }
             : null;
 
         // Build posture data if available (platform-specific)
@@ -337,6 +370,30 @@ export async function getClient(
                 : maskPostureDataWithPlaceholder(rawPosture)
             : null;
 
+        let userType: string | null = null;
+        let idpName: string | null = null;
+        let idpVariant: string | null = null;
+
+        if (client.clients.userId) {
+            const [idpRow] = await db
+                .select({
+                    userType: users.type,
+                    idpName: idp.name,
+                    idpVariant: idpOidcConfig.variant
+                })
+                .from(users)
+                .leftJoin(idp, eq(users.idpId, idp.idpId))
+                .leftJoin(idpOidcConfig, eq(idpOidcConfig.idpId, idp.idpId))
+                .where(eq(users.userId, client.clients.userId))
+                .limit(1);
+
+            if (idpRow) {
+                userType = idpRow.userType;
+                idpName = idpRow.idpName;
+                idpVariant = idpRow.idpVariant;
+            }
+        }
+
         const data: GetClientResponse = {
             ...client.clients,
             name: clientName,
@@ -347,7 +404,10 @@ export async function getClient(
             userName: client.user?.name ?? null,
             userUsername: client.user?.username ?? null,
             fingerprint: fingerprintData,
-            posture: postureData
+            posture: postureData,
+            userType,
+            idpName,
+            idpVariant
         };
 
         return response<GetClientResponse>(res, {

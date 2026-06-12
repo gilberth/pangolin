@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -11,77 +11,12 @@
  * This file is not licensed under the AGPLv3.
  */
 
-import { db, exitNodes, sites } from "@server/db";
+import { db, exitNodes } from "@server/db";
 import { MessageHandler } from "@server/routers/ws";
-import { clients, RemoteExitNode } from "@server/db";
-import { eq, lt, isNull, and, or, inArray } from "drizzle-orm";
+import { RemoteExitNode } from "@server/db";
+import { eq } from "drizzle-orm";
 import logger from "@server/logger";
-
-// Track if the offline checker interval is running
-let offlineCheckerInterval: NodeJS.Timeout | null = null;
-const OFFLINE_CHECK_INTERVAL = 30 * 1000; // Check every 30 seconds
-const OFFLINE_THRESHOLD_MS = 2 * 60 * 1000; // 2 minutes
-
-/**
- * Starts the background interval that checks for clients that haven't pinged recently
- * and marks them as offline
- */
-export const startRemoteExitNodeOfflineChecker = (): void => {
-    if (offlineCheckerInterval) {
-        return; // Already running
-    }
-
-    offlineCheckerInterval = setInterval(async () => {
-        try {
-            const twoMinutesAgo = Math.floor(
-                (Date.now() - OFFLINE_THRESHOLD_MS) / 1000
-            );
-
-            // Find clients that haven't pinged in the last 2 minutes and mark them as offline
-            const offlineNodes = await db
-                .update(exitNodes)
-                .set({ online: false })
-                .where(
-                    and(
-                        eq(exitNodes.online, true),
-                        eq(exitNodes.type, "remoteExitNode"),
-                        or(
-                            lt(exitNodes.lastPing, twoMinutesAgo),
-                            isNull(exitNodes.lastPing)
-                        )
-                    )
-                )
-                .returning();
-
-            if (offlineNodes.length > 0) {
-                logger.info(
-                    `checkRemoteExitNodeOffline: Marked ${offlineNodes.length} remoteExitNode client(s) offline due to inactivity`
-                );
-
-                for (const offlineClient of offlineNodes) {
-                    logger.debug(
-                        `checkRemoteExitNodeOffline: Client ${offlineClient.exitNodeId} marked offline (lastPing: ${offlineClient.lastPing})`
-                    );
-                }
-            }
-        } catch (error) {
-            logger.error("Error in offline checker interval", { error });
-        }
-    }, OFFLINE_CHECK_INTERVAL);
-
-    logger.debug("Started offline checker interval");
-};
-
-/**
- * Stops the background interval that checks for offline clients
- */
-export const stopRemoteExitNodeOfflineChecker = (): void => {
-    if (offlineCheckerInterval) {
-        clearInterval(offlineCheckerInterval);
-        offlineCheckerInterval = null;
-        logger.info("Stopped offline checker interval");
-    }
-};
+import { scheduleExitNodeReconnect } from "./exitNodeReconnectScheduler";
 
 /**
  * Handles ping messages from clients and responds with pong
@@ -103,6 +38,13 @@ export const handleRemoteExitNodePingMessage: MessageHandler = async (
     }
 
     try {
+        // Fetch the current state before updating so we can detect the offline→online transition
+        const [currentExitNode] = await db
+            .select({ online: exitNodes.online, reachableAt: exitNodes.reachableAt })
+            .from(exitNodes)
+            .where(eq(exitNodes.exitNodeId, remoteExitNode.exitNodeId))
+            .limit(1);
+
         // Update the exit node's last ping timestamp
         await db
             .update(exitNodes)
@@ -111,6 +53,16 @@ export const handleRemoteExitNodePingMessage: MessageHandler = async (
                 online: true
             })
             .where(eq(exitNodes.exitNodeId, remoteExitNode.exitNodeId));
+
+        // If the exit node was offline and is now coming online, schedule newt reconnects
+        if (currentExitNode && !currentExitNode.online && currentExitNode.reachableAt) {
+            scheduleExitNodeReconnect(
+                remoteExitNode.exitNodeId,
+                currentExitNode.reachableAt
+            ).catch((error) => {
+                logger.error("Failed to schedule exit node reconnect", { error });
+            });
+        }
     } catch (error) {
         logger.error("Error handling ping message", { error });
     }

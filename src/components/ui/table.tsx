@@ -12,7 +12,7 @@ const Table = React.forwardRef<
 >(({ className, sticky, ...props }, ref) => (
     <div
         className={cn("relative w-full", {
-            "overflow-auto": !sticky
+            "overflow-x-auto overflow-y-hidden": !sticky
         })}
     >
         <table
@@ -91,7 +91,7 @@ const TableHead = React.forwardRef<
     <th
         ref={ref}
         className={cn(
-            "h-10 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0",
+            "h-10 text-left align-middle font-medium text-muted-foreground [&_button]:font-medium [&:has([role=checkbox])]:pr-0",
             className
         )}
         {...props}

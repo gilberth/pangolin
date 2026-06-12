@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -14,7 +14,7 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { db } from "@server/db";
-import { userOrgs, users, roles, orgs } from "@server/db";
+import { userOrgs, userOrgRoles, users, roles, orgs } from "@server/db";
 import { eq, and, or } from "drizzle-orm";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -95,7 +95,14 @@ async function getOrgAdmins(orgId: string) {
         })
         .from(userOrgs)
         .innerJoin(users, eq(userOrgs.userId, users.userId))
-        .leftJoin(roles, eq(userOrgs.roleId, roles.roleId))
+        .leftJoin(
+            userOrgRoles,
+            and(
+                eq(userOrgs.userId, userOrgRoles.userId),
+                eq(userOrgs.orgId, userOrgRoles.orgId)
+            )
+        )
+        .leftJoin(roles, eq(userOrgRoles.roleId, roles.roleId))
         .where(
             and(
                 eq(userOrgs.orgId, orgId),
@@ -103,8 +110,11 @@ async function getOrgAdmins(orgId: string) {
             )
         );
 
-    // Filter to only include users with verified emails
-    const orgAdmins = admins.filter(
+    // Dedupe by userId (user may have multiple roles)
+    const byUserId = new Map(
+        admins.map((a) => [a.userId, a])
+    );
+    const orgAdmins = Array.from(byUserId.values()).filter(
         (admin) => admin.email && admin.email.length > 0
     );
 

@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { db, Site, siteResources } from "@server/db";
-import { newts, newtSessions, sites } from "@server/db";
+import { db } from "@server/db";
+import { newts, sites } from "@server/db";
 import { eq } from "drizzle-orm";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -11,12 +11,12 @@ import { deletePeer } from "../gerbil/peers";
 import { fromError } from "zod-validation-error";
 import { sendToClient } from "#dynamic/routers/ws";
 import { OpenAPITags, registry } from "@server/openApi";
-import { rebuildClientAssociationsFromSiteResource } from "@server/lib/rebuildClientAssociations";
+import { cleanupSiteAssociations } from "@server/lib/rebuildClientAssociations";
 import { usageService } from "@server/lib/billing/usageService";
 import { FeatureId } from "@server/lib/billing";
 
 const deleteSiteSchema = z.strictObject({
-    siteId: z.string().transform(Number).pipe(z.int().positive())
+    siteId: z.coerce.number().int().positive()
 });
 
 registry.registerPath({
@@ -27,7 +27,22 @@ registry.registerPath({
     request: {
         params: deleteSiteSchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function deleteSite(
@@ -63,7 +78,11 @@ export async function deleteSite(
             );
         }
 
-        let deletedNewtId: string | null = null;
+        const [deletedNewt] = await db
+            .select()
+            .from(newts)
+            .where(eq(newts.siteId, siteId))
+            .limit(1);
 
         await db.transaction(async (trx) => {
             if (site.type == "wireguard") {
@@ -71,48 +90,23 @@ export async function deleteSite(
                     await deletePeer(site.exitNodeId!, site.pubKey);
                 }
             } else if (site.type == "newt") {
-                // delete all of the site resources on this site
-                const siteResourcesOnSite = trx
-                    .delete(siteResources)
-                    .where(eq(siteResources.siteId, siteId))
-                    .returning();
-
-                // loop through them
-                for (const removedSiteResource of await siteResourcesOnSite) {
-                    await rebuildClientAssociationsFromSiteResource(
-                        removedSiteResource,
-                        trx
-                    );
-                }
-
-                // get the newt on the site by querying the newt table for siteId
-                const [deletedNewt] = await trx
-                    .delete(newts)
-                    .where(eq(newts.siteId, siteId))
-                    .returning();
-                if (deletedNewt) {
-                    deletedNewtId = deletedNewt.newtId;
-
-                    // delete all of the sessions for the newt
-                    await trx
-                        .delete(newtSessions)
-                        .where(eq(newtSessions.newtId, deletedNewt.newtId));
-                }
+                // Clean up all client associations and send peer/proxy removal
+                // messages in a single efficient pass before deleting the row.
+                await cleanupSiteAssociations(site, trx);
             }
 
             await trx.delete(sites).where(eq(sites.siteId, siteId));
-
             await usageService.add(site.orgId, FeatureId.SITES, -1, trx);
         });
 
         // Send termination message outside of transaction to prevent blocking
-        if (deletedNewtId) {
+        if (deletedNewt) {
             const payload = {
                 type: `newt/wg/terminate`,
                 data: {}
             };
             // Don't await this to prevent blocking the response
-            sendToClient(deletedNewtId, payload).catch((error) => {
+            sendToClient(deletedNewt.newtId, payload).catch((error) => {
                 logger.error(
                     "Failed to send termination message to newt:",
                     error

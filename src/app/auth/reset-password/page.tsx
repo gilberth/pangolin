@@ -7,6 +7,11 @@ import { cleanRedirect } from "@app/lib/cleanRedirect";
 import { getTranslations } from "next-intl/server";
 import { internal } from "@app/lib/api";
 import { authCookieHeader } from "@app/lib/api/cookies";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Reset Password"
+};
 
 export const dynamic = "force-dynamic";
 

@@ -2,6 +2,11 @@ import { LogAnalyticsData } from "@app/components/LogAnalyticsData";
 import SettingsSectionTitle from "@app/components/SettingsSectionTitle";
 import { getTranslations } from "next-intl/server";
 import { Suspense } from "react";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Log Analytics"
+};
 
 export interface AnalyticsPageProps {
     params: Promise<{ orgId: string }>;

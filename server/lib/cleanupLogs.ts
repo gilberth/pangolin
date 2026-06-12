@@ -2,6 +2,7 @@ import { db, orgs } from "@server/db";
 import { cleanUpOldLogs as cleanUpOldAccessLogs } from "#dynamic/lib/logAccessAudit";
 import { cleanUpOldLogs as cleanUpOldActionLogs } from "#dynamic/middlewares/logActionAudit";
 import { cleanUpOldLogs as cleanUpOldRequestLogs } from "@server/routers/badger/logRequestAudit";
+import { cleanUpOldLogs as cleanUpOldConnectionLogs } from "#dynamic/routers/newt";
 import { gt, or } from "drizzle-orm";
 import { cleanUpOldFingerprintSnapshots } from "@server/routers/olm/fingerprintingUtils";
 import { build } from "@server/build";
@@ -20,14 +21,17 @@ export function initLogCleanupInterval() {
                     settingsLogRetentionDaysAccess:
                         orgs.settingsLogRetentionDaysAccess,
                     settingsLogRetentionDaysRequest:
-                        orgs.settingsLogRetentionDaysRequest
+                        orgs.settingsLogRetentionDaysRequest,
+                    settingsLogRetentionDaysConnection:
+                        orgs.settingsLogRetentionDaysConnection
                 })
                 .from(orgs)
                 .where(
                     or(
                         gt(orgs.settingsLogRetentionDaysAction, 0),
                         gt(orgs.settingsLogRetentionDaysAccess, 0),
-                        gt(orgs.settingsLogRetentionDaysRequest, 0)
+                        gt(orgs.settingsLogRetentionDaysRequest, 0),
+                        gt(orgs.settingsLogRetentionDaysConnection, 0)
                     )
                 );
 
@@ -37,7 +41,8 @@ export function initLogCleanupInterval() {
                     orgId,
                     settingsLogRetentionDaysAction,
                     settingsLogRetentionDaysAccess,
-                    settingsLogRetentionDaysRequest
+                    settingsLogRetentionDaysRequest,
+                    settingsLogRetentionDaysConnection
                 } = org;
 
                 if (settingsLogRetentionDaysAction > 0) {
@@ -58,6 +63,13 @@ export function initLogCleanupInterval() {
                     await cleanUpOldRequestLogs(
                         orgId,
                         settingsLogRetentionDaysRequest
+                    );
+                }
+
+                if (settingsLogRetentionDaysConnection > 0) {
+                    await cleanUpOldConnectionLogs(
+                        orgId,
+                        settingsLogRetentionDaysConnection
                     );
                 }
             }

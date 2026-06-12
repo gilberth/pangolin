@@ -32,7 +32,7 @@ export const EnterpriseEditionKeyGenerated = ({
 }: EnterpriseEditionKeyGeneratedProps) => {
     const previewText = personalUseOnly
         ? "Your Enterprise Edition key for personal use is ready"
-        : "Thank you for your purchase — your Enterprise Edition key is ready";
+        : "Thank you for your purchase - your Enterprise Edition key is ready";
 
     return (
         <Html>

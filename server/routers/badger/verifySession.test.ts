@@ -1,4 +1,37 @@
 import { assertEquals } from "@test/assert";
+import { REGIONS } from "@server/db/regions";
+
+function isIpInRegion(
+    ipCountryCode: string | undefined,
+    checkRegionCode: string
+): boolean {
+    if (!ipCountryCode) {
+        return false;
+    }
+
+    const upperCode = ipCountryCode.toUpperCase();
+
+    for (const region of REGIONS) {
+        // Check if it's a top-level region (continent)
+        if (region.id === checkRegionCode) {
+            for (const subregion of region.includes) {
+                if (subregion.countries.includes(upperCode)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Check subregions
+        for (const subregion of region.includes) {
+            if (subregion.id === checkRegionCode) {
+                return subregion.countries.includes(upperCode);
+            }
+        }
+    }
+
+    return false;
+}
 
 function isPathAllowed(pattern: string, path: string): boolean {
     // Normalize and split paths into segments
@@ -272,12 +305,71 @@ function runTests() {
         "Root path should not match non-root path"
     );
 
-    console.log("All tests passed!");
+    console.log("All path matching tests passed!");
+}
+
+function runRegionTests() {
+    console.log("\nRunning isIpInRegion tests...");
+
+    // Test undefined country code
+    assertEquals(
+        isIpInRegion(undefined, "150"),
+        false,
+        "Undefined country code should return false"
+    );
+
+    // Test subregion matching (Western Europe)
+    assertEquals(
+        isIpInRegion("DE", "155"),
+        true,
+        "Country should match its subregion"
+    );
+    assertEquals(
+        isIpInRegion("GB", "155"),
+        false,
+        "Country should NOT match wrong subregion"
+    );
+
+    // Test continent matching (Europe)
+    assertEquals(
+        isIpInRegion("DE", "150"),
+        true,
+        "Country should match its continent"
+    );
+    assertEquals(
+        isIpInRegion("GB", "150"),
+        true,
+        "Different European country should match Europe"
+    );
+    assertEquals(
+        isIpInRegion("US", "150"),
+        false,
+        "Non-European country should NOT match Europe"
+    );
+
+    // Test case insensitivity
+    assertEquals(
+        isIpInRegion("de", "155"),
+        true,
+        "Lowercase country code should work"
+    );
+
+    // Test invalid region code
+    assertEquals(
+        isIpInRegion("DE", "999"),
+        false,
+        "Invalid region code should return false"
+    );
+
+    console.log("All region tests passed!");
 }
 
 // Run all tests
 try {
     runTests();
+    runRegionTests();
+    console.log("\n✅ All tests passed!");
 } catch (error) {
-    console.error("Test failed:", error);
+    console.error("❌ Test failed:", error);
+    process.exit(1);
 }

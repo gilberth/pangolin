@@ -27,6 +27,7 @@ import { Checkbox } from "@app/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@app/components/ui/alert";
 import { InfoIcon, ExternalLink } from "lucide-react";
 import { StrategySelect } from "@app/components/StrategySelect";
+import IdpAutoProvisionUsersDescription from "@app/components/IdpAutoProvisionUsersDescription";
 import { SwitchInput } from "@app/components/SwitchInput";
 import { Badge } from "@app/components/ui/badge";
 import { useTranslations } from "next-intl";
@@ -163,9 +164,6 @@ export function IdpCreateWizard({
                                         disabled={loading}
                                     />
                                 </div>
-                                <span className="text-sm text-muted-foreground">
-                                    {t("idpAutoProvisionUsersDescription")}
-                                </span>
                             </form>
                         </Form>
                     </SettingsSectionForm>

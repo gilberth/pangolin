@@ -11,7 +11,7 @@ export async function createNextServer() {
     //   const app = next({ dev });
     const app = next({
         dev: process.env.ENVIRONMENT !== "prod",
-        turbopack: true
+        turbopack: false
     });
     const handle = app.getRequestHandler();
 
@@ -29,7 +29,7 @@ export async function createNextServer() {
     nextServer.listen(nextPort, (err?: any) => {
         if (err) throw err;
         logger.info(
-            `Next.js server is running on http://localhost:${nextPort}`
+            `Dashboard Web UI server is running on http://localhost:${nextPort}`
         );
     });
 

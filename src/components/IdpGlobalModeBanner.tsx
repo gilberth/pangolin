@@ -8,23 +8,25 @@ import { useEnvContext } from "@app/hooks/useEnvContext";
 import { usePaidStatus } from "@app/hooks/usePaidStatus";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
 import { build } from "@server/build";
+import type { Env } from "@app/lib/types/env";
+
+export function isIdpGlobalModeBannerVisible(env: Env): boolean {
+    if (build === "saas") {
+        return false;
+    }
+    return env.app.identityProviderMode === undefined;
+}
 
 export function IdpGlobalModeBanner() {
     const t = useTranslations();
     const { env } = useEnvContext();
     const { isPaidUser, hasEnterpriseLicense } = usePaidStatus();
 
-    const identityProviderModeUndefined =
-        env.app.identityProviderMode === undefined;
     const paidUserForOrgOidc = isPaidUser(tierMatrix.orgOidc);
     const enterpriseUnlicensed =
         build === "enterprise" && !hasEnterpriseLicense;
 
-    if (build === "saas") {
-        return null;
-    }
-
-    if (!identityProviderModeUndefined) {
+    if (!isIdpGlobalModeBannerVisible(env)) {
         return null;
     }
 

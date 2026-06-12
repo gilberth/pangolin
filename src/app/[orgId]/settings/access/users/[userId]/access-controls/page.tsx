@@ -1,125 +1,153 @@
 "use client";
 
+import ConfirmDeleteDialog from "@app/components/ConfirmDeleteDialog";
+import IdpTypeBadge from "@app/components/IdpTypeBadge";
+import OrgRolesTagField from "@app/components/OrgRolesTagField";
+import {
+    SettingsContainer,
+    SettingsSection,
+    SettingsSectionBody,
+    SettingsSectionDescription,
+    SettingsSectionFooter,
+    SettingsSectionForm,
+    SettingsSectionHeader,
+    SettingsSectionTitle
+} from "@app/components/Settings";
+import { Button } from "@app/components/ui/button";
+import { Checkbox } from "@app/components/ui/checkbox";
 import {
     Form,
     FormControl,
     FormField,
     FormItem,
-    FormLabel,
-    FormMessage
+    FormLabel
 } from "@app/components/ui/form";
-import { Input } from "@app/components/ui/input";
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue
-} from "@app/components/ui/select";
-import { Checkbox } from "@app/components/ui/checkbox";
+import { useEnvContext } from "@app/hooks/useEnvContext";
+import { userOrgUserContext } from "@app/hooks/useOrgUserContext";
+import { usePaidStatus } from "@app/hooks/usePaidStatus";
 import { toast } from "@app/hooks/useToast";
+import { useUserContext } from "@app/hooks/useUserContext";
+import { createApiClient, formatAxiosError } from "@app/lib/api";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { InviteUserResponse } from "@server/routers/user";
-import { AxiosResponse } from "axios";
+import { build } from "@server/build";
+import { tierMatrix } from "@server/lib/billing/tierMatrix";
+import { UserType } from "@server/types/UserTypes";
+import { useTranslations } from "next-intl";
+import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { ListRolesResponse } from "@server/routers/role";
-import { userOrgUserContext } from "@app/hooks/useOrgUserContext";
-import { useParams } from "next/navigation";
-import { Button } from "@app/components/ui/button";
-import {
-    SettingsContainer,
-    SettingsSection,
-    SettingsSectionHeader,
-    SettingsSectionTitle,
-    SettingsSectionDescription,
-    SettingsSectionBody,
-    SettingsSectionForm,
-    SettingsSectionFooter
-} from "@app/components/Settings";
-import { formatAxiosError } from "@app/lib/api";
-import { createApiClient } from "@app/lib/api";
-import { useEnvContext } from "@app/hooks/useEnvContext";
-import { useTranslations } from "next-intl";
-import IdpTypeBadge from "@app/components/IdpTypeBadge";
-import { UserType } from "@server/types/UserTypes";
+
+const accessControlsFormSchema = z.object({
+    username: z.string(),
+    autoProvisioned: z.boolean(),
+    roles: z.array(
+        z.object({
+            id: z.string(),
+            text: z.string(),
+            isAdmin: z.boolean().optional()
+        })
+    )
+});
 
 export default function AccessControlsPage() {
-    const { orgUser: user } = userOrgUserContext();
+    const { orgUser: user, updateOrgUser } = userOrgUserContext();
+    const { user: sessionUser } = useUserContext();
+    const { env } = useEnvContext();
 
-    const api = createApiClient(useEnvContext());
+    const api = createApiClient({ env });
 
     const { orgId } = useParams();
 
-    const [loading, setLoading] = useState(false);
-    const [roles, setRoles] = useState<{ roleId: number; name: string }[]>([]);
-
     const t = useTranslations();
-
-    const formSchema = z.object({
-        username: z.string(),
-        roleId: z.string().min(1, { message: t("accessRoleSelectPlease") }),
-        autoProvisioned: z.boolean()
-    });
+    const { isPaidUser } = usePaidStatus();
+    const isPaid = isPaidUser(tierMatrix.fullRbac);
+    const supportsMultipleRolesPerUser = isPaid;
+    const showMultiRolePaywallMessage =
+        !env.flags.disableEnterpriseFeatures &&
+        ((build === "saas" && !isPaid) ||
+            (build === "enterprise" && !isPaid) ||
+            (build === "oss" && !isPaid));
 
     const form = useForm({
-        resolver: zodResolver(formSchema),
+        resolver: zodResolver(accessControlsFormSchema),
         defaultValues: {
             username: user.username!,
-            roleId: user.roleId?.toString(),
-            autoProvisioned: user.autoProvisioned || false
+            autoProvisioned: user.autoProvisioned || false,
+            roles: (user.roles ?? []).map((r) => ({
+                id: r.roleId.toString(),
+                text: r.name,
+                isAdmin: r.isAdmin === true
+            }))
         }
     });
 
-    useEffect(() => {
-        async function fetchRoles() {
-            const res = await api
-                .get<AxiosResponse<ListRolesResponse>>(`/org/${orgId}/roles`)
-                .catch((e) => {
-                    console.error(e);
-                    toast({
-                        variant: "destructive",
-                        title: t("accessRoleErrorFetch"),
-                        description: formatAxiosError(
-                            e,
-                            t("accessRoleErrorFetchDescription")
-                        )
-                    });
-                });
+    const currentRoleIds = user.roleIds ?? [];
 
-            if (res?.status === 200) {
-                setRoles(res.data.data.roles);
-            }
+    useEffect(() => {
+        form.setValue(
+            "roles",
+            (user.roles ?? []).map((r) => ({
+                id: r.roleId.toString(),
+                text: r.name,
+                isAdmin: r.isAdmin === true
+            }))
+        );
+        form.setValue("autoProvisioned", user.autoProvisioned || false);
+    }, [user.userId, user.autoProvisioned, currentRoleIds.join(",")]);
+
+    const paywallMessage =
+        build === "saas"
+            ? t("singleRolePerUserPlanNotice")
+            : t("singleRolePerUserEditionNotice");
+
+    const [isSaving, setIsSaving] = useState(false);
+    const [confirmRemoveOwnAdminOpen, setConfirmRemoveOwnAdminOpen] =
+        useState(false);
+
+    async function executeSave() {
+        const values = form.getValues();
+
+        if (values.roles.length === 0) {
+            toast({
+                variant: "destructive",
+                title: t("accessRoleErrorAdd"),
+                description: t("accessRoleSelectPlease")
+            });
+            return;
         }
 
-        fetchRoles();
-
-        form.setValue("roleId", user.roleId.toString());
-        form.setValue("autoProvisioned", user.autoProvisioned || false);
-    }, []);
-
-    async function onSubmit(values: z.infer<typeof formSchema>) {
-        setLoading(true);
-
+        setIsSaving(true);
         try {
-            // Execute both API calls simultaneously
-            const [roleRes, userRes] = await Promise.all([
-                api.post<AxiosResponse<InviteUserResponse>>(
-                    `/role/${values.roleId}/add/${user.userId}`
-                ),
+            const roleIds = values.roles.map((r) => parseInt(r.id, 10));
+            const updateRoleRequest = supportsMultipleRolesPerUser
+                ? api.post(`/user/${user.userId}/org/${orgId}/roles`, {
+                      roleIds
+                  })
+                : api.post(`/role/${roleIds[0]}/add/${user.userId}`);
+
+            await Promise.all([
+                updateRoleRequest,
                 api.post(`/org/${orgId}/user/${user.userId}`, {
                     autoProvisioned: values.autoProvisioned
                 })
             ]);
 
-            if (roleRes.status === 200 && userRes.status === 200) {
-                toast({
-                    variant: "default",
-                    title: t("userSaved"),
-                    description: t("userSavedDescription")
-                });
-            }
+            updateOrgUser({
+                roleIds,
+                roles: values.roles.map((r) => ({
+                    roleId: parseInt(r.id, 10),
+                    name: r.text,
+                    isAdmin: r.isAdmin === true
+                })),
+                autoProvisioned: values.autoProvisioned
+            });
+
+            toast({
+                variant: "default",
+                title: t("userSaved"),
+                description: t("userSavedDescription")
+            });
         } catch (e) {
             toast({
                 variant: "destructive",
@@ -129,13 +157,61 @@ export default function AccessControlsPage() {
                     t("accessRoleErrorAddDescription")
                 )
             });
+        } finally {
+            setIsSaving(false);
+        }
+    }
+
+    async function handleAccessControlsSubmit(e: React.FormEvent) {
+        e.preventDefault();
+
+        const isValid = await form.trigger();
+        if (!isValid) return;
+
+        const values = form.getValues();
+
+        if (values.roles.length === 0) {
+            toast({
+                variant: "destructive",
+                title: t("accessRoleErrorAdd"),
+                description: t("accessRoleSelectPlease")
+            });
+            return;
         }
 
-        setLoading(false);
+        const willHaveAdminRole = values.roles.some(
+            (r) => r.isAdmin === true
+        );
+
+        const isRemovingOwnAdmin =
+            sessionUser.userId === user.userId &&
+            user.isAdmin &&
+            !willHaveAdminRole;
+
+        if (isRemovingOwnAdmin) {
+            setConfirmRemoveOwnAdminOpen(true);
+            return;
+        }
+
+        await executeSave();
     }
 
     return (
         <SettingsContainer>
+            <ConfirmDeleteDialog
+                open={confirmRemoveOwnAdminOpen}
+                setOpen={setConfirmRemoveOwnAdminOpen}
+                title={t("removeOwnAdminRoleConfirmTitle")}
+                dialog={
+                    <div className="space-y-2">
+                        <p>{t("removeOwnAdminRoleConfirmDescription")}</p>
+                    </div>
+                }
+                buttonText={t("removeOwnAdminRoleConfirmButton")}
+                string={t("removeOwnAdminRoleConfirmPhrase")}
+                onConfirm={executeSave}
+            />
+
             <SettingsSection>
                 <SettingsSectionHeader>
                     <SettingsSectionTitle>
@@ -150,11 +226,10 @@ export default function AccessControlsPage() {
                     <SettingsSectionForm>
                         <Form {...form}>
                             <form
-                                onSubmit={form.handleSubmit(onSubmit)}
+                                onSubmit={(e) => void handleAccessControlsSubmit(e)}
                                 className="space-y-4"
                                 id="access-controls-form"
                             >
-                                {/* IDP Type Display */}
                                 {user.type !== UserType.Internal &&
                                     user.idpType && (
                                         <div className="flex items-center space-x-2 mb-4">
@@ -171,48 +246,17 @@ export default function AccessControlsPage() {
                                         </div>
                                     )}
 
-                                <FormField
-                                    control={form.control}
-                                    name="roleId"
-                                    render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>{t("role")}</FormLabel>
-                                            <Select
-                                                onValueChange={(value) => {
-                                                    field.onChange(value);
-                                                    // If auto provision is enabled, set it to false when role changes
-                                                    if (user.idpAutoProvision) {
-                                                        form.setValue(
-                                                            "autoProvisioned",
-                                                            false
-                                                        );
-                                                    }
-                                                }}
-                                                value={field.value}
-                                            >
-                                                <FormControl>
-                                                    <SelectTrigger>
-                                                        <SelectValue
-                                                            placeholder={t(
-                                                                "accessRoleSelect"
-                                                            )}
-                                                        />
-                                                    </SelectTrigger>
-                                                </FormControl>
-                                                <SelectContent>
-                                                    {roles.map((role) => (
-                                                        <SelectItem
-                                                            key={role.roleId}
-                                                            value={role.roleId.toString()}
-                                                        >
-                                                            {role.name}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                            <FormMessage />
-                                        </FormItem>
-                                    )}
+                                <OrgRolesTagField
+                                    form={form}
+                                    name="roles"
+                                    orgId={orgId as string}
+                                    supportsMultipleRolesPerUser={
+                                        supportsMultipleRolesPerUser
+                                    }
+                                    showMultiRolePaywallMessage={
+                                        showMultiRolePaywallMessage
+                                    }
+                                    paywallMessage={paywallMessage}
                                 />
 
                                 {user.idpAutoProvision && (
@@ -251,8 +295,8 @@ export default function AccessControlsPage() {
                 <SettingsSectionFooter>
                     <Button
                         type="submit"
-                        loading={loading}
-                        disabled={loading}
+                        loading={isSaving}
+                        disabled={isSaving}
                         form="access-controls-form"
                     >
                         {t("accessControlsSubmit")}

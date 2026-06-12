@@ -5,6 +5,8 @@ import config from "@server/lib/config";
 import z from "zod";
 import logger from "@server/logger";
 import semver from "semver";
+import { getValidCertificatesForDomains } from "#dynamic/lib/certificates";
+import { lockManager } from "#dynamic/lib/lock";
 
 interface IPRange {
     start: bigint;
@@ -325,121 +327,168 @@ export function doCidrsOverlap(cidr1: string, cidr2: string): boolean {
 export async function getNextAvailableClientSubnet(
     orgId: string,
     transaction: Transaction | typeof db = db
-): Promise<string> {
-    const [org] = await transaction
-        .select()
-        .from(orgs)
-        .where(eq(orgs.orgId, orgId));
-
-    if (!org) {
-        throw new Error(`Organization with ID ${orgId} not found`);
+): Promise<{ value: string; release: () => Promise<void> }> {
+    const lockKey = `client-subnet-allocation:${orgId}`;
+    const acquired = await lockManager.acquireLockWithRetry(lockKey, 6000);
+    if (!acquired) {
+        throw new Error(`Failed to acquire lock: ${lockKey}`);
     }
+    const release = () => lockManager.releaseLock(lockKey);
 
-    if (!org.subnet) {
-        throw new Error(`Organization with ID ${orgId} has no subnet defined`);
+    try {
+        const [org] = await transaction
+            .select()
+            .from(orgs)
+            .where(eq(orgs.orgId, orgId));
+
+        if (!org) {
+            throw new Error(`Organization with ID ${orgId} not found`);
+        }
+
+        if (!org.subnet) {
+            throw new Error(
+                `Organization with ID ${orgId} has no subnet defined`
+            );
+        }
+
+        const existingAddressesSites = await transaction
+            .select({
+                address: sites.address
+            })
+            .from(sites)
+            .where(and(isNotNull(sites.address), eq(sites.orgId, orgId)));
+
+        const existingAddressesClients = await transaction
+            .select({
+                address: clients.subnet
+            })
+            .from(clients)
+            .where(and(isNotNull(clients.subnet), eq(clients.orgId, orgId)));
+
+        const addresses = [
+            ...existingAddressesSites.map(
+                (site) => `${site.address?.split("/")[0]}/32`
+            ), // we are overriding the 32 so that we pick individual addresses in the subnet of the org for the site and the client even though they are stored with the /block_size of the org
+            ...existingAddressesClients.map(
+                (client) => `${client.address.split("/")[0]}/32`
+            )
+        ].filter((address) => address !== null) as string[];
+
+        const subnet = findNextAvailableCidr(addresses, 32, org.subnet); // pick the sites address in the org
+        if (!subnet) {
+            throw new Error("No available subnets remaining in space");
+        }
+
+        return { value: subnet, release };
+    } catch (e) {
+        await release();
+        throw e;
     }
-
-    const existingAddressesSites = await transaction
-        .select({
-            address: sites.address
-        })
-        .from(sites)
-        .where(and(isNotNull(sites.address), eq(sites.orgId, orgId)));
-
-    const existingAddressesClients = await transaction
-        .select({
-            address: clients.subnet
-        })
-        .from(clients)
-        .where(and(isNotNull(clients.subnet), eq(clients.orgId, orgId)));
-
-    const addresses = [
-        ...existingAddressesSites.map(
-            (site) => `${site.address?.split("/")[0]}/32`
-        ), // we are overriding the 32 so that we pick individual addresses in the subnet of the org for the site and the client even though they are stored with the /block_size of the org
-        ...existingAddressesClients.map(
-            (client) => `${client.address.split("/")}/32`
-        )
-    ].filter((address) => address !== null) as string[];
-
-    const subnet = findNextAvailableCidr(addresses, 32, org.subnet); // pick the sites address in the org
-    if (!subnet) {
-        throw new Error("No available subnets remaining in space");
-    }
-
-    return subnet;
 }
 
 export async function getNextAvailableAliasAddress(
-    orgId: string
-): Promise<string> {
-    const [org] = await db.select().from(orgs).where(eq(orgs.orgId, orgId));
-
-    if (!org) {
-        throw new Error(`Organization with ID ${orgId} not found`);
+    orgId: string,
+    trx: Transaction | typeof db = db
+): Promise<{ value: string; release: () => Promise<void> }> {
+    const lockKey = `alias-address-allocation:${orgId}`;
+    const acquired = await lockManager.acquireLockWithRetry(lockKey, 6000);
+    if (!acquired) {
+        throw new Error(`Failed to acquire lock: ${lockKey}`);
     }
+    const release = () => lockManager.releaseLock(lockKey);
 
-    if (!org.subnet) {
-        throw new Error(`Organization with ID ${orgId} has no subnet defined`);
+    try {
+        const [org] = await trx
+            .select()
+            .from(orgs)
+            .where(eq(orgs.orgId, orgId));
+
+        if (!org) {
+            throw new Error(`Organization with ID ${orgId} not found`);
+        }
+
+        if (!org.subnet) {
+            throw new Error(
+                `Organization with ID ${orgId} has no subnet defined`
+            );
+        }
+
+        if (!org.utilitySubnet) {
+            throw new Error(
+                `Organization with ID ${orgId} has no utility subnet defined`
+            );
+        }
+
+        const existingAddresses = await trx
+            .select({
+                aliasAddress: siteResources.aliasAddress
+            })
+            .from(siteResources)
+            .where(
+                and(
+                    isNotNull(siteResources.aliasAddress),
+                    eq(siteResources.orgId, orgId)
+                )
+            );
+
+        const addresses = [
+            ...existingAddresses.map(
+                (site) => `${site.aliasAddress?.split("/")[0]}/32`
+            ),
+            // reserve a /29 for the dns server and other stuff
+            `${org.utilitySubnet.split("/")[0]}/29`
+        ].filter((address) => address !== null) as string[];
+
+        let subnet = findNextAvailableCidr(addresses, 32, org.utilitySubnet);
+        if (!subnet) {
+            throw new Error("No available subnets remaining in space");
+        }
+
+        // remove the cidr
+        subnet = subnet.split("/")[0];
+
+        return { value: subnet, release };
+    } catch (e) {
+        await release();
+        throw e;
     }
-
-    if (!org.utilitySubnet) {
-        throw new Error(
-            `Organization with ID ${orgId} has no utility subnet defined`
-        );
-    }
-
-    const existingAddresses = await db
-        .select({
-            aliasAddress: siteResources.aliasAddress
-        })
-        .from(siteResources)
-        .where(
-            and(
-                isNotNull(siteResources.aliasAddress),
-                eq(siteResources.orgId, orgId)
-            )
-        );
-
-    const addresses = [
-        ...existingAddresses.map(
-            (site) => `${site.aliasAddress?.split("/")[0]}/32`
-        ),
-        // reserve a /29 for the dns server and other stuff
-        `${org.utilitySubnet.split("/")[0]}/29`
-    ].filter((address) => address !== null) as string[];
-
-    let subnet = findNextAvailableCidr(addresses, 32, org.utilitySubnet);
-    if (!subnet) {
-        throw new Error("No available subnets remaining in space");
-    }
-
-    // remove the cidr
-    subnet = subnet.split("/")[0];
-
-    return subnet;
 }
 
-export async function getNextAvailableOrgSubnet(): Promise<string> {
-    const existingAddresses = await db
-        .select({
-            subnet: orgs.subnet
-        })
-        .from(orgs)
-        .where(isNotNull(orgs.subnet));
-
-    const addresses = existingAddresses.map((org) => org.subnet!);
-
-    const subnet = findNextAvailableCidr(
-        addresses,
-        config.getRawConfig().orgs.block_size,
-        config.getRawConfig().orgs.subnet_group
-    );
-    if (!subnet) {
-        throw new Error("No available subnets remaining in space");
+export async function getNextAvailableOrgSubnet(): Promise<{
+    value: string;
+    release: () => Promise<void>;
+}> {
+    const lockKey = "org-subnet-allocation";
+    const acquired = await lockManager.acquireLockWithRetry(lockKey, 6000);
+    if (!acquired) {
+        throw new Error(`Failed to acquire lock: ${lockKey}`);
     }
+    const release = () => lockManager.releaseLock(lockKey);
 
-    return subnet;
+    try {
+        const existingAddresses = await db
+            .select({
+                subnet: orgs.subnet
+            })
+            .from(orgs)
+            .where(isNotNull(orgs.subnet));
+
+        const addresses = existingAddresses.map((org) => org.subnet!);
+
+        const subnet = findNextAvailableCidr(
+            addresses,
+            config.getRawConfig().orgs.block_size,
+            config.getRawConfig().orgs.subnet_group
+        );
+        if (!subnet) {
+            throw new Error("No available subnets remaining in space");
+        }
+
+        return { value: subnet, release };
+    } catch (e) {
+        await release();
+        throw e;
+    }
 }
 
 export function generateRemoteSubnets(
@@ -447,13 +496,15 @@ export function generateRemoteSubnets(
 ): string[] {
     const remoteSubnets = allSiteResources
         .filter((sr) => {
+            if (!sr.destination) return false;
+
             if (sr.mode === "cidr") {
                 // check if its a valid CIDR using zod
                 const cidrSchema = z.union([z.cidrv4(), z.cidrv6()]);
                 const parseResult = cidrSchema.safeParse(sr.destination);
                 return parseResult.success;
             }
-            if (sr.mode === "host") {
+            if (sr.mode === "host" || sr.mode === "ssh") {
                 // check if its a valid IP using zod
                 const ipSchema = z.union([z.ipv4(), z.ipv6()]);
                 const parseResult = ipSchema.safeParse(sr.destination);
@@ -463,12 +514,12 @@ export function generateRemoteSubnets(
         })
         .map((sr) => {
             if (sr.mode === "cidr") return sr.destination;
-            if (sr.mode === "host") {
+            if (sr.mode === "host" || sr.mode === "ssh") {
                 return `${sr.destination}/32`;
             }
             return ""; // This should never be reached due to filtering, but satisfies TypeScript
         })
-        .filter((subnet) => subnet !== ""); // Remove empty strings just to be safe
+        .filter((subnet): subnet is string => subnet !== "" && subnet !== null); // Remove invalid values just to be safe
     // remove duplicates
     return Array.from(new Set(remoteSubnets));
 }
@@ -477,9 +528,14 @@ export type Alias = { alias: string | null; aliasAddress: string | null };
 
 export function generateAliasConfig(allSiteResources: SiteResource[]): Alias[] {
     return allSiteResources
-        .filter((sr) => sr.alias && sr.aliasAddress && sr.mode == "host")
+        .filter(
+            (sr) =>
+                sr.aliasAddress &&
+                ((sr.alias && (sr.mode == "host" || sr.mode == "ssh")) ||
+                    (sr.fullDomain && sr.mode == "http"))
+        )
         .map((sr) => ({
-            alias: sr.alias,
+            alias: sr.alias || sr.fullDomain,
             aliasAddress: sr.aliasAddress
         }));
 }
@@ -521,6 +577,10 @@ export function generateSubnetProxyTargets(
             continue;
         }
 
+        if (!siteResource.destination) {
+            continue;
+        }
+
         const clientPrefix = `${clientSite.subnet.split("/")[0]}/32`;
         const portRange = [
             ...parsePortRangeString(siteResource.tcpPortRangeString, "tcp"),
@@ -528,7 +588,7 @@ export function generateSubnetProxyTargets(
         ];
         const disableIcmp = siteResource.disableIcmp ?? false;
 
-        if (siteResource.mode == "host") {
+        if (siteResource.mode == "host" || siteResource.mode == "ssh") {
             let destination = siteResource.destination;
             // check if this is a valid ip
             const ipSchema = z.union([z.ipv4(), z.ipv6()]);
@@ -548,7 +608,7 @@ export function generateSubnetProxyTargets(
                 targets.push({
                     sourcePrefix: clientPrefix,
                     destPrefix: `${siteResource.aliasAddress}/32`,
-                    rewriteTo: destination,
+                    rewriteTo: destination!,
                     portRange,
                     disableIcmp
                 });
@@ -556,7 +616,7 @@ export function generateSubnetProxyTargets(
         } else if (siteResource.mode == "cidr") {
             targets.push({
                 sourcePrefix: clientPrefix,
-                destPrefix: siteResource.destination,
+                destPrefix: siteResource.destination!,
                 portRange,
                 disableIcmp
             });
@@ -569,6 +629,208 @@ export function generateSubnetProxyTargets(
     // );
 
     return targets;
+}
+
+export type SubnetProxyTargetV2 = {
+    sourcePrefixes: string[]; // must be cidrs
+    destPrefix: string; // must be a cidr
+    disableIcmp?: boolean;
+    rewriteTo?: string; // must be a cidr
+    portRange?: {
+        min: number;
+        max: number;
+        protocol: "tcp" | "udp";
+    }[];
+    resourceId?: number;
+    protocol?: "http" | "https"; // if set, this target only applies to the specified protocol
+    httpTargets?: HTTPTarget[];
+    tlsCert?: string;
+    tlsKey?: string;
+};
+
+export type HTTPTarget = {
+    destAddr: string; // must be an IP or hostname
+    destPort: number;
+    scheme: "http" | "https";
+};
+
+export async function generateSubnetProxyTargetV2(
+    siteResource: SiteResource,
+    clients: {
+        clientId: number;
+        pubKey: string | null;
+        subnet: string | null;
+    }[]
+): Promise<SubnetProxyTargetV2[] | undefined> {
+    if (clients.length === 0) {
+        logger.debug(
+            `No clients have access to site resource ${siteResource.siteResourceId}, skipping target generation.`
+        );
+        return;
+    }
+
+    if (!siteResource.destination) {
+        // ssh can have no destination
+        return;
+    }
+
+    const targets: SubnetProxyTargetV2[] = [];
+
+    const portRange = [
+        ...parsePortRangeString(siteResource.tcpPortRangeString, "tcp"),
+        ...parsePortRangeString(siteResource.udpPortRangeString, "udp")
+    ];
+    const disableIcmp = siteResource.disableIcmp ?? false;
+
+    if (siteResource.mode == "host" || siteResource.mode == "ssh") {
+        let destination = siteResource.destination;
+        // check if this is a valid ip
+        const ipSchema = z.union([z.ipv4(), z.ipv6()]);
+        if (ipSchema.safeParse(destination).success) {
+            destination = `${destination}/32`;
+
+            targets.push({
+                sourcePrefixes: [],
+                destPrefix: destination,
+                portRange,
+                disableIcmp,
+                resourceId: siteResource.siteResourceId
+            });
+        }
+
+        if (siteResource.alias && siteResource.aliasAddress) {
+            // also push a match for the alias address
+            targets.push({
+                sourcePrefixes: [],
+                destPrefix: `${siteResource.aliasAddress}/32`,
+                rewriteTo: destination!,
+                portRange,
+                disableIcmp,
+                resourceId: siteResource.siteResourceId
+            });
+        }
+    } else if (siteResource.mode == "cidr") {
+        targets.push({
+            sourcePrefixes: [],
+            destPrefix: siteResource.destination!,
+            portRange,
+            disableIcmp,
+            resourceId: siteResource.siteResourceId
+        });
+    } else if (siteResource.mode == "http") {
+        let destination = siteResource.destination;
+        // check if this is a valid ip
+        const ipSchema = z.union([z.ipv4(), z.ipv6()]);
+        if (ipSchema.safeParse(destination).success) {
+            destination = `${destination}/32`;
+        }
+
+        if (
+            !siteResource.aliasAddress ||
+            !siteResource.destinationPort ||
+            !siteResource.scheme ||
+            !siteResource.fullDomain
+        ) {
+            logger.debug(
+                `Site resource ${siteResource.siteResourceId} is in HTTP mode but is missing alias or alias address or destinationPort or scheme, skipping alias target generation.`
+            );
+            return;
+        }
+        // also push a match for the alias address
+        let tlsCert: string | undefined;
+        let tlsKey: string | undefined;
+
+        if (siteResource.ssl && siteResource.fullDomain) {
+            try {
+                const certs = await getValidCertificatesForDomains(
+                    new Set([siteResource.fullDomain]),
+                    true
+                );
+                if (certs.length > 0 && certs[0].certFile && certs[0].keyFile) {
+                    tlsCert = certs[0].certFile;
+                    tlsKey = certs[0].keyFile;
+                } else {
+                    logger.warn(
+                        `No valid certificate found for SSL site resource ${siteResource.siteResourceId} with domain ${siteResource.fullDomain}`
+                    );
+                }
+            } catch (err) {
+                logger.error(
+                    `Failed to retrieve certificate for site resource ${siteResource.siteResourceId} domain ${siteResource.fullDomain}: ${err}`
+                );
+            }
+        }
+
+        targets.push({
+            sourcePrefixes: [],
+            destPrefix: `${siteResource.aliasAddress}/32`,
+            portRange,
+            disableIcmp,
+            resourceId: siteResource.siteResourceId,
+            protocol: siteResource.ssl ? "https" : "http",
+            httpTargets: [
+                {
+                    destAddr: siteResource.destination!,
+                    destPort: siteResource.destinationPort,
+                    scheme: siteResource.scheme
+                }
+            ],
+            ...(tlsCert && tlsKey ? { tlsCert, tlsKey } : {})
+        });
+    }
+
+    if (targets.length == 0) {
+        return;
+    }
+
+    for (const target of targets) {
+        for (const clientSite of clients) {
+            if (!clientSite.subnet) {
+                logger.debug(
+                    `Client ${clientSite.clientId} has no subnet, skipping for site resource ${siteResource.siteResourceId}.`
+                );
+                continue;
+            }
+
+            const clientPrefix = `${clientSite.subnet.split("/")[0]}/32`;
+
+            // add client prefix to source prefixes
+            target.sourcePrefixes.push(clientPrefix);
+        }
+    }
+
+    // print a nice representation of the targets
+    // logger.debug(
+    //     `Generated subnet proxy targets for: ${JSON.stringify(targets, null, 2)}`
+    // );
+
+    return targets;
+}
+
+/**
+ * Converts a SubnetProxyTargetV2 to an array of SubnetProxyTarget (v1)
+ * by expanding each source prefix into its own target entry.
+ * @param targetV2 - The v2 target to convert
+ * @returns Array of v1 SubnetProxyTarget objects
+ */
+export function convertSubnetProxyTargetsV2ToV1(
+    targetsV2: SubnetProxyTargetV2[]
+): SubnetProxyTarget[] {
+    return targetsV2.flatMap((targetV2) =>
+        targetV2.sourcePrefixes.map((sourcePrefix) => ({
+            sourcePrefix,
+            destPrefix: targetV2.destPrefix,
+            ...(targetV2.disableIcmp !== undefined && {
+                disableIcmp: targetV2.disableIcmp
+            }),
+            ...(targetV2.rewriteTo !== undefined && {
+                rewriteTo: targetV2.rewriteTo
+            }),
+            ...(targetV2.portRange !== undefined && {
+                portRange: targetV2.portRange
+            })
+        }))
+    );
 }
 
 // Custom schema for validating port range strings
@@ -643,7 +905,13 @@ export const portRangeStringSchema = z
             message:
                 'Port range must be "*" for all ports, or a comma-separated list of ports and ranges (e.g., "80,443,8000-9000"). Ports must be between 1 and 65535, and ranges must have start <= end.'
         }
-    );
+    )
+    .openapi({
+        type: "string",
+        description:
+            'Port range string. Use "*" for all ports, a comma-separated list of ports, or ranges (e.g., "80,443,8000-9000"). Ports must be between 1 and 65535.',
+        example: "80,443,8000-9000"
+    });
 
 /**
  * Parses a port range string into an array of port range objects

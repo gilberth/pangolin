@@ -26,7 +26,6 @@ export function generateObfuscatedWireGuardConfig(options?: {
     address?: string | null;
     endpoint?: string | null;
     listenPort?: number | string | null;
-    publicKey?: string | null;
 }): string {
     const obfuscate = (
         value: string | null | undefined,
@@ -54,7 +53,6 @@ export function generateObfuscatedWireGuardConfig(options?: {
             ? options.listenPort
             : options.listenPort
         : 51820;
-    const publicKey = obfuscateKey(options?.publicKey);
 
     return `[Interface]
 Address = ${subnetWithCidr}
@@ -62,7 +60,7 @@ ListenPort = 51820
 PrivateKey = ${obfuscateKey(null)}
 
 [Peer]
-PublicKey = ${publicKey}
+PublicKey = ${obfuscateKey(null)}
 AllowedIPs = ${address}/32
 Endpoint = ${endpoint}:${listenPort}
 PersistentKeepalive = 5`;

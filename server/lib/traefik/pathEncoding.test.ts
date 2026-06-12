@@ -24,7 +24,7 @@ function encodePath(path: string | null | undefined): string {
 
 /**
  * Exact replica of the OLD key computation from upstream main.
- * Uses sanitize() for paths — this is what had the collision bug.
+ * Uses sanitize() for paths - this is what had the collision bug.
  */
 function oldKeyComputation(
     resourceId: number,
@@ -44,7 +44,7 @@ function oldKeyComputation(
 
 /**
  * Replica of the NEW key computation from our fix.
- * Uses encodePath() for paths — collision-free.
+ * Uses encodePath() for paths - collision-free.
  */
 function newKeyComputation(
     resourceId: number,
@@ -195,11 +195,11 @@ function runTests() {
             true,
             "/a/b and /a-b MUST have different keys"
         );
-        console.log("  PASS: collision fix — /a/b vs /a-b have different keys");
+        console.log("  PASS: collision fix - /a/b vs /a-b have different keys");
         passed++;
     }
 
-    // Test 9: demonstrate the old bug — old code maps /a/b and /a-b to same key
+    // Test 9: demonstrate the old bug - old code maps /a/b and /a-b to same key
     {
         const oldKeyAB = oldKeyComputation(1, "/a/b", "prefix", null, null);
         const oldKeyDash = oldKeyComputation(1, "/a-b", "prefix", null, null);
@@ -208,11 +208,11 @@ function runTests() {
             oldKeyDash,
             "old code MUST have this collision (confirms the bug exists)"
         );
-        console.log("  PASS: confirmed old code bug — /a/b and /a-b collided");
+        console.log("  PASS: confirmed old code bug - /a/b and /a-b collided");
         passed++;
     }
 
-    // Test 10: /api/v1 and /api-v1 — old code collision, new code fixes it
+    // Test 10: /api/v1 and /api-v1 - old code collision, new code fixes it
     {
         const oldKey1 = oldKeyComputation(1, "/api/v1", "prefix", null, null);
         const oldKey2 = oldKeyComputation(1, "/api-v1", "prefix", null, null);
@@ -229,11 +229,11 @@ function runTests() {
             true,
             "new code must separate /api/v1 and /api-v1"
         );
-        console.log("  PASS: collision fix — /api/v1 vs /api-v1");
+        console.log("  PASS: collision fix - /api/v1 vs /api-v1");
         passed++;
     }
 
-    // Test 11: /app.v2 and /app/v2 and /app-v2 — three-way collision fixed
+    // Test 11: /app.v2 and /app/v2 and /app-v2 - three-way collision fixed
     {
         const a = newKeyComputation(1, "/app.v2", "prefix", null, null);
         const b = newKeyComputation(1, "/app/v2", "prefix", null, null);
@@ -245,14 +245,14 @@ function runTests() {
             "three paths must produce three unique keys"
         );
         console.log(
-            "  PASS: collision fix — three-way /app.v2, /app/v2, /app-v2"
+            "  PASS: collision fix - three-way /app.v2, /app/v2, /app-v2"
         );
         passed++;
     }
 
     // ── Edge cases ───────────────────────────────────────────────────
 
-    // Test 12: same path in different resources — always separate
+    // Test 12: same path in different resources - always separate
     {
         const key1 = newKeyComputation(1, "/api", "prefix", null, null);
         const key2 = newKeyComputation(2, "/api", "prefix", null, null);
@@ -261,11 +261,11 @@ function runTests() {
             true,
             "different resources with same path must have different keys"
         );
-        console.log("  PASS: edge case — same path, different resources");
+        console.log("  PASS: edge case - same path, different resources");
         passed++;
     }
 
-    // Test 13: same resource, different pathMatchType — separate keys
+    // Test 13: same resource, different pathMatchType - separate keys
     {
         const exact = newKeyComputation(1, "/api", "exact", null, null);
         const prefix = newKeyComputation(1, "/api", "prefix", null, null);
@@ -274,11 +274,11 @@ function runTests() {
             true,
             "exact vs prefix must have different keys"
         );
-        console.log("  PASS: edge case — same path, different match types");
+        console.log("  PASS: edge case - same path, different match types");
         passed++;
     }
 
-    // Test 14: same resource and path, different rewrite config — separate keys
+    // Test 14: same resource and path, different rewrite config - separate keys
     {
         const noRewrite = newKeyComputation(1, "/api", "prefix", null, null);
         const withRewrite = newKeyComputation(
@@ -293,7 +293,7 @@ function runTests() {
             true,
             "with vs without rewrite must have different keys"
         );
-        console.log("  PASS: edge case — same path, different rewrite config");
+        console.log("  PASS: edge case - same path, different rewrite config");
         passed++;
     }
 
@@ -308,7 +308,7 @@ function runTests() {
             paths.length,
             "special URL chars must produce unique keys"
         );
-        console.log("  PASS: edge case — special URL characters in paths");
+        console.log("  PASS: edge case - special URL characters in paths");
         passed++;
     }
 

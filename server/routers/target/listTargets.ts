@@ -11,7 +11,7 @@ import logger from "@server/logger";
 import { OpenAPITags, registry } from "@server/openApi";
 
 const listTargetsParamsSchema = z.strictObject({
-    resourceId: z.string().transform(Number).pipe(z.int().positive())
+    resourceId: z.coerce.number().int().positive()
 });
 
 const listTargetsSchema = z.object({
@@ -34,12 +34,14 @@ function queryTargets(resourceId: number) {
         .select({
             targetId: targets.targetId,
             ip: targets.ip,
+            mode: targets.mode,
             method: targets.method,
             port: targets.port,
             enabled: targets.enabled,
             resourceId: targets.resourceId,
             siteId: targets.siteId,
             siteType: sites.type,
+            siteName: sites.name,
             hcEnabled: targetHealthCheck.hcEnabled,
             hcPath: targetHealthCheck.hcPath,
             hcScheme: targetHealthCheck.hcScheme,
@@ -55,6 +57,8 @@ function queryTargets(resourceId: number) {
             hcStatus: targetHealthCheck.hcStatus,
             hcHealth: targetHealthCheck.hcHealth,
             hcTlsServerName: targetHealthCheck.hcTlsServerName,
+            hcHealthyThreshold: targetHealthCheck.hcHealthyThreshold,
+            hcUnhealthyThreshold: targetHealthCheck.hcUnhealthyThreshold,
             path: targets.path,
             pathMatchType: targets.pathMatchType,
             rewritePath: targets.rewritePath,
@@ -93,7 +97,22 @@ registry.registerPath({
         params: listTargetsParamsSchema,
         query: listTargetsSchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function listTargets(

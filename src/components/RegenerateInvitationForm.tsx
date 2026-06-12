@@ -32,15 +32,15 @@ type RegenerateInvitationFormProps = {
     invitation: {
         id: string;
         email: string;
-        roleId: number;
-        role: string;
+        roleIds: number[];
+        roleLabels: string[];
     } | null;
     onRegenerate: (updatedInvitation: {
         id: string;
         email: string;
         expiresAt: string;
-        role: string;
-        roleId: number;
+        roleLabels: string[];
+        roleIds: number[];
     }) => void;
 };
 
@@ -94,7 +94,7 @@ export default function RegenerateInvitationForm({
         try {
             const res = await api.post(`/org/${org.org.orgId}/create-invite`, {
                 email: invitation.email,
-                roleId: invitation.roleId,
+                roleIds: invitation.roleIds,
                 validHours,
                 sendEmail,
                 regenerate: true
@@ -127,9 +127,11 @@ export default function RegenerateInvitationForm({
                 onRegenerate({
                     id: invitation.id,
                     email: invitation.email,
-                    expiresAt: res.data.data.expiresAt,
-                    role: invitation.role,
-                    roleId: invitation.roleId
+                    expiresAt: new Date(
+                        res.data.data.expiresAt
+                    ).toISOString(),
+                    roleLabels: invitation.roleLabels,
+                    roleIds: invitation.roleIds
                 });
             }
         } catch (error: any) {

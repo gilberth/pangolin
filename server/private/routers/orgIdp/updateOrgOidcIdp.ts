@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -13,6 +13,7 @@
 
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
+import { createApiResponseSchema } from "@server/lib/openapi/createApiResponseSchema";
 import { db, idpOrg } from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -26,7 +27,6 @@ import { encrypt } from "@server/lib/crypto";
 import config from "@server/lib/config";
 import { isSubscribed } from "#private/lib/isSubscribed";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
-import privateConfig from "#private/lib/config";
 import { build } from "@server/build";
 
 const paramsSchema = z
@@ -48,12 +48,17 @@ const bodySchema = z.strictObject({
     scopes: z.string().optional(),
     autoProvision: z.boolean().optional(),
     roleMapping: z.string().optional(),
+    orgMapping: z.string().nullish(),
     tags: z.string().optional()
 });
 
 export type UpdateOrgIdpResponse = {
     idpId: number;
 };
+const UpdateOrgIdpResponseDataSchema = z.object({
+    idpId: z.number()
+});
+
 
 registry.registerPath({
     method: "post",
@@ -70,7 +75,16 @@ registry.registerPath({
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: createApiResponseSchema(UpdateOrgIdpResponseDataSchema)
+                }
+            }
+        }
+    }
 });
 
 export async function updateOrgOidcIdp(
@@ -99,18 +113,6 @@ export async function updateOrgOidcIdp(
             );
         }
 
-        if (
-            privateConfig.getRawPrivateConfig().app.identity_provider_mode !==
-            "org"
-        ) {
-            return next(
-                createHttpError(
-                    HttpCode.BAD_REQUEST,
-                    "Organization-specific IdP creation is not allowed in the current identity provider mode. Set app.identity_provider_mode to 'org' in the private configuration to enable this feature."
-                )
-            );
-        }
-
         const { idpId, orgId } = parsedParams.data;
         const {
             clientId,
@@ -123,6 +125,7 @@ export async function updateOrgOidcIdp(
             namePath,
             name,
             roleMapping,
+            orgMapping,
             tags
         } = parsedBody.data;
 
@@ -218,13 +221,20 @@ export async function updateOrgOidcIdp(
                     .where(eq(idpOidcConfig.idpId, idpId));
             }
 
+            const idpOrgPolicyPatch: {
+                roleMapping?: string;
+                orgMapping?: string | null;
+            } = {};
             if (roleMapping !== undefined) {
-                // Update IdP-org policy
+                idpOrgPolicyPatch.roleMapping = roleMapping;
+            }
+            if (orgMapping !== undefined) {
+                idpOrgPolicyPatch.orgMapping = orgMapping;
+            }
+            if (Object.keys(idpOrgPolicyPatch).length > 0) {
                 await trx
                     .update(idpOrg)
-                    .set({
-                        roleMapping
-                    })
+                    .set(idpOrgPolicyPatch)
                     .where(
                         and(eq(idpOrg.idpId, idpId), eq(idpOrg.orgId, orgId))
                     );

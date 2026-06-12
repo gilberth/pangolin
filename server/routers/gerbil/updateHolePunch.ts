@@ -11,7 +11,7 @@ import {
     ExitNode
 } from "@server/db";
 import { db } from "@server/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
 import logger from "@server/logger";
@@ -185,16 +185,20 @@ export async function updateAndGenerateEndpointDestinations(
         const sitesOnExitNode = await db
             .select({
                 siteId: sites.siteId,
+                newtId: newts.newtId,
                 subnet: sites.subnet,
                 listenPort: sites.listenPort,
                 publicKey: sites.publicKey,
-                endpoint: clientSitesAssociationsCache.endpoint
+                endpoint: clientSitesAssociationsCache.endpoint,
+                isRelayed: clientSitesAssociationsCache.isRelayed,
+                isJitMode: clientSitesAssociationsCache.isJitMode
             })
             .from(sites)
             .innerJoin(
                 clientSitesAssociationsCache,
                 eq(sites.siteId, clientSitesAssociationsCache.siteId)
             )
+            .innerJoin(newts, eq(sites.siteId, newts.siteId))
             .where(
                 and(
                     eq(sites.exitNodeId, exitNode.exitNodeId),
@@ -202,24 +206,36 @@ export async function updateAndGenerateEndpointDestinations(
                 )
             );
 
-        // Update clientSites for each site on this exit node
+        // Format the endpoint properly for both IPv4 and IPv6
+        const formattedEndpoint = formatEndpoint(ip, port);
+
+        // Determine which rows actually need updating and whether the endpoint
+        // (as opposed to only the publicKey) changed for any of them.
+        const siteIdsToUpdate: number[] = [];
+        const sitesWithNewtsToUpdate: { siteId: number; newtId: string }[] = [];
+        let endpointChanged = false;
         for (const site of sitesOnExitNode) {
-            // logger.debug(
-            //     `Updating site ${site.siteId} on exit node ${exitNode.exitNodeId}`
-            // );
-
-            // Format the endpoint properly for both IPv4 and IPv6
-            const formattedEndpoint = formatEndpoint(ip, port);
-
-            // if the public key or endpoint has changed, update it otherwise continue
             if (
                 site.endpoint === formattedEndpoint &&
                 site.publicKey === publicKey
             ) {
                 continue;
             }
+            siteIdsToUpdate.push(site.siteId);
+            if (!site.isRelayed && !site.isJitMode) {
+                sitesWithNewtsToUpdate.push({
+                    siteId: site.siteId,
+                    newtId: site.newtId
+                });
+            }
+            if (site.endpoint !== formattedEndpoint) {
+                endpointChanged = true;
+            }
+        }
 
-            const [updatedClientSitesAssociationsCache] = await db
+        if (siteIdsToUpdate.length > 0) {
+            // Single bulk update for all affected rows for this client on this exit node
+            await db
                 .update(clientSitesAssociationsCache)
                 .set({
                     endpoint: formattedEndpoint,
@@ -228,24 +244,30 @@ export async function updateAndGenerateEndpointDestinations(
                 .where(
                     and(
                         eq(clientSitesAssociationsCache.clientId, olm.clientId),
-                        eq(clientSitesAssociationsCache.siteId, site.siteId)
+                        inArray(
+                            clientSitesAssociationsCache.siteId,
+                            siteIdsToUpdate
+                        )
                     )
-                )
-                .returning();
+                );
 
-            if (
-                updatedClientSitesAssociationsCache.endpoint !==
-                    site.endpoint && // this is the endpoint from the join table not the site
-                updatedClient.pubKey === publicKey // only trigger if the client's public key matches the current public key which means it has registered so we dont prematurely send the update
-            ) {
+            // Only trigger downstream peer updates once per hole punch: the
+            // endpoint is the same for every site on this exit node, and
+            // handleClientEndpointChange already fans out to all connected
+            // sites for this client.
+            if (endpointChanged && updatedClient.pubKey === publicKey) {
                 logger.info(
-                    `ClientSitesAssociationsCache for client ${olm.clientId} and site ${site.siteId} endpoint changed from ${site.endpoint} to ${updatedClientSitesAssociationsCache.endpoint}`
+                    `ClientSitesAssociationsCache for client ${olm.clientId} endpoint changed to ${formattedEndpoint} for ${siteIdsToUpdate.length} site(s) on exit node ${exitNode.exitNodeId}`
                 );
-                // Handle any additional logic for endpoint change
                 handleClientEndpointChange(
+                    sitesWithNewtsToUpdate,
                     olm.clientId,
-                    updatedClientSitesAssociationsCache.endpoint!
-                );
+                    formattedEndpoint
+                ).catch((error) => {
+                    logger.error(
+                        `Failed to handle client endpoint change for client ${olm.clientId}: ${error}`
+                    );
+                });
             }
         }
 
@@ -336,59 +358,14 @@ export async function updateAndGenerateEndpointDestinations(
                 `Site ${newt.siteId} endpoint changed from ${site.endpoint} to ${updatedSite.endpoint}`
             );
             // Handle any additional logic for endpoint change
-            handleSiteEndpointChange(newt.siteId, updatedSite.endpoint!);
+            handleSiteEndpointChange(newt.siteId, updatedSite.endpoint!).catch(
+                (error) => {
+                    logger.error(
+                        `Failed to handle site endpoint change for site ${newt.siteId}: ${error}`
+                    );
+                }
+            );
         }
-
-        // if (!updatedSite || !updatedSite.subnet) {
-        //     logger.warn(`Site not found: ${newt.siteId}`);
-        //     throw new Error("Site not found");
-        // }
-
-        // Find all clients that connect to this site
-        // const sitesClientPairs = await db
-        //     .select()
-        //     .from(clientSites)
-        //     .where(eq(clientSites.siteId, newt.siteId));
-
-        // THE NEWT IS NOT SENDING RAW WG TO THE GERBIL SO IDK IF WE REALLY NEED THIS - REMOVING
-        // Get client details for each client
-        // for (const pair of sitesClientPairs) {
-        //     const [client] = await db
-        //         .select()
-        //         .from(clients)
-        //         .where(eq(clients.clientId, pair.clientId));
-
-        //     if (client && client.endpoint) {
-        //         const [host, portStr] = client.endpoint.split(':');
-        //         if (host && portStr) {
-        //             destinations.push({
-        //                 destinationIP: host,
-        //                 destinationPort: parseInt(portStr, 10)
-        //             });
-        //         }
-        //     }
-        // }
-
-        // If this is a newt/site, also add other sites in the same org
-        //     if (updatedSite.orgId) {
-        //         const orgSites = await db
-        //             .select()
-        //             .from(sites)
-        //             .where(eq(sites.orgId, updatedSite.orgId));
-
-        //         for (const site of orgSites) {
-        //             // Don't add the current site to the destinations
-        //             if (site.siteId !== currentSiteId && site.subnet && site.endpoint && site.listenPort) {
-        //                 const [host, portStr] = site.endpoint.split(':');
-        //                 if (host && portStr) {
-        //                     destinations.push({
-        //                         destinationIP: host,
-        //                         destinationPort: site.listenPort
-        //                     });
-        //                 }
-        //             }
-        //         }
-        //     }
     }
     return destinations;
 }
@@ -408,12 +385,14 @@ async function handleSiteEndpointChange(siteId: number, newEndpoint: string) {
             return;
         }
 
-        // Get all non-relayed clients connected to this site
+        // Get all non-relayed and not jit clients connected to this site
         const connectedClients = await db
             .select({
+                online: clients.online,
                 clientId: clients.clientId,
                 olmId: olms.olmId,
-                isRelayed: clientSitesAssociationsCache.isRelayed
+                isRelayed: clientSitesAssociationsCache.isRelayed,
+                isJitMode: clientSitesAssociationsCache.isJitMode
             })
             .from(clientSitesAssociationsCache)
             .innerJoin(
@@ -423,32 +402,36 @@ async function handleSiteEndpointChange(siteId: number, newEndpoint: string) {
             .innerJoin(olms, eq(olms.clientId, clients.clientId))
             .where(
                 and(
+                    eq(clients.online, true), // the client has to be online or it does not matter...
                     eq(clientSitesAssociationsCache.siteId, siteId),
-                    eq(clientSitesAssociationsCache.isRelayed, false)
+                    eq(clientSitesAssociationsCache.isRelayed, false),
+                    eq(clientSitesAssociationsCache.isJitMode, false)
                 )
             );
 
-        // Update each non-relayed client with the new site endpoint
-        for (const client of connectedClients) {
-            try {
-                await updateOlmPeer(
-                    client.clientId,
-                    {
-                        siteId: siteId,
-                        publicKey: site.publicKey,
-                        endpoint: newEndpoint
-                    },
-                    client.olmId
-                );
-                logger.debug(
-                    `Updated client ${client.clientId} with new site ${siteId} endpoint: ${newEndpoint}`
-                );
-            } catch (error) {
-                logger.error(
-                    `Failed to update client ${client.clientId} with new site endpoint: ${error}`
-                );
-            }
-        }
+        // Update each non-relayed client with the new site endpoint (in parallel)
+        await Promise.allSettled(
+            connectedClients.map(async (client) => {
+                try {
+                    await updateOlmPeer(
+                        client.clientId,
+                        {
+                            siteId: siteId,
+                            publicKey: site.publicKey!,
+                            endpoint: newEndpoint
+                        },
+                        client.olmId
+                    );
+                    logger.debug(
+                        `Updated client ${client.clientId} with new site ${siteId} endpoint: ${newEndpoint}`
+                    );
+                } catch (error) {
+                    logger.error(
+                        `Failed to update client ${client.clientId} with new site endpoint: ${error}`
+                    );
+                }
+            })
+        );
     } catch (error) {
         logger.error(
             `Error handling site endpoint change for site ${siteId}: ${error}`
@@ -457,10 +440,11 @@ async function handleSiteEndpointChange(siteId: number, newEndpoint: string) {
 }
 
 async function handleClientEndpointChange(
+    sitesWithNewtsToUpdate: { siteId: number; newtId: string }[],
     clientId: number,
     newEndpoint: string
 ) {
-    // Alert all sites connected to this client that the endpoint has changed (only if NOT relayed)
+    // Alert all sites connected to this client that the endpoint has changed (only if NOT relayed and NOT JIT MODE)
     try {
         // Get client details
         const [client] = await db
@@ -474,58 +458,42 @@ async function handleClientEndpointChange(
             return;
         }
 
-        // Get all non-relayed sites connected to this client
-        const connectedSites = await db
-            .select({
-                siteId: sites.siteId,
-                newtId: newts.newtId,
-                isRelayed: clientSitesAssociationsCache.isRelayed,
-                subnet: clients.subnet
-            })
-            .from(clientSitesAssociationsCache)
-            .innerJoin(
-                sites,
-                eq(clientSitesAssociationsCache.siteId, sites.siteId)
-            )
-            .innerJoin(newts, eq(newts.siteId, sites.siteId))
-            .innerJoin(
-                clients,
-                eq(clientSitesAssociationsCache.clientId, clients.clientId)
-            )
-            .where(
-                and(
-                    eq(clientSitesAssociationsCache.clientId, clientId),
-                    eq(clientSitesAssociationsCache.isRelayed, false)
-                )
+        if (sitesWithNewtsToUpdate.length > 250) {
+            logger.warn(
+                `Client ${clientId} has ${sitesWithNewtsToUpdate.length} connected sites so the client will be in jit mode anyway, skipping endpoint updates`
             );
+            return;
+        }
 
-        // Update each non-relayed site with the new client endpoint
-        for (const siteData of connectedSites) {
-            try {
-                if (!siteData.subnet) {
+        // Update each non-relayed site with the new client endpoint (in parallel)
+        await Promise.allSettled(
+            sitesWithNewtsToUpdate.map(async ({ siteId, newtId }) => {
+                if (!client.pubKey) {
                     logger.warn(
-                        `Client ${clientId} has no subnet, skipping update for site ${siteData.siteId}`
+                        `Client ${clientId} has no public key, skipping update for site ${siteId}`
                     );
-                    continue;
+                    return;
                 }
 
-                await updateNewtPeer(
-                    siteData.siteId,
-                    client.pubKey,
-                    {
-                        endpoint: newEndpoint
-                    },
-                    siteData.newtId
-                );
-                logger.debug(
-                    `Updated site ${siteData.siteId} with new client ${clientId} endpoint: ${newEndpoint}`
-                );
-            } catch (error) {
-                logger.error(
-                    `Failed to update site ${siteData.siteId} with new client endpoint: ${error}`
-                );
-            }
-        }
+                try {
+                    await updateNewtPeer(
+                        siteId,
+                        client.pubKey,
+                        {
+                            endpoint: newEndpoint
+                        },
+                        newtId
+                    );
+                    logger.debug(
+                        `Updated site ${siteId} with new client ${clientId} endpoint: ${newEndpoint}`
+                    );
+                } catch (error) {
+                    logger.error(
+                        `Failed to update site ${siteId} with new client endpoint: ${error}`
+                    );
+                }
+            })
+        );
     } catch (error) {
         logger.error(
             `Error handling client endpoint change for client ${clientId}: ${error}`

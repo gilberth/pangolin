@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -12,7 +12,11 @@
  */
 
 export * from "./createOrgOidcIdp";
+export * from "./importOrgIdp";
 export * from "./getOrgIdp";
 export * from "./listOrgIdps";
+export * from "./listUserAdminOrgIdps";
 export * from "./updateOrgOidcIdp";
 export * from "./deleteOrgIdp";
+export * from "./unassociateOrgIdp";
+export * from "./requireOrgIdentityProviderMode";

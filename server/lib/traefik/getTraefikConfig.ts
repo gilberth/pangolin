@@ -44,7 +44,8 @@ export async function getTraefikConfig(
     filterOutNamespaceDomains = false, // UNUSED BUT USED IN PRIVATE
     generateLoginPageRouters = false, // UNUSED BUT USED IN PRIVATE
     allowRawResources = true,
-    allowMaintenancePage = true // UNUSED BUT USED IN PRIVATE
+    allowMaintenancePage = true, // UNUSED BUT USED IN PRIVATE
+    allowBrowserGatewayResources = true
 ): Promise<any> {
     // Get resources with their targets and sites in a single optimized query
     // Start from sites on this exit node, then join to targets and resources
@@ -55,9 +56,7 @@ export async function getTraefikConfig(
             resourceName: resources.name,
             fullDomain: resources.fullDomain,
             ssl: resources.ssl,
-            http: resources.http,
             proxyPort: resources.proxyPort,
-            protocol: resources.protocol,
             subdomain: resources.subdomain,
             domainId: resources.domainId,
             enabled: resources.enabled,
@@ -68,6 +67,7 @@ export async function getTraefikConfig(
             headers: resources.headers,
             proxyProtocol: resources.proxyProtocol,
             proxyProtocolVersion: resources.proxyProtocolVersion,
+            mode: resources.mode,
 
             // Target fields
             targetId: targets.targetId,
@@ -115,8 +115,8 @@ export async function getTraefikConfig(
                 ),
                 inArray(sites.type, siteTypes),
                 allowRawResources
-                    ? isNotNull(resources.http) // ignore the http check if allow_raw_resources is true
-                    : eq(resources.http, true)
+                    ? inArray(resources.mode, ["http", "udp", "tcp"]) // allow all three
+                    : eq(resources.mode, "http")
             )
         )
         .orderBy(desc(targets.priority), targets.targetId); // stable ordering
@@ -166,9 +166,8 @@ export async function getTraefikConfig(
                 key: key,
                 fullDomain: row.fullDomain,
                 ssl: row.ssl,
-                http: row.http,
+                mode: row.mode,
                 proxyPort: row.proxyPort,
-                protocol: row.protocol,
                 subdomain: row.subdomain,
                 domainId: row.domainId,
                 enabled: row.enabled,
@@ -242,7 +241,7 @@ export async function getTraefikConfig(
             continue;
         }
 
-        if (resource.http) {
+        if (resource.mode === "http") {
             if (!resource.domainId || !resource.fullDomain) {
                 continue;
             }
@@ -479,10 +478,7 @@ export async function getTraefikConfig(
 
                         // TODO: HOW TO HANDLE ^^^^^^ BETTER
                         const anySitesOnline = targets.some(
-                            (target) =>
-                            target.site.online ||
-                            target.site.type === "local" ||
-                            target.site.type === "wireguard"
+                            (target) => target.site.online
                         );
 
                         return (
@@ -495,7 +491,7 @@ export async function getTraefikConfig(
                                     if (target.health == "unhealthy") {
                                         return false;
                                     }
-                                    
+
                                     // If any sites are online, exclude offline sites
                                     if (anySitesOnline && !target.site.online) {
                                         return false;
@@ -577,13 +573,13 @@ export async function getTraefikConfig(
                     serviceName
                 ].loadBalancer.serversTransport = transportName;
             }
-        } else {
+        } else if (resource.mode === "tcp" || resource.mode === "udp") {
             // Non-HTTP (TCP/UDP) configuration
             if (!resource.enableProxy || !resource.proxyPort) {
                 continue;
             }
 
-            const protocol = resource.protocol.toLowerCase();
+            const protocol = resource.mode === "udp" ? "udp" : "tcp"; // all of the other ones are tcp
             const port = resource.proxyPort;
 
             if (!port) {
@@ -610,10 +606,7 @@ export async function getTraefikConfig(
                     servers: (() => {
                         // Check if any sites are online
                         const anySitesOnline = targets.some(
-                            (target) =>
-                            target.site.online ||
-                            target.site.type === "local" ||
-                            target.site.type === "wireguard"
+                            (target) => target.site.online
                         );
 
                         return targets
@@ -621,7 +614,7 @@ export async function getTraefikConfig(
                                 if (!target.enabled) {
                                     return false;
                                 }
-                                
+
                                 // If any sites are online, exclude offline sites
                                 if (anySitesOnline && !target.site.online) {
                                     return false;

@@ -15,6 +15,7 @@ import {
 } from "@app/components/ui/command";
 import { CheckIcon, ChevronDownIcon, Filter } from "lucide-react";
 import { cn } from "@app/lib/cn";
+import { dataTableFilterPopoverContentClassName } from "@app/lib/dataTableFilterPopover";
 import { Badge } from "./ui/badge";
 
 interface FilterOption {
@@ -74,7 +75,10 @@ export function ColumnFilter({
                     <ChevronDownIcon className="h-4 w-4 shrink-0 opacity-50" />
                 </Button>
             </PopoverTrigger>
-            <PopoverContent className="p-0 w-50" align="start">
+            <PopoverContent
+                className={dataTableFilterPopoverContentClassName}
+                align="start"
+            >
                 <Command>
                     <CommandInput placeholder={searchPlaceholder} />
                     <CommandList>

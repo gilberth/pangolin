@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { db } from "@server/db";
+import { db, primaryDb } from "@server/db";
 import { users } from "@server/db";
 import { eq } from "drizzle-orm";
 import response from "@server/lib/response";
@@ -53,8 +53,12 @@ export async function adminRemoveUser(
 
         await db.transaction(async (trx) => {
             await trx.delete(users).where(eq(users.userId, userId));
+        });
 
-            await calculateUserClientsForOrgs(userId, trx);
+        calculateUserClientsForOrgs(userId, primaryDb).catch((e) => {
+            logger.error(
+                `Failed to calculate user clients after removing user ${userId}: ${e}`
+            );
         });
 
         return response(res, {

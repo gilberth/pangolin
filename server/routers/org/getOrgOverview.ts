@@ -117,20 +117,26 @@ export async function getOrgOverview(
             .from(userOrgs)
             .where(eq(userOrgs.orgId, orgId));
 
-        const [role] = await db
-            .select()
-            .from(roles)
-            .where(eq(roles.roleId, req.userOrg.roleId));
+        const roleIds = req.userOrgRoleIds ?? [];
+        const roleRows =
+            roleIds.length > 0
+                ? await db
+                      .select({ name: roles.name, isAdmin: roles.isAdmin })
+                      .from(roles)
+                      .where(inArray(roles.roleId, roleIds))
+                : [];
+        const userRoleName = roleRows.map((r) => r.name ?? "").join(", ") ?? "";
+        const isAdmin = roleRows.some((r) => r.isAdmin === true);
 
         return response<GetOrgOverviewResponse>(res, {
             data: {
                 orgName: org[0].name,
                 orgId: org[0].orgId,
-                userRoleName: role.name,
+                userRoleName,
                 numSites,
                 numUsers,
                 numResources,
-                isAdmin: role.isAdmin || false,
+                isAdmin,
                 isOwner: req.userOrg?.isOwner || false
             },
             success: true,

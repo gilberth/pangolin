@@ -1,11 +1,12 @@
 import { Request, Response, NextFunction } from "express";
 import { db, roleSiteResources, userOrgs, userSiteResources } from "@server/db";
 import { siteResources } from "@server/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import createHttpError from "http-errors";
 import HttpCode from "@server/types/HttpCode";
 import logger from "@server/logger";
 import { checkOrgAccessPolicy } from "#dynamic/lib/checkOrgAccessPolicy";
+import { getUserOrgRoleIds } from "@server/lib/userOrgRoles";
 
 export async function verifySiteResourceAccess(
     req: Request,
@@ -109,23 +110,34 @@ export async function verifySiteResourceAccess(
             }
         }
 
-        const userOrgRoleId = req.userOrg.roleId;
-        req.userOrgRoleId = userOrgRoleId;
+        req.userOrgRoleIds = await getUserOrgRoleIds(
+            req.userOrg.userId,
+            siteResource.orgId
+        );
         req.userOrgId = siteResource.orgId;
 
         // Attach the siteResource to the request for use in the next middleware/route
         req.siteResource = siteResource;
 
-        const roleResourceAccess = await db
-            .select()
-            .from(roleSiteResources)
-            .where(
-                and(
-                    eq(roleSiteResources.siteResourceId, siteResourceIdNum),
-                    eq(roleSiteResources.roleId, userOrgRoleId)
-                )
-            )
-            .limit(1);
+        const roleResourceAccess =
+            (req.userOrgRoleIds?.length ?? 0) > 0
+                ? await db
+                      .select()
+                      .from(roleSiteResources)
+                      .where(
+                          and(
+                              eq(
+                                  roleSiteResources.siteResourceId,
+                                  siteResourceIdNum
+                              ),
+                              inArray(
+                                  roleSiteResources.roleId,
+                                  req.userOrgRoleIds!
+                              )
+                          )
+                      )
+                      .limit(1)
+                : [];
 
         if (roleResourceAccess.length > 0) {
             return next();

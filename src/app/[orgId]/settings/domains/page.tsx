@@ -2,7 +2,7 @@ import { internal } from "@app/lib/api";
 import { authCookieHeader } from "@app/lib/api/cookies";
 import { AxiosResponse } from "axios";
 import SettingsSectionTitle from "@app/components/SettingsSectionTitle";
-import DomainsTable, { DomainRow } from "../../../../components/DomainsTable";
+import DomainsTable, { DomainRow } from "@app/components/DomainsTable";
 import { getTranslations } from "next-intl/server";
 import { cache } from "react";
 import { GetOrgResponse } from "@server/routers/org";
@@ -11,6 +11,11 @@ import OrgProvider from "@app/providers/OrgProvider";
 import { ListDomainsResponse } from "@server/routers/domain";
 import { toUnicode } from "punycode";
 import { getCachedOrg } from "@app/lib/api/getCachedOrg";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Domains"
+};
 
 type Props = {
     params: Promise<{ orgId: string }>;

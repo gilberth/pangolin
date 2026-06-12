@@ -1,10 +1,11 @@
 import { Request, Response, NextFunction } from "express";
 import { db } from "@server/db";
 import { sites, Site, userOrgs, userSites, roleSites, roles } from "@server/db";
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, inArray, or } from "drizzle-orm";
 import createHttpError from "http-errors";
 import HttpCode from "@server/types/HttpCode";
 import { checkOrgAccessPolicy } from "#dynamic/lib/checkOrgAccessPolicy";
+import { getUserOrgRoleIds } from "@server/lib/userOrgRoles";
 
 export async function verifySiteAccess(
     req: Request,
@@ -70,6 +71,15 @@ export async function verifySiteAccess(
             );
         }
 
+        if (req.userOrgId && site.orgId !== req.userOrgId) {
+            return next(
+                createHttpError(
+                    HttpCode.FORBIDDEN,
+                    "User does not have access to this site"
+                )
+            );
+        }
+
         if (!req.userOrg) {
             // Get user's role ID in the organization
             const userOrgRole = await db
@@ -112,21 +122,26 @@ export async function verifySiteAccess(
             }
         }
 
-        const userOrgRoleId = req.userOrg.roleId;
-        req.userOrgRoleId = userOrgRoleId;
+        req.userOrgRoleIds = await getUserOrgRoleIds(
+            req.userOrg.userId,
+            site.orgId
+        );
         req.userOrgId = site.orgId;
 
-        // Check role-based site access first
-        const roleSiteAccess = await db
-            .select()
-            .from(roleSites)
-            .where(
-                and(
-                    eq(roleSites.siteId, site.siteId),
-                    eq(roleSites.roleId, userOrgRoleId)
-                )
-            )
-            .limit(1);
+        // Check role-based site access first (any of user's roles)
+        const roleSiteAccess =
+            (req.userOrgRoleIds?.length ?? 0) > 0
+                ? await db
+                      .select()
+                      .from(roleSites)
+                      .where(
+                          and(
+                              eq(roleSites.siteId, site.siteId),
+                              inArray(roleSites.roleId, req.userOrgRoleIds!)
+                          )
+                      )
+                      .limit(1)
+                : [];
 
         if (roleSiteAccess.length > 0) {
             // User's role has access to the site

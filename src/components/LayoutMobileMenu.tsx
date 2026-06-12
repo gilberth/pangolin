@@ -93,7 +93,7 @@ export function LayoutMobileMenu({
                                                                 )
                                                             }
                                                         >
-                                                            <span className="flex-shrink-0 mr-2">
+                                                            <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center text-muted-foreground mr-3">
                                                                 <Server className="h-4 w-4" />
                                                             </span>
                                                             <span className="flex-1">
@@ -101,7 +101,6 @@ export function LayoutMobileMenu({
                                                                     "serverAdmin"
                                                                 )}
                                                             </span>
-                                                            <ArrowRight className="h-4 w-4 shrink-0 ml-auto opacity-70" />
                                                         </Link>
                                                     </div>
                                                 )}

@@ -8,6 +8,11 @@ import { HorizontalTabs } from "@app/components/HorizontalTabs";
 import { cache } from "react";
 import SettingsSectionTitle from "@app/components/SettingsSectionTitle";
 import { getTranslations } from "next-intl/server";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "User"
+};
 
 interface UserLayoutProps {
     children: React.ReactNode;

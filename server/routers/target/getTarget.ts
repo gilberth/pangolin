@@ -11,12 +11,12 @@ import { fromError } from "zod-validation-error";
 import { OpenAPITags, registry } from "@server/openApi";
 
 const getTargetSchema = z.strictObject({
-    targetId: z.string().transform(Number).pipe(z.int().positive())
+    targetId: z.coerce.number().int().positive()
 });
 
 type GetTargetResponse = Target &
-    Omit<TargetHealthCheck, "hcHeaders"> & {
-        hcHeaders: { name: string; value: string }[] | null;
+    Partial<Omit<TargetHealthCheck, "hcHeaders" | "targetId">> & {
+        hcHeaders: { name: string; value: string }[] | null | undefined;
     };
 
 registry.registerPath({
@@ -27,7 +27,22 @@ registry.registerPath({
     request: {
         params: getTargetSchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function getTarget(
@@ -70,20 +85,19 @@ export async function getTarget(
             .limit(1);
 
         // Parse hcHeaders from JSON string back to array
-        let parsedHcHeaders = null;
+        let parsedHcHeaders: { name: string; value: string }[] | null = null;
         if (targetHc?.hcHeaders) {
             try {
                 parsedHcHeaders = JSON.parse(targetHc.hcHeaders);
             } catch (error) {
-                // If parsing fails, keep as string for backward compatibility
-                parsedHcHeaders = targetHc.hcHeaders;
+                // If parsing fails, keep as null for safety
             }
         }
 
         return response<GetTargetResponse>(res, {
             data: {
-                ...target[0],
                 ...targetHc,
+                ...target[0],
                 hcHeaders: parsedHcHeaders
             },
             success: true,

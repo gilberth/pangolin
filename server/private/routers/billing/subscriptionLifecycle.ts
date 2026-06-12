@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -44,7 +44,7 @@ function getLimitSetForSubscriptionType(
 export async function handleSubscriptionLifesycle(
     orgId: string,
     status: string,
-    subType: SubscriptionType | null
+    subType: SubscriptionType | null = null
 ) {
     switch (status) {
         case "active":

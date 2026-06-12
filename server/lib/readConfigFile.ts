@@ -79,6 +79,7 @@ export const configSchema = z
                     .default(3001)
                     .transform(stoi)
                     .pipe(portSchema),
+                badger_override: z.string().optional(),
                 next_port: portSchema
                     .optional()
                     .default(3002)
@@ -302,8 +303,8 @@ export const configSchema = z
             .optional()
             .default({
                 block_size: 24,
-                subnet_group: "100.90.128.0/24",
-                utility_subnet_group: "100.96.128.0/24"
+                subnet_group: "100.90.128.0/20",
+                utility_subnet_group: "100.96.128.0/20"
             }),
         rate_limits: z
             .object({

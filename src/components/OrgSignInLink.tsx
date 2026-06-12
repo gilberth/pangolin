@@ -5,11 +5,15 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Alert, AlertDescription, AlertTitle } from "@app/components/ui/alert";
 import { Button } from "@app/components/ui/button";
+import { cn } from "@app/lib/cn";
+import { Building2 } from "lucide-react";
 
 type OrgSignInLinkProps = {
     href: string;
     linkText: string;
     descriptionText: string;
+    primaryActionVariant?: "link" | "button";
+    className?: string;
 };
 
 const STORAGE_KEY_CLICKED = "orgSignInLinkClicked";
@@ -18,7 +22,9 @@ const STORAGE_KEY_ACKNOWLEDGED = "orgSignInTipAcknowledged";
 export default function OrgSignInLink({
     href,
     linkText,
-    descriptionText
+    descriptionText,
+    primaryActionVariant = "link",
+    className
 }: OrgSignInLinkProps) {
     const router = useRouter();
     const t = useTranslations();
@@ -93,14 +99,32 @@ export default function OrgSignInLink({
                     </AlertDescription>
                 </Alert>
             )}
-            <div className="text-sm text-center text-muted-foreground mt-8 flex flex-col items-center">
-                <span>{descriptionText}</span>
-                <button
-                    onClick={handleClick}
-                    className="underline text-inherit bg-transparent border-none p-0 cursor-pointer"
-                >
-                    {linkText}
-                </button>
+            <div
+                className={cn(
+                    "",
+                    primaryActionVariant === "button" && "gap-3",
+                    className
+                )}
+            >
+                {primaryActionVariant === "button" ? (
+                    <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full inline-flex items-center gap-2"
+                        onClick={handleClick}
+                    >
+                        <Building2 className="size-4 shrink-0" aria-hidden />
+                        <span>{linkText}</span>
+                    </Button>
+                ) : (
+                    <button
+                        type="button"
+                        onClick={handleClick}
+                        className="underline text-inherit bg-transparent border-none p-0 cursor-pointer"
+                    >
+                        {linkText}
+                    </button>
+                )}
             </div>
         </>
     );

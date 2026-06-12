@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { db } from "@server/db";
+import { db, primaryDb } from "@server/db";
 import {
     roles,
     Client,
@@ -60,7 +60,22 @@ registry.registerPath({
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function createUserClient(
@@ -237,9 +252,17 @@ export async function createUserClient(
                 userId,
                 clientId: newClient.clientId
             });
-
-            await rebuildClientAssociationsFromClient(newClient, trx);
         });
+
+        if (newClient) {
+            rebuildClientAssociationsFromClient(newClient, primaryDb).catch(
+                (e) => {
+                    logger.error(
+                        `Failed to rebuild client associations after creating user client: ${e}`
+                    );
+                }
+            );
+        }
 
         return response<CreateClientAndOlmResponse>(res, {
             data: newClient,

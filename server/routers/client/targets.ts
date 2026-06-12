@@ -1,15 +1,54 @@
 import { sendToClient } from "#dynamic/routers/ws";
-import { db, olms, Transaction } from "@server/db";
+import { db, newts, olms } from "@server/db";
+import {
+    Alias,
+    convertSubnetProxyTargetsV2ToV1,
+    SubnetProxyTarget,
+    SubnetProxyTargetV2
+} from "@server/lib/ip";
 import { canCompress } from "@server/lib/clientVersionChecks";
-import { Alias, SubnetProxyTarget } from "@server/lib/ip";
 import logger from "@server/logger";
 import { eq } from "drizzle-orm";
+import semver from "semver";
+
+const NEWT_V2_TARGETS_VERSION = ">=1.10.3";
+
+export async function convertTargetsIfNecessary(
+    newtId: string,
+    targets: SubnetProxyTarget[] | SubnetProxyTargetV2[]
+) {
+    // get the newt
+    const [newt] = await db
+        .select()
+        .from(newts)
+        .where(eq(newts.newtId, newtId));
+    if (!newt) {
+        throw new Error(`No newt found for id: ${newtId}`);
+    }
+
+    // check the semver
+    if (
+        newt.version &&
+        !semver.satisfies(newt.version, NEWT_V2_TARGETS_VERSION)
+    ) {
+        logger.debug(
+            `addTargets Newt version ${newt.version} does not support targets v2 falling back`
+        );
+        targets = convertSubnetProxyTargetsV2ToV1(
+            targets as SubnetProxyTargetV2[]
+        );
+    }
+
+    return targets;
+}
 
 export async function addTargets(
     newtId: string,
-    targets: SubnetProxyTarget[],
+    targets: SubnetProxyTarget[] | SubnetProxyTargetV2[],
     version?: string | null
 ) {
+    targets = await convertTargetsIfNecessary(newtId, targets);
+
     await sendToClient(
         newtId,
         {
@@ -22,9 +61,11 @@ export async function addTargets(
 
 export async function removeTargets(
     newtId: string,
-    targets: SubnetProxyTarget[],
+    targets: SubnetProxyTarget[] | SubnetProxyTargetV2[],
     version?: string | null
 ) {
+    targets = await convertTargetsIfNecessary(newtId, targets);
+
     await sendToClient(
         newtId,
         {
@@ -38,11 +79,39 @@ export async function removeTargets(
 export async function updateTargets(
     newtId: string,
     targets: {
-        oldTargets: SubnetProxyTarget[];
-        newTargets: SubnetProxyTarget[];
+        oldTargets: SubnetProxyTarget[] | SubnetProxyTargetV2[];
+        newTargets: SubnetProxyTarget[] | SubnetProxyTargetV2[];
     },
     version?: string | null
 ) {
+    // get the newt
+    const [newt] = await db
+        .select()
+        .from(newts)
+        .where(eq(newts.newtId, newtId));
+    if (!newt) {
+        logger.error(`addTargetsL No newt found for id: ${newtId}`);
+        return;
+    }
+
+    // check the semver
+    if (
+        newt.version &&
+        !semver.satisfies(newt.version, NEWT_V2_TARGETS_VERSION)
+    ) {
+        logger.debug(
+            `addTargets Newt version ${newt.version} does not support targets v2 falling back`
+        );
+        targets = {
+            oldTargets: convertSubnetProxyTargetsV2ToV1(
+                targets.oldTargets as SubnetProxyTargetV2[]
+            ),
+            newTargets: convertSubnetProxyTargetsV2ToV1(
+                targets.newTargets as SubnetProxyTargetV2[]
+            )
+        };
+    }
+
     await sendToClient(
         newtId,
         {

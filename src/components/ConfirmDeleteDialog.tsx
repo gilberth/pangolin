@@ -92,7 +92,7 @@ export default function ConfirmDeleteDialog({
                     <CredenzaBody>
                         <div className="mb-4 break-all overflow-hidden">
                             {dialog}
-                            <div className="mt-2 mb-6 font-bold text-destructive">
+                            <div className="mt-2 mb-6 font-semibold text-destructive">
                                 {warningText || t("cannotbeUndone")}
                             </div>
 
@@ -142,7 +142,9 @@ export default function ConfirmDeleteDialog({
                             form="confirm-delete-form"
                             loading={loading}
                             disabled={loading || !isConfirmed}
-                            className={!isConfirmed && !loading ? "opacity-50" : ""}
+                            className={
+                                !isConfirmed && !loading ? "opacity-50" : ""
+                            }
                         >
                             {buttonText}
                         </Button>

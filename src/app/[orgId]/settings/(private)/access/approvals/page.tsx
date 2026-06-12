@@ -12,6 +12,11 @@ import type { ListRolesResponse } from "@server/routers/role";
 import type { AxiosResponse } from "axios";
 import { getTranslations } from "next-intl/server";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Approvals"
+};
 
 export interface ApprovalFeedPageProps {
     params: Promise<{ orgId: string }>;

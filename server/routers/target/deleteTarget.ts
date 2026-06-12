@@ -2,19 +2,19 @@ import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { db } from "@server/db";
 import { newts, resources, sites, targets } from "@server/db";
-import { eq } from "drizzle-orm";
+import { eq, ne, and } from "drizzle-orm";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
 import logger from "@server/logger";
-import { addPeer } from "../gerbil/peers";
 import { fromError } from "zod-validation-error";
 import { removeTargets } from "../newt/targets";
-import { getAllowedIps } from "./helpers";
 import { OpenAPITags, registry } from "@server/openApi";
+import { targetHealthCheck } from "@server/db";
+import { removeBrowserGatewayTarget } from "@server/routers/newt/targets";
 
 const deleteTargetSchema = z.strictObject({
-    targetId: z.string().transform(Number).pipe(z.int().positive())
+    targetId: z.coerce.number().int().positive()
 });
 
 registry.registerPath({
@@ -25,7 +25,22 @@ registry.registerPath({
     request: {
         params: deleteTargetSchema
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function deleteTarget(
@@ -45,6 +60,11 @@ export async function deleteTarget(
         }
 
         const { targetId } = parsedParams.data;
+
+        const [deletedHealthCheck] = await db
+            .delete(targetHealthCheck)
+            .where(eq(targetHealthCheck.targetId, targetId))
+            .returning();
 
         const [deletedTarget] = await db
             .delete(targets)
@@ -74,38 +94,67 @@ export async function deleteTarget(
             );
         }
 
-        // const [site] = await db
-        //     .select()
-        //     .from(sites)
-        //     .where(eq(sites.siteId, resource.siteId!))
-        //     .limit(1);
-        //
-        // if (!site) {
-        //     return next(
-        //         createHttpError(
-        //             HttpCode.NOT_FOUND,
-        //             `Site with ID ${resource.siteId} not found`
-        //         )
-        //     );
-        // }
-        //
-        // if (site.pubKey) {
-        //     if (site.type == "wireguard") {
-        //         await addPeer(site.exitNodeId!, {
-        //             publicKey: site.pubKey,
-        //             allowedIps: await getAllowedIps(site.siteId)
-        //         });
-        //     } else if (site.type == "newt") {
-        //         // get the newt on the site by querying the newt table for siteId
-        //         const [newt] = await db
-        //             .select()
-        //             .from(newts)
-        //             .where(eq(newts.siteId, site.siteId))
-        //             .limit(1);
-        //
-        //         removeTargets(newt.newtId, [deletedTarget], resource.protocol, resource.proxyPort);
-        //     }
-        // }
+        // check if there are other targets on the resource
+        const otherTargets = await db
+            .select()
+            .from(targets)
+            .where(
+                and(
+                    eq(targets.resourceId, resource.resourceId),
+                    ne(targets.targetId, targetId)
+                )
+            );
+
+        if (otherTargets.length == 0) {
+            // set the resource status
+            await db
+                .update(resources)
+                .set({ health: "unknown" })
+                .where(eq(resources.resourceId, resource.resourceId));
+        }
+
+        const [site] = await db
+            .select()
+            .from(sites)
+            .where(eq(sites.siteId, deletedTarget.siteId))
+            .limit(1);
+
+        if (!site) {
+            return next(
+                createHttpError(
+                    HttpCode.NOT_FOUND,
+                    `Site with ID ${targets.siteId} not found`
+                )
+            );
+        }
+
+        if (site.pubKey) {
+            if (site.type == "newt") {
+                // get the newt on the site by querying the newt table for siteId
+                const [newt] = await db
+                    .select()
+                    .from(newts)
+                    .where(eq(newts.siteId, site.siteId))
+                    .limit(1);
+
+                if (["http", "tcp", "udp"].includes(deletedTarget.mode)) {
+                    await removeTargets(
+                        newt.newtId,
+                        // [deletedTarget],
+                        [], // deleting the target from newt causes issues because we cant unbind the port. this needs to be fixed in newt before we can do this
+                        [deletedHealthCheck],
+                        resource.mode === "udp" ? "udp" : "tcp",
+                        newt.version
+                    );
+                } else if (["ssh", "rdp", "vnc"].includes(deletedTarget.mode)) {
+                    await removeBrowserGatewayTarget(
+                        newt.newtId,
+                        deletedTarget.targetId,
+                        newt.version
+                    );
+                }
+            }
+        }
 
         return response(res, {
             data: null,

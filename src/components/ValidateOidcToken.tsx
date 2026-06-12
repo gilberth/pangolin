@@ -17,6 +17,7 @@ import { Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { useLicenseStatusContext } from "@app/hooks/useLicenseStatusContext";
 import { useTranslations } from "next-intl";
 import { validateOidcUrlCallbackProxy } from "@app/actions/server";
+import { build } from "@server/build";
 
 type ValidateOidcTokenParams = {
     orgId: string;
@@ -96,7 +97,7 @@ export default function ValidateOidcToken(props: ValidateOidcTokenParams) {
                 stateCookie: props.stateCookie
             });
 
-            if (isLicenseViolation()) {
+            if (build === "enterprise" && isLicenseViolation()) {
                 await new Promise((resolve) => setTimeout(resolve, 5000));
             }
 

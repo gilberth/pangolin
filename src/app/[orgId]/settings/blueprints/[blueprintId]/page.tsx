@@ -17,7 +17,7 @@ type BluePrintsPageProps = {
 };
 
 export const metadata: Metadata = {
-    title: "Blueprint Detail"
+    title: "Edit Blueprint"
 };
 
 export default async function BluePrintDetailPage(props: BluePrintsPageProps) {

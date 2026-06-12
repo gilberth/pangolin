@@ -2,11 +2,28 @@ import { InferSelectModel } from "drizzle-orm";
 import {
     index,
     integer,
+    primaryKey,
     real,
     sqliteTable,
-    text
+    text,
+    uniqueIndex
 } from "drizzle-orm/sqlite-core";
-import { clients, domains, exitNodes, orgs, sessions, users } from "./schema";
+import {
+    clients,
+    domains,
+    exitNodes,
+    orgs,
+    resources,
+    roles,
+    sessions,
+    siteResources,
+    sites,
+    targetHealthCheck,
+    users
+} from "./schema";
+import { serial, varchar } from "drizzle-orm/mysql-core";
+import { pgTable } from "drizzle-orm/pg-core";
+import { bigint } from "zod";
 
 export const certificates = sqliteTable("certificates", {
     certId: integer("certId").primaryKey({ autoIncrement: true }),
@@ -71,6 +88,8 @@ export const subscriptions = sqliteTable("subscriptions", {
     createdAt: integer("createdAt").notNull(),
     updatedAt: integer("updatedAt"),
     version: integer("version"),
+    expiresAt: integer("expiresAt"),
+    trial: integer("trial", { mode: "boolean" }).default(false),
     billingCycleAnchor: integer("billingCycleAnchor"),
     type: text("type") // tier1, tier2, tier3, or license
 });
@@ -278,6 +297,7 @@ export const accessAuditLog = sqliteTable(
         actor: text("actor"),
         actorId: text("actorId"),
         resourceId: integer("resourceId"),
+        siteResourceId: integer("siteResourceId"),
         ip: text("ip"),
         location: text("location"),
         type: text("type").notNull(),
@@ -291,6 +311,46 @@ export const accessAuditLog = sqliteTable(
             table.orgId,
             table.timestamp
         )
+    ]
+);
+
+export const connectionAuditLog = sqliteTable(
+    "connectionAuditLog",
+    {
+        id: integer("id").primaryKey({ autoIncrement: true }),
+        sessionId: text("sessionId").notNull(),
+        siteResourceId: integer("siteResourceId").references(
+            () => siteResources.siteResourceId,
+            { onDelete: "cascade" }
+        ),
+        orgId: text("orgId").references(() => orgs.orgId, {
+            onDelete: "cascade"
+        }),
+        siteId: integer("siteId").references(() => sites.siteId, {
+            onDelete: "cascade"
+        }),
+        clientId: integer("clientId").references(() => clients.clientId, {
+            onDelete: "cascade"
+        }),
+        clientEndpoint: text("clientEndpoint"),
+        userId: text("userId").references(() => users.userId, {
+            onDelete: "cascade"
+        }),
+        sourceAddr: text("sourceAddr").notNull(),
+        destAddr: text("destAddr").notNull(),
+        protocol: text("protocol").notNull(),
+        startedAt: integer("startedAt").notNull(),
+        endedAt: integer("endedAt"),
+        bytesTx: integer("bytesTx"),
+        bytesRx: integer("bytesRx")
+    },
+    (table) => [
+        index("idx_accessAuditLog_startedAt").on(table.startedAt),
+        index("idx_accessAuditLog_org_startedAt").on(
+            table.orgId,
+            table.startedAt
+        ),
+        index("idx_accessAuditLog_siteResourceId").on(table.siteResourceId)
     ]
 );
 
@@ -318,13 +378,214 @@ export const approvals = sqliteTable("approvals", {
         .notNull()
 });
 
-
 export const bannedEmails = sqliteTable("bannedEmails", {
     email: text("email").primaryKey()
 });
 
 export const bannedIps = sqliteTable("bannedIps", {
     ip: text("ip").primaryKey()
+});
+
+export const siteProvisioningKeys = sqliteTable("siteProvisioningKeys", {
+    siteProvisioningKeyId: text("siteProvisioningKeyId").primaryKey(),
+    name: text("name").notNull(),
+    siteProvisioningKeyHash: text("siteProvisioningKeyHash").notNull(),
+    lastChars: text("lastChars").notNull(),
+    createdAt: text("dateCreated").notNull(),
+    lastUsed: text("lastUsed"),
+    maxBatchSize: integer("maxBatchSize"), // null = no limit
+    numUsed: integer("numUsed").notNull().default(0),
+    validUntil: text("validUntil"),
+    approveNewSites: integer("approveNewSites", { mode: "boolean" })
+        .notNull()
+        .default(true)
+});
+
+export const siteProvisioningKeyOrg = sqliteTable(
+    "siteProvisioningKeyOrg",
+    {
+        siteProvisioningKeyId: text("siteProvisioningKeyId")
+            .notNull()
+            .references(() => siteProvisioningKeys.siteProvisioningKeyId, {
+                onDelete: "cascade"
+            }),
+        orgId: text("orgId")
+            .notNull()
+            .references(() => orgs.orgId, { onDelete: "cascade" })
+    },
+    (table) => [
+        primaryKey({
+            columns: [table.siteProvisioningKeyId, table.orgId]
+        })
+    ]
+);
+
+export const eventStreamingDestinations = sqliteTable(
+    "eventStreamingDestinations",
+    {
+        destinationId: integer("destinationId").primaryKey({
+            autoIncrement: true
+        }),
+        orgId: text("orgId")
+            .notNull()
+            .references(() => orgs.orgId, { onDelete: "cascade" }),
+        sendConnectionLogs: integer("sendConnectionLogs", { mode: "boolean" })
+            .notNull()
+            .default(false),
+        sendRequestLogs: integer("sendRequestLogs", { mode: "boolean" })
+            .notNull()
+            .default(false),
+        sendActionLogs: integer("sendActionLogs", { mode: "boolean" })
+            .notNull()
+            .default(false),
+        sendAccessLogs: integer("sendAccessLogs", { mode: "boolean" })
+            .notNull()
+            .default(false),
+        type: text("type").notNull(), // e.g. "http", "kafka", etc.
+        config: text("config").notNull(), // JSON string with the configuration for the destination
+        enabled: integer("enabled", { mode: "boolean" })
+            .notNull()
+            .default(true),
+        lastError: text("lastError"), // last send error message, null if healthy
+        lastErrorAt: integer("lastErrorAt"), // epoch ms of last error, null if healthy
+        createdAt: integer("createdAt").notNull(),
+        updatedAt: integer("updatedAt").notNull()
+    }
+);
+
+export const eventStreamingCursors = sqliteTable(
+    "eventStreamingCursors",
+    {
+        cursorId: integer("cursorId").primaryKey({ autoIncrement: true }),
+        destinationId: integer("destinationId")
+            .notNull()
+            .references(() => eventStreamingDestinations.destinationId, {
+                onDelete: "cascade"
+            }),
+        logType: text("logType").notNull(), // "request" | "action" | "access" | "connection"
+        lastSentId: integer("lastSentId").notNull().default(0),
+        lastSentAt: integer("lastSentAt") // epoch milliseconds, null if never sent
+    },
+    (table) => [
+        uniqueIndex("idx_eventStreamingCursors_dest_type").on(
+            table.destinationId,
+            table.logType
+        )
+    ]
+);
+
+export const alertRules = sqliteTable("alertRules", {
+    alertRuleId: integer("alertRuleId").primaryKey({ autoIncrement: true }),
+    orgId: text("orgId")
+        .notNull()
+        .references(() => orgs.orgId, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    eventType: text("eventType")
+        .$type<
+            | "site_online"
+            | "site_offline"
+            | "site_toggle"
+            | "health_check_healthy"
+            | "health_check_unhealthy"
+            | "health_check_toggle"
+            | "resource_healthy"
+            | "resource_unhealthy"
+            | "resource_degraded"
+            | "resource_toggle"
+        >()
+        .notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    cooldownSeconds: integer("cooldownSeconds").notNull().default(300),
+    allSites: integer("allSites", { mode: "boolean" }).notNull().default(false),
+    allHealthChecks: integer("allHealthChecks", { mode: "boolean" })
+        .notNull()
+        .default(false),
+    allResources: integer("allResources", { mode: "boolean" })
+        .notNull()
+        .default(false),
+    lastTriggeredAt: integer("lastTriggeredAt"),
+    createdAt: integer("createdAt").notNull(),
+    updatedAt: integer("updatedAt").notNull()
+});
+
+export const alertSites = sqliteTable("alertSites", {
+    alertRuleId: integer("alertRuleId")
+        .notNull()
+        .references(() => alertRules.alertRuleId, { onDelete: "cascade" }),
+    siteId: integer("siteId")
+        .notNull()
+        .references(() => sites.siteId, { onDelete: "cascade" })
+});
+
+export const alertHealthChecks = sqliteTable("alertHealthChecks", {
+    alertRuleId: integer("alertRuleId")
+        .notNull()
+        .references(() => alertRules.alertRuleId, { onDelete: "cascade" }),
+    healthCheckId: integer("healthCheckId")
+        .notNull()
+        .references(() => targetHealthCheck.targetHealthCheckId, {
+            onDelete: "cascade"
+        })
+});
+
+export const alertResources = sqliteTable("alertResources", {
+    alertRuleId: integer("alertRuleId")
+        .notNull()
+        .references(() => alertRules.alertRuleId, { onDelete: "cascade" }),
+    resourceId: integer("resourceId")
+        .notNull()
+        .references(() => resources.resourceId, { onDelete: "cascade" })
+});
+
+export const alertEmailActions = sqliteTable("alertEmailActions", {
+    emailActionId: integer("emailActionId").primaryKey({ autoIncrement: true }),
+    alertRuleId: integer("alertRuleId")
+        .notNull()
+        .references(() => alertRules.alertRuleId, { onDelete: "cascade" }),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    lastSentAt: integer("lastSentAt")
+});
+
+export const alertEmailRecipients = sqliteTable("alertEmailRecipients", {
+    recipientId: integer("recipientId").primaryKey({ autoIncrement: true }),
+    emailActionId: integer("emailActionId")
+        .notNull()
+        .references(() => alertEmailActions.emailActionId, {
+            onDelete: "cascade"
+        }),
+    userId: text("userId").references(() => users.userId, {
+        onDelete: "cascade"
+    }),
+    roleId: integer("roleId").references(() => roles.roleId, {
+        onDelete: "cascade"
+    }),
+    email: text("email")
+});
+
+export const alertWebhookActions = sqliteTable("alertWebhookActions", {
+    webhookActionId: integer("webhookActionId").primaryKey({
+        autoIncrement: true
+    }),
+    alertRuleId: integer("alertRuleId")
+        .notNull()
+        .references(() => alertRules.alertRuleId, { onDelete: "cascade" }),
+    webhookUrl: text("webhookUrl").notNull(),
+    config: text("config"), // encrypted JSON with auth config (authType, credentials)
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    lastSentAt: integer("lastSentAt")
+});
+
+export const trialNotifications = sqliteTable("trialNotifications", {
+    notificationId: integer("notificationId").primaryKey({
+        autoIncrement: true
+    }),
+    subscriptionId: text("subscriptionId")
+        .notNull()
+        .references(() => subscriptions.subscriptionId, {
+            onDelete: "cascade"
+        }),
+    notificationType: text("notificationType").notNull(), // trial_ending_5d, trial_ending_24h, trial_ended
+    sentAt: integer("sentAt").notNull()
 });
 
 export type Approval = InferSelectModel<typeof approvals>;
@@ -348,3 +609,21 @@ export type LoginPage = InferSelectModel<typeof loginPage>;
 export type LoginPageBranding = InferSelectModel<typeof loginPageBranding>;
 export type ActionAuditLog = InferSelectModel<typeof actionAuditLog>;
 export type AccessAuditLog = InferSelectModel<typeof accessAuditLog>;
+export type ConnectionAuditLog = InferSelectModel<typeof connectionAuditLog>;
+export type BannedEmail = InferSelectModel<typeof bannedEmails>;
+export type BannedIp = InferSelectModel<typeof bannedIps>;
+export type SiteProvisioningKey = InferSelectModel<typeof siteProvisioningKeys>;
+export type EventStreamingDestination = InferSelectModel<
+    typeof eventStreamingDestinations
+>;
+export type EventStreamingCursor = InferSelectModel<
+    typeof eventStreamingCursors
+>;
+export type AlertResources = InferSelectModel<typeof alertResources>;
+export type AlertHealthChecks = InferSelectModel<typeof alertHealthChecks>;
+export type AlertSites = InferSelectModel<typeof alertSites>;
+export type AlertRule = InferSelectModel<typeof alertRules>;
+export type AlertEmailAction = InferSelectModel<typeof alertEmailActions>;
+export type AlertEmailRecipient = InferSelectModel<typeof alertEmailRecipients>;
+export type AlertWebhookAction = InferSelectModel<typeof alertWebhookActions>;
+export type TrialNotification = InferSelectModel<typeof trialNotifications>;

@@ -21,6 +21,7 @@ export type ListRemoteExitNodesResponse = {
         remoteExitNodeId: string;
         dateCreated: string;
         version: string | null;
+        updateAvailable?: boolean;
         exitNodeId: number | null;
         name: string;
         address: string;

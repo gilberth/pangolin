@@ -154,8 +154,19 @@ class AdaptiveCache {
     keys(): string[] {
         return localCache.keys();
     }
+
+    /**
+     * Get keys with a specific prefix
+     * @param prefix - Key prefix to match
+     * @returns Array of matching keys
+     */
+    async keysWithPrefix(prefix: string): Promise<string[]> {
+        const allKeys = localCache.keys();
+        return allKeys.filter((key) => key.startsWith(prefix));
+    }
 }
 
 // Export singleton instance
 export const cache = new AdaptiveCache();
+export const regionalCache = cache; // Alias for compatability with the private version
 export default cache;

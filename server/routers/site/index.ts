@@ -1,4 +1,5 @@
 export * from "./getSite";
+export * from "./getStatusHistory";
 export * from "./createSite";
 export * from "./deleteSite";
 export * from "./updateSite";

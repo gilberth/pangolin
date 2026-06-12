@@ -109,7 +109,7 @@ export default function CreateBlueprintForm({
         if (res && res.status === 201) {
             const createdBlueprint = res.data.data;
             toast({
-                variant: "warning",
+                variant: createdBlueprint.succeeded ? "default" : "warning",
                 title: createdBlueprint.succeeded ? "Success" : "Warning",
                 description: createdBlueprint.message
             });

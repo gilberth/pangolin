@@ -1,9 +1,9 @@
 import { drizzle as DrizzlePostgres } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
 import { readConfigFile } from "@server/lib/readConfigFile";
 import { withReplicas } from "drizzle-orm/pg-core";
 import { build } from "@server/build";
-import { db as mainDb, primaryDb as mainPrimaryDb } from "./driver";
+import { db as mainDb } from "./driver";
+import { createPool } from "./poolConfig";
 
 function createLogsDb() {
     // Only use separate logs database in SaaS builds
@@ -42,12 +42,17 @@ function createLogsDb() {
 
     // Create separate connection pool for logs database
     const poolConfig = logsConfig?.pool || config.postgres?.pool;
-    const primaryPool = new Pool({
+    const maxConnections = poolConfig?.max_connections || 20;
+    const idleTimeoutMs = poolConfig?.idle_timeout_ms || 30000;
+    const connectionTimeoutMs = poolConfig?.connection_timeout_ms || 5000;
+
+    const primaryPool = createPool(
         connectionString,
-        max: poolConfig?.max_connections || 20,
-        idleTimeoutMillis: poolConfig?.idle_timeout_ms || 30000,
-        connectionTimeoutMillis: poolConfig?.connection_timeout_ms || 5000
-    });
+        maxConnections,
+        idleTimeoutMs,
+        connectionTimeoutMs,
+        "logs-primary"
+    );
 
     const replicas = [];
 
@@ -58,14 +63,15 @@ function createLogsDb() {
             })
         );
     } else {
+        const maxReplicaConnections = poolConfig?.max_replica_connections || 20;
         for (const conn of replicaConnections) {
-            const replicaPool = new Pool({
-                connectionString: conn.connection_string,
-                max: poolConfig?.max_replica_connections || 20,
-                idleTimeoutMillis: poolConfig?.idle_timeout_ms || 30000,
-                connectionTimeoutMillis:
-                    poolConfig?.connection_timeout_ms || 5000
-            });
+            const replicaPool = createPool(
+                conn.connection_string,
+                maxReplicaConnections,
+                idleTimeoutMs,
+                connectionTimeoutMs,
+                "logs-replica"
+            );
             replicas.push(
                 DrizzlePostgres(replicaPool, {
                     logger: process.env.QUERY_LOGGING == "true"

@@ -21,8 +21,7 @@ export async function getUserOrgs(
     try {
         const userOrganizations = await db
             .select({
-                orgId: userOrgs.orgId,
-                roleId: userOrgs.roleId
+                orgId: userOrgs.orgId
             })
             .from(userOrgs)
             .where(eq(userOrgs.userId, userId));

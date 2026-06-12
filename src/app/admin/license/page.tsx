@@ -6,7 +6,7 @@ import { createApiClient } from "@app/lib/api";
 import { useEnvContext } from "@app/hooks/useEnvContext";
 import { toast } from "@app/hooks/useToast";
 import { formatAxiosError } from "@app/lib/api";
-import { LicenseKeysDataTable } from "../../../components/LicenseKeysDataTable";
+import { LicenseKeysDataTable } from "@app/components/LicenseKeysDataTable";
 import { AxiosResponse } from "axios";
 import { Button } from "@app/components/ui/button";
 import {
@@ -42,14 +42,20 @@ import {
     SettingsSectionFooter
 } from "@app/components/Settings";
 import SettingsSectionTitle from "@app/components/SettingsSectionTitle";
-import { Check, Heart, InfoIcon } from "lucide-react";
+import { ArrowRight, Check, ExternalLink, Heart, InfoIcon, TicketCheck } from "lucide-react";
+import Link from "next/link";
+import DismissableBanner from "@app/components/DismissableBanner";
 import CopyTextBox from "@app/components/CopyTextBox";
 import ConfirmDeleteDialog from "@app/components/ConfirmDeleteDialog";
-import { SitePriceCalculator } from "../../../components/SitePriceCalculator";
+import { SitePriceCalculator } from "@app/components/SitePriceCalculator";
 import { Checkbox } from "@app/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@app/components/ui/alert";
 import { useSupporterStatusContext } from "@app/hooks/useSupporterStatusContext";
 import { useTranslations } from "next-intl";
+
+const ENTERPRISE_DOCS_URL =
+    "https://docs.pangolin.net/self-host/enterprise-edition";
+const ENTERPRISE_PRICING_URL = "https://pangolin.net/pricing#Self-Hosted";
 
 function obfuscateLicenseKey(key: string): string {
     if (key.length <= 8) return key;
@@ -335,6 +341,47 @@ export default function LicensePage() {
                 title={t("licenseTitle")}
                 description={t("licenseTitleDescription")}
             />
+
+            {!licenseStatus?.isLicenseValid && (
+                <DismissableBanner
+                    storageKey="license-banner-dismissed"
+                    version={1}
+                    title={t("licenseBannerTitle")}
+                    titleIcon={
+                        <TicketCheck className="w-5 h-5 text-primary" />
+                    }
+                    description={t("licenseBannerDescription")}
+                >
+                    <Link
+                        href={ENTERPRISE_DOCS_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                    >
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-2 hover:bg-primary/10 hover:border-primary/50 transition-colors"
+                        >
+                            {t("licenseBannerViewDocs")}
+                            <ExternalLink className="w-4 h-4" />
+                        </Button>
+                    </Link>
+                    <Link
+                        href={ENTERPRISE_PRICING_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                    >
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-2 hover:bg-primary/10 hover:border-primary/50 transition-colors"
+                        >
+                            {t("licenseBannerGetLicense")}
+                            <ArrowRight className="w-4 h-4" />
+                        </Button>
+                    </Link>
+                </DismissableBanner>
+            )}
 
             {/* <Alert variant="neutral" className="mb-6"> */}
             {/*     <InfoIcon className="h-4 w-4" /> */}

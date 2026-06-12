@@ -8,6 +8,11 @@ import { GetClientResponse } from "@server/routers/client";
 import { AxiosResponse } from "axios";
 import { getTranslations } from "next-intl/server";
 import { redirect } from "next/navigation";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "User Device"
+};
 
 type SettingsLayoutProps = {
     children: React.ReactNode;

@@ -4,6 +4,11 @@ import DeviceLoginForm from "@/components/DeviceLoginForm";
 import { getUserDisplayName } from "@app/lib/getUserDisplayName";
 import { cache } from "react";
 import { cleanRedirect } from "@app/lib/cleanRedirect";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Authorize Device"
+};
 
 export const dynamic = "force-dynamic";
 

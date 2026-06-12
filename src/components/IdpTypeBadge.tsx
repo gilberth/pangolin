@@ -1,7 +1,7 @@
 "use client";
 
 import { Badge } from "@app/components/ui/badge";
-import Image from "next/image";
+import IdpTypeIcon from "@app/components/IdpTypeIcon";
 
 type IdpTypeBadgeProps = {
     type: string;
@@ -29,34 +29,8 @@ export default function IdpTypeBadge({
             variant="secondary"
             className="inline-flex items-center space-x-1 w-fit"
         >
-            {effectiveType === "google" && (
-                <>
-                    <Image
-                        src="/idp/google.png"
-                        alt="Google"
-                        width={16}
-                        height={16}
-                        className="rounded"
-                    />
-                    <span>{effectiveName}</span>
-                </>
-            )}
-            {effectiveType === "azure" && (
-                <>
-                    <Image
-                        src="/idp/azure.png"
-                        alt="Azure"
-                        width={16}
-                        height={16}
-                        className="rounded"
-                    />
-                    <span>{effectiveName}</span>
-                </>
-            )}
-            {effectiveType === "oidc" && <span>{effectiveName}</span>}
-            {!["google", "azure", "oidc"].includes(effectiveType) && (
-                <span>{effectiveName}</span>
-            )}
+            <IdpTypeIcon type={effectiveType} size={16} />
+            <span>{effectiveName}</span>
         </Badge>
     );
 }

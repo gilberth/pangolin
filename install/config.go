@@ -99,11 +99,6 @@ func ReadAppConfig(configPath string) (*AppConfigValues, error) {
 	return values, nil
 }
 
-// findPattern finds the start of a pattern in a string
-func findPattern(s, pattern string) int {
-	return bytes.Index([]byte(s), []byte(pattern))
-}
-
 func copyDockerService(sourceFile, destFile, serviceName string) error {
 	// Read source file
 	sourceData, err := os.ReadFile(sourceFile)
@@ -187,7 +182,7 @@ func backupConfig() error {
 	return nil
 }
 
-func MarshalYAMLWithIndent(data any, indent int) ([]byte, error) {
+func MarshalYAMLWithIndent(data any, indent int) (resp []byte, err error) {
 	buffer := new(bytes.Buffer)
 	encoder := yaml.NewEncoder(buffer)
 	encoder.SetIndent(indent)
@@ -196,7 +191,12 @@ func MarshalYAMLWithIndent(data any, indent int) ([]byte, error) {
 		return nil, err
 	}
 
-	defer encoder.Close()
+	defer func() {
+		if cerr := encoder.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
+
 	return buffer.Bytes(), nil
 }
 

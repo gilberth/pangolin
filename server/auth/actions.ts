@@ -1,9 +1,11 @@
 import { Request } from "express";
 import { db } from "@server/db";
-import { userActions, roleActions, userOrgs } from "@server/db";
-import { and, eq } from "drizzle-orm";
+import { userActions, roleActions } from "@server/db";
+import { and, eq, inArray } from "drizzle-orm";
 import createHttpError from "http-errors";
 import HttpCode from "@server/types/HttpCode";
+import { getUserOrgRoleIds } from "@server/lib/userOrgRoles";
+import logger from "@server/logger";
 
 export enum ActionsEnum {
     createOrgUser = "createOrgUser",
@@ -53,6 +55,8 @@ export enum ActionsEnum {
     listRoleResources = "listRoleResources",
     // listRoleActions = "listRoleActions",
     addUserRole = "addUserRole",
+    removeUserRole = "removeUserRole",
+    setUserOrgRoles = "setUserOrgRoles",
     // addUserSite = "addUserSite",
     // addUserAction = "addUserAction",
     // removeUserAction = "removeUserAction",
@@ -109,13 +113,16 @@ export enum ActionsEnum {
     listApiKeyActions = "listApiKeyActions",
     listApiKeys = "listApiKeys",
     getApiKey = "getApiKey",
+    createSiteProvisioningKey = "createSiteProvisioningKey",
+    listSiteProvisioningKeys = "listSiteProvisioningKeys",
+    updateSiteProvisioningKey = "updateSiteProvisioningKey",
+    deleteSiteProvisioningKey = "deleteSiteProvisioningKey",
     getCertificate = "getCertificate",
     restartCertificate = "restartCertificate",
     billing = "billing",
     createOrgDomain = "createOrgDomain",
     deleteOrgDomain = "deleteOrgDomain",
     restartOrgDomain = "restartOrgDomain",
-    sendUsageNotification = "sendUsageNotification",
     createRemoteExitNode = "createRemoteExitNode",
     updateRemoteExitNode = "updateRemoteExitNode",
     getRemoteExitNode = "getRemoteExitNode",
@@ -133,7 +140,45 @@ export enum ActionsEnum {
     exportLogs = "exportLogs",
     listApprovals = "listApprovals",
     updateApprovals = "updateApprovals",
-    signSshKey = "signSshKey"
+    signSshKey = "signSshKey",
+    createEventStreamingDestination = "createEventStreamingDestination",
+    updateEventStreamingDestination = "updateEventStreamingDestination",
+    deleteEventStreamingDestination = "deleteEventStreamingDestination",
+    listEventStreamingDestinations = "listEventStreamingDestinations",
+    createAlertRule = "createAlertRule",
+    updateAlertRule = "updateAlertRule",
+    deleteAlertRule = "deleteAlertRule",
+    listAlertRules = "listAlertRules",
+    listOrgLabels = "listOrgLabels",
+    createOrgLabel = "createOrgLabel",
+    updateOrgLabel = "updateOrgLabel",
+    deleteOrgLabel = "deleteOrgLabel",
+    attachLabelToItem = "attachLabelToItem",
+    detachLabelFromItem = "detachLabelFromItem",
+    getAlertRule = "getAlertRule",
+    createHealthCheck = "createHealthCheck",
+    updateHealthCheck = "updateHealthCheck",
+    deleteHealthCheck = "deleteHealthCheck",
+    listHealthChecks = "listHealthChecks",
+    createBrowserGatewayTarget = "createBrowserGatewayTarget",
+    updateBrowserGatewayTarget = "updateBrowserGatewayTarget",
+    deleteBrowserGatewayTarget = "deleteBrowserGatewayTarget",
+    getBrowserGatewayTarget = "getBrowserGatewayTarget",
+    listBrowserGatewayTargets = "listBrowserGatewayTargets",
+    listResourcePolicies = "listResourcePolicies",
+    getResourcePolicy = "getResourcePolicy",
+    createResourcePolicy = "createResourcePolicy",
+    updateResourcePolicy = "updateResourcePolicy",
+    deleteResourcePolicy = "deleteResourcePolicy",
+    listResourcePolicyRoles = "listResourcePolicyRoles",
+    setResourcePolicyRoles = "setResourcePolicyRoles",
+    listResourcePolicyUsers = "listResourcePolicyUsers",
+    setResourcePolicyUsers = "setResourcePolicyUsers",
+    setResourcePolicyPassword = "setResourcePolicyPassword",
+    setResourcePolicyPincode = "setResourcePolicyPincode",
+    setResourcePolicyHeaderAuth = "setResourcePolicyHeaderAuth",
+    setResourcePolicyWhitelist = "setResourcePolicyWhitelist",
+    setResourcePolicyRules = "setResourcePolicyRules"
 }
 
 export async function checkUserActionPermission(
@@ -154,29 +199,33 @@ export async function checkUserActionPermission(
     }
 
     try {
-        let userOrgRoleId = req.userOrgRoleId;
+        let userOrgRoleIds = req.userOrgRoleIds;
 
-        // If userOrgRoleId is not available on the request, fetch it
-        if (userOrgRoleId === undefined) {
-            const userOrgRole = await db
-                .select()
-                .from(userOrgs)
-                .where(
-                    and(
-                        eq(userOrgs.userId, userId),
-                        eq(userOrgs.orgId, req.userOrgId!)
-                    )
-                )
-                .limit(1);
-
-            if (userOrgRole.length === 0) {
+        if (userOrgRoleIds === undefined) {
+            userOrgRoleIds = await getUserOrgRoleIds(userId, req.userOrgId!);
+            if (userOrgRoleIds.length === 0) {
                 throw createHttpError(
                     HttpCode.FORBIDDEN,
                     "User does not have access to this organization"
                 );
             }
+        }
 
-            userOrgRoleId = userOrgRole[0].roleId;
+        // If no direct permission, check role-based permission (any of user's roles)
+        const roleActionPermission = await db
+            .select()
+            .from(roleActions)
+            .where(
+                and(
+                    eq(roleActions.actionId, actionId),
+                    inArray(roleActions.roleId, userOrgRoleIds),
+                    eq(roleActions.orgId, req.userOrgId!)
+                )
+            )
+            .limit(1);
+
+        if (roleActionPermission.length > 0) {
+            return true;
         }
 
         // Check if the user has direct permission for the action in the current org
@@ -187,7 +236,7 @@ export async function checkUserActionPermission(
                 and(
                     eq(userActions.userId, userId),
                     eq(userActions.actionId, actionId),
-                    eq(userActions.orgId, req.userOrgId!) // TODO: we cant pass the org id if we are not checking the org
+                    eq(userActions.orgId, req.userOrgId!)
                 )
             )
             .limit(1);
@@ -196,20 +245,7 @@ export async function checkUserActionPermission(
             return true;
         }
 
-        // If no direct permission, check role-based permission
-        const roleActionPermission = await db
-            .select()
-            .from(roleActions)
-            .where(
-                and(
-                    eq(roleActions.actionId, actionId),
-                    eq(roleActions.roleId, userOrgRoleId!),
-                    eq(roleActions.orgId, req.userOrgId!)
-                )
-            )
-            .limit(1);
-
-        return roleActionPermission.length > 0;
+        return false;
     } catch (error) {
         console.error("Error checking user action permission:", error);
         throw createHttpError(

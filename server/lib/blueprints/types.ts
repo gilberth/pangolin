@@ -1,6 +1,23 @@
 import { z } from "zod";
+import { existsSync } from "node:fs";
 import { portRangeStringSchema } from "@server/lib/ip";
 import { MaintenanceSchema } from "#dynamic/lib/blueprints/MaintenanceSchema";
+import { isValidRegionId } from "@server/db/regions";
+import { wildcardSubdomainSchema } from "@server/lib/schemas";
+import config from "@server/lib/config";
+
+const maxmindDbPath = config.getRawConfig().server.maxmind_db_path;
+const maxmindAsnPath = config.getRawConfig().server.maxmind_asn_path;
+
+const hasMaxmindCountryDb =
+    typeof maxmindDbPath === "string" &&
+    maxmindDbPath.length > 0 &&
+    existsSync(maxmindDbPath);
+
+const hasMaxmindAsnDb =
+    typeof maxmindAsnPath === "string" &&
+    maxmindAsnPath.length > 0 &&
+    existsSync(maxmindAsnPath);
 
 export const SiteSchema = z.object({
     name: z.string().min(1).max(100),
@@ -11,7 +28,7 @@ export const TargetHealthCheckSchema = z.object({
     hostname: z.string(),
     port: z.int().min(1).max(65535),
     enabled: z.boolean().optional().default(true),
-    path: z.string().optional().default("/"),
+    path: z.string().optional(),
     scheme: z.string().optional(),
     mode: z.string().default("http"),
     interval: z.int().default(30),
@@ -25,8 +42,10 @@ export const TargetHealthCheckSchema = z.object({
         .default(null),
     "follow-redirects": z.boolean().default(true),
     followRedirects: z.boolean().optional(), // deprecated alias
-    method: z.string().default("GET"),
-    status: z.int().optional()
+    method: z.string().optional(),
+    status: z.int().optional(),
+    "healthy-threshold": z.int().min(1).optional().default(1),
+    "unhealthy-threshold": z.int().min(1).optional().default(1)
 });
 
 // Schema for individual target within a resource
@@ -77,9 +96,10 @@ export const AuthSchema = z.object({
 export const RuleSchema = z
     .object({
         action: z.enum(["allow", "deny", "pass"]),
-        match: z.enum(["cidr", "path", "ip", "country", "asn"]),
-        value: z.string(),
-        priority: z.int().optional()
+        match: z.enum(["cidr", "path", "ip", "country", "asn", "region"]),
+        value: z.coerce.string(),
+        priority: z.int().optional(),
+        enabled: z.boolean().optional().default(true)
     })
     .refine(
         (rule) => {
@@ -112,6 +132,9 @@ export const RuleSchema = z
     .refine(
         (rule) => {
             if (rule.match === "country") {
+                if (!hasMaxmindCountryDb) {
+                    return false;
+                }
                 // Check if it's a valid 2-letter country code or "ALL"
                 return /^[A-Z]{2}$/.test(rule.value) || rule.value === "ALL";
             }
@@ -120,12 +143,15 @@ export const RuleSchema = z
         {
             path: ["value"],
             message:
-                "Value must be a 2-letter country code or 'ALL' when match is 'country'"
+                "Country rules require a valid existing server.maxmind_db_path and value must be a 2-letter country code or 'ALL'"
         }
     )
     .refine(
         (rule) => {
             if (rule.match === "asn") {
+                if (!hasMaxmindCountryDb || !hasMaxmindAsnDb) {
+                    return false;
+                }
                 // Check if it's either AS<number> format or "ALL"
                 const asNumberPattern = /^AS\d+$/i;
                 return asNumberPattern.test(rule.value) || rule.value === "ALL";
@@ -135,7 +161,20 @@ export const RuleSchema = z
         {
             path: ["value"],
             message:
-                "Value must be 'AS<number>' format or 'ALL' when match is 'asn'"
+                "ASN rules require valid existing server.maxmind_db_path and server.maxmind_asn_path, and value must be 'AS<number>' format or 'ALL'"
+        }
+    )
+    .refine(
+        (rule) => {
+            if (rule.match === "region") {
+                return isValidRegionId(rule.value);
+            }
+            return true;
+        },
+        {
+            path: ["value"],
+            message:
+                "Value must be a valid UN M.49 region or subregion ID when match is 'region'"
         }
     );
 
@@ -144,12 +183,36 @@ export const HeaderSchema = z.object({
     value: z.string().min(1)
 });
 
+export const AuthDaemonSchema = z
+    .object({
+        pam: z.enum(["passthrough", "push"]).optional().default("passthrough"),
+        mode: z.enum(["site", "remote", "native"]).optional().default("site"),
+        port: z.int().min(1).max(65535).optional()
+    })
+    .refine(
+        (data) => {
+            if (data.mode === "remote") {
+                return data.port !== undefined;
+            }
+            return true;
+        },
+        {
+            path: ["port"],
+            message: "port is required when auth-daemon mode is 'remote'"
+        }
+    );
+
 // Schema for individual resource
-export const ResourceSchema = z
+export const PublicResourceSchema = z
     .object({
         name: z.string().optional(),
-        protocol: z.enum(["http", "tcp", "udp"]).optional(),
+        protocol: z
+            .enum(["http", "tcp", "udp", "ssh", "rdp", "vnc"])
+            .optional(), // this was the old one and is now DEPRECATED in favor of the mode
+        mode: z.enum(["http", "tcp", "udp", "ssh", "rdp", "vnc"]).optional(),
+        policy: z.string().optional(),
         ssl: z.boolean().optional(),
+        scheme: z.enum(["http", "https"]).optional(),
         "full-domain": z.string().optional(),
         "proxy-port": z.int().min(1).max(65535).optional(),
         enabled: z.boolean().optional(),
@@ -159,7 +222,10 @@ export const ResourceSchema = z
         "tls-server-name": z.string().optional(),
         headers: z.array(HeaderSchema).optional(),
         rules: z.array(RuleSchema).optional(),
-        maintenance: MaintenanceSchema.optional()
+        maintenance: MaintenanceSchema.optional(),
+        "auth-daemon": AuthDaemonSchema.optional(),
+        "proxy-protocol": z.boolean().optional(),
+        "proxy-protocol-version": z.int().min(1).optional()
     })
     .refine(
         (resource) => {
@@ -167,9 +233,10 @@ export const ResourceSchema = z
                 return true;
             }
 
-            // Otherwise, require name and protocol for full resource definition
+            // Otherwise, require name and protocol/mode for full resource definition
             return (
-                resource.name !== undefined && resource.protocol !== undefined
+                resource.name !== undefined &&
+                (resource.mode !== undefined || resource.protocol !== undefined)
             );
         },
         {
@@ -183,8 +250,8 @@ export const ResourceSchema = z
                 return true;
             }
 
-            // If protocol is http, all targets must have method field
-            if (resource.protocol === "http") {
+            // If protocol/mode is http, all targets must have method field
+            if ((resource.mode ?? resource.protocol) === "http") {
                 return resource.targets.every(
                     (target) => target == null || target.method !== undefined
                 );
@@ -202,8 +269,9 @@ export const ResourceSchema = z
                 return true;
             }
 
-            // If protocol is tcp or udp, no target should have method field
-            if (resource.protocol === "tcp" || resource.protocol === "udp") {
+            // If protocol/mode is tcp or udp, no target should have method field
+            const effectiveProtocol1 = resource.mode ?? resource.protocol;
+            if (effectiveProtocol1 === "tcp" || effectiveProtocol1 === "udp") {
                 return resource.targets.every(
                     (target) => target == null || target.method === undefined
                 );
@@ -221,8 +289,37 @@ export const ResourceSchema = z
                 return true;
             }
 
-            // If protocol is http, it must have a full-domain
-            if (resource.protocol === "http") {
+            const effectiveProtocol = resource.mode ?? resource.protocol;
+            if (effectiveProtocol !== "ssh") {
+                return true;
+            }
+
+            const authDaemonMode = resource["auth-daemon"]?.mode;
+            if (authDaemonMode !== "native" && authDaemonMode !== "site") {
+                return true;
+            }
+
+            return (
+                resource.targets.filter((target) => target != null).length <= 1
+            );
+        },
+        {
+            path: ["targets"],
+            error: "When protocol is 'ssh' and auth-daemon mode is 'native' or 'site', only one target/site is allowed"
+        }
+    )
+    .refine(
+        (resource) => {
+            if (isTargetsOnlyResource(resource)) {
+                return true;
+            }
+
+            // If protocol/mode is http, ssh, rdp, or vnc, it must have a full-domain
+            const effectiveProtocol = resource.mode ?? resource.protocol;
+            if (
+                effectiveProtocol !== undefined &&
+                ["http", "ssh", "rdp", "vnc"].includes(effectiveProtocol)
+            ) {
                 return (
                     resource["full-domain"] !== undefined &&
                     resource["full-domain"].length > 0
@@ -232,7 +329,7 @@ export const ResourceSchema = z
         },
         {
             path: ["full-domain"],
-            error: "When protocol is 'http', a 'full-domain' must be provided"
+            error: "When protocol is 'http', 'ssh', 'rdp', or 'vnc', a 'full-domain' must be provided"
         }
     )
     .refine(
@@ -241,8 +338,9 @@ export const ResourceSchema = z
                 return true;
             }
 
-            // If protocol is tcp or udp, it must have both proxy-port
-            if (resource.protocol === "tcp" || resource.protocol === "udp") {
+            // If protocol/mode is tcp or udp, it must have both proxy-port
+            const effectiveProtocol2 = resource.mode ?? resource.protocol;
+            if (effectiveProtocol2 === "tcp" || effectiveProtocol2 === "udp") {
                 return resource["proxy-port"] !== undefined;
             }
             return true;
@@ -259,8 +357,9 @@ export const ResourceSchema = z
                 return true;
             }
 
-            // If protocol is tcp or udp, it must not have auth
-            if (resource.protocol === "tcp" || resource.protocol === "udp") {
+            // If protocol/mode is tcp or udp, it must not have auth
+            const effectiveProtocol3 = resource.mode ?? resource.protocol;
+            if (effectiveProtocol3 === "tcp" || effectiveProtocol3 === "udp") {
                 return resource.auth === undefined;
             }
             return true;
@@ -302,25 +401,82 @@ export const ResourceSchema = z
             message:
                 "Rules have conflicting or invalid priorities (must be unique, including auto-assigned ones)"
         }
-    );
+    )
+    .refine(
+        (resource) => {
+            const fullDomain = resource["full-domain"];
+            if (!fullDomain || !fullDomain.includes("*")) return true;
+
+            // A wildcard full-domain must be of the form *.labels.basedomain
+            // Extract the leftmost label(s) before the first non-wildcard segment.
+            // e.g. "*.level1.example.com" → subdomain candidate is "*.level1"
+            // We do this by finding the base domain: everything after the first
+            // real (non-wildcard) dot-separated segment pair.
+            //
+            // Simple rule: split on ".", first token must be "*", rest must be
+            // valid hostname labels, and there must be at least 2 remaining labels
+            // (so the full domain has a real base domain).
+            const parts = fullDomain.split(".");
+            if (parts[0] !== "*") return false; // * must be the very first label
+            if (parts.includes("*", 1)) return false; // no further wildcards
+            if (parts.length < 3) return false; // need at least *.label.tld
+
+            const labelRegex =
+                /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$|^[a-zA-Z0-9]$/;
+            return parts.slice(1).every((label) => labelRegex.test(label));
+        },
+        {
+            path: ["full-domain"],
+            message:
+                'Wildcard full-domain must have "*" as the leftmost label only, followed by at least two valid hostname labels (e.g. "*.example.com" or "*.level1.example.com"). Patterns like "*example.com" or "level2.*.example.com" are not supported.'
+        }
+    )
+    .refine(
+        (resource) => {
+            const effectiveMode = resource.mode ?? resource.protocol;
+            if (effectiveMode !== "tcp") {
+                return (
+                    resource["proxy-protocol"] === undefined &&
+                    resource["proxy-protocol-version"] === undefined
+                );
+            }
+            return true;
+        },
+        {
+            path: ["proxy-protocol"],
+            message:
+                "'proxy-protocol' and 'proxy-protocol-version' can only be set when mode is 'tcp'"
+        }
+    )
+    .transform((resource) => {
+        // Normalize: prefer mode, fall back to protocol for backwards compatibility
+        if (resource.mode === undefined && resource.protocol !== undefined) {
+            resource.mode = resource.protocol;
+        }
+        return resource;
+    });
 
 export function isTargetsOnlyResource(resource: any): boolean {
     return Object.keys(resource).length === 1 && resource.targets;
 }
 
-export const ClientResourceSchema = z
+export const PrivateResourceSchema = z
     .object({
         name: z.string().min(1).max(255),
-        mode: z.enum(["host", "cidr"]),
-        site: z.string(),
+        mode: z.enum(["host", "cidr", "http", "ssh"]),
+        site: z.string().optional(), // DEPRECATED IN FAVOR OF sites
+        sites: z.array(z.string()).optional().default([]),
         // protocol: z.enum(["tcp", "udp"]).optional(),
         // proxyPort: z.int().positive().optional(),
-        // destinationPort: z.int().positive().optional(),
-        destination: z.string().min(1),
+        "destination-port": z.int().positive().optional(),
+        destination: z.string().min(1).optional(),
         // enabled: z.boolean().default(true),
         "tcp-ports": portRangeStringSchema.optional().default("*"),
         "udp-ports": portRangeStringSchema.optional().default("*"),
         "disable-icmp": z.boolean().optional().default(false),
+        "full-domain": z.string().optional(),
+        ssl: z.boolean().optional(),
+        scheme: z.enum(["http", "https"]).optional().nullable(),
         alias: z
             .string()
             .regex(
@@ -336,11 +492,31 @@ export const ClientResourceSchema = z
                 error: "Admin role cannot be included in roles"
             }),
         users: z.array(z.string()).optional().default([]),
-        machines: z.array(z.string()).optional().default([])
+        machines: z.array(z.string()).optional().default([]),
+        "auth-daemon": AuthDaemonSchema.optional()
     })
     .refine(
         (data) => {
+            // destination is optional only for ssh+native; required for everything else
+            const isNativeSSH =
+                data.mode === "ssh" &&
+                (data["auth-daemon"] === undefined ||
+                    data["auth-daemon"].mode === "native");
+            if (!isNativeSSH && !data.destination) {
+                return false;
+            }
+            return true;
+        },
+        {
+            path: ["destination"],
+            message:
+                "destination is required unless mode is 'ssh' with auth-daemon mode 'native'"
+        }
+    )
+    .refine(
+        (data) => {
             if (data.mode === "host") {
+                if (!data.destination) return true; // caught by the destination-required refine
                 // Check if it's a valid IP address using zod (v4 or v6)
                 const isValidIP = z
                     .union([z.ipv4(), z.ipv6()])
@@ -368,6 +544,7 @@ export const ClientResourceSchema = z
     .refine(
         (data) => {
             if (data.mode === "cidr") {
+                if (!data.destination) return true; // caught by the destination-required refine
                 // Check if it's a valid CIDR (v4 or v6)
                 const isValidCIDR = z
                     .union([z.cidrv4(), z.cidrv6()])
@@ -379,25 +556,112 @@ export const ClientResourceSchema = z
         {
             message: "Destination must be a valid CIDR notation for cidr mode"
         }
-    );
+    )
+    .refine(
+        (data) => {
+            if (data.mode !== "ssh") {
+                return true;
+            }
+
+            const authDaemonMode = data["auth-daemon"]?.mode;
+            if (authDaemonMode !== "native" && authDaemonMode !== "site") {
+                return true;
+            }
+
+            const uniqueSites = new Set<string>();
+            if (data.site) {
+                uniqueSites.add(data.site);
+            }
+            for (const site of data.sites) {
+                uniqueSites.add(site);
+            }
+
+            return uniqueSites.size <= 1;
+        },
+        {
+            path: ["sites"],
+            message:
+                "When mode is 'ssh' and auth-daemon mode is 'native' or 'site', only one site/target is allowed"
+        }
+    )
+    .transform((data) => {
+        if (
+            data.mode === "ssh" &&
+            data.destination !== undefined &&
+            data["destination-port"] === undefined
+        ) {
+            data["destination-port"] = 22;
+        }
+        return data;
+    });
+
+export const ResourcePolicyRuleSchema = RuleSchema;
+
+export const ResourcePolicySchema = z.object({
+    name: z.string().min(1).max(255),
+    sso: z.boolean().optional().default(true),
+    "auto-login-idp": z.int().positive().optional().nullable(),
+    "sso-roles": z
+        .array(z.string())
+        .optional()
+        .default([])
+        .refine((roles) => !roles.includes("Admin"), {
+            error: "Admin role cannot be included in sso-roles"
+        }),
+    "sso-users": z.array(z.string()).optional().default([]),
+    password: z.string().min(4).max(100).optional().nullable(),
+    pincode: z
+        .string()
+        .regex(/^\d{6}$/)
+        .optional()
+        .nullable(),
+    "basic-auth": z
+        .object({
+            user: z.string().min(4).max(100),
+            password: z.string().min(4).max(100),
+            "extended-compatibility": z.boolean().default(true)
+        })
+        .optional()
+        .nullable(),
+    "email-whitelist-enabled": z.boolean().optional().default(false),
+    "whitelist-users": z
+        .array(
+            z.email().or(
+                z.string().regex(/^\*@[\w.-]+\.[a-zA-Z]{2,}$/, {
+                    error: "Invalid email address. Wildcard (*) must be the entire local part."
+                })
+            )
+        )
+        .max(50)
+        .transform((v) => v.map((e) => e.toLowerCase()))
+        .optional()
+        .default([]),
+    "apply-rules": z.boolean().optional().default(false),
+    rules: z.array(ResourcePolicyRuleSchema).optional().default([])
+});
+export type ResourcePolicyData = z.infer<typeof ResourcePolicySchema>;
 
 // Schema for the entire configuration object
 export const ConfigSchema = z
     .object({
         "proxy-resources": z
-            .record(z.string(), ResourceSchema)
+            .record(z.string(), PublicResourceSchema)
             .optional()
             .prefault({}),
         "public-resources": z
-            .record(z.string(), ResourceSchema)
+            .record(z.string(), PublicResourceSchema)
             .optional()
             .prefault({}),
         "client-resources": z
-            .record(z.string(), ClientResourceSchema)
+            .record(z.string(), PrivateResourceSchema)
             .optional()
             .prefault({}),
         "private-resources": z
-            .record(z.string(), ClientResourceSchema)
+            .record(z.string(), PrivateResourceSchema)
+            .optional()
+            .prefault({}),
+        "public-policies": z
+            .record(z.string(), ResourcePolicySchema)
             .optional()
             .prefault({}),
         sites: z.record(z.string(), SiteSchema).optional().prefault({})
@@ -422,10 +686,17 @@ export const ConfigSchema = z
         }
 
         return data as {
-            "proxy-resources": Record<string, z.infer<typeof ResourceSchema>>;
+            "proxy-resources": Record<
+                string,
+                z.infer<typeof PublicResourceSchema>
+            >;
             "client-resources": Record<
                 string,
-                z.infer<typeof ClientResourceSchema>
+                z.infer<typeof PrivateResourceSchema>
+            >;
+            "public-policies": Record<
+                string,
+                z.infer<typeof ResourcePolicySchema>
             >;
             sites: Record<string, z.infer<typeof SiteSchema>>;
         };
@@ -460,6 +731,39 @@ export const ConfigSchema = z
                 code: z.ZodIssueCode.custom,
                 path: ["proxy-resources"],
                 message: `Duplicate 'full-domain' values found: ${fullDomainDuplicates}`
+            });
+        }
+
+        // Enforce the full-domain uniqueness across client-resources in the same stack
+        const clientFullDomainMap = new Map<string, string[]>();
+
+        Object.entries(config["client-resources"]).forEach(
+            ([resourceKey, resource]) => {
+                const fullDomain = resource["full-domain"];
+                if (fullDomain) {
+                    if (!clientFullDomainMap.has(fullDomain)) {
+                        clientFullDomainMap.set(fullDomain, []);
+                    }
+                    clientFullDomainMap.get(fullDomain)!.push(resourceKey);
+                }
+            }
+        );
+
+        const clientFullDomainDuplicates = Array.from(
+            clientFullDomainMap.entries()
+        )
+            .filter(([_, resourceKeys]) => resourceKeys.length > 1)
+            .map(
+                ([fullDomain, resourceKeys]) =>
+                    `'${fullDomain}' used by resources: ${resourceKeys.join(", ")}`
+            )
+            .join("; ");
+
+        if (clientFullDomainDuplicates.length !== 0) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["client-resources"],
+                message: `Duplicate 'full-domain' values found: ${clientFullDomainDuplicates}`
             });
         }
 
@@ -531,5 +835,6 @@ export const ConfigSchema = z
 // Type inference from the schema
 export type Site = z.infer<typeof SiteSchema>;
 export type Target = z.infer<typeof TargetSchema>;
-export type Resource = z.infer<typeof ResourceSchema>;
+export type Resource = z.infer<typeof PublicResourceSchema>;
 export type Config = z.infer<typeof ConfigSchema>;
+export type BlueprintResourcePolicy = z.infer<typeof ResourcePolicySchema>;

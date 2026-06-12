@@ -9,16 +9,50 @@ import {
 import { buildSiteConfigurationForOlmClient } from "./buildConfiguration";
 import { sendToClient } from "#dynamic/routers/ws";
 import logger from "@server/logger";
-import { eq, inArray } from "drizzle-orm";
+import { count, eq, inArray } from "drizzle-orm";
 import config from "@server/lib/config";
 import { canCompress } from "@server/lib/clientVersionChecks";
+import { build } from "@server/build";
 
 export async function sendOlmSyncMessage(olm: Olm, client: Client) {
+    // Get all sites data
+    const sitesCountResult = await db
+        .select({ count: count() })
+        .from(sites)
+        .innerJoin(
+            clientSitesAssociationsCache,
+            eq(sites.siteId, clientSitesAssociationsCache.siteId)
+        )
+        .where(eq(clientSitesAssociationsCache.clientId, client.clientId));
+
+    // Extract the count value from the result array
+    const sitesCount =
+        sitesCountResult.length > 0 ? sitesCountResult[0].count : 0;
+
+    // Prepare an array to store site configurations
+    logger.debug(
+        `[handleOlmRegisterMessage] Found ${sitesCount} sites for client ${client.clientId}`,
+        { orgId: client.orgId }
+    );
+
+    let jitMode = false;
+    if (sitesCount > 250 && build == "saas") {
+        // THIS IS THE MAX ON THE BUSINESS TIER
+        // we have too many sites
+        // If we have too many sites we need to drop into fully JIT mode by not sending any of the sites
+        logger.info(
+            `[handleOlmRegisterMessage] Too many sites (${sitesCount}), dropping into JIT mode`,
+            { orgId: client.orgId }
+        );
+        jitMode = true;
+    }
+
     // NOTE: WE ARE HARDCODING THE RELAY PARAMETER TO FALSE HERE BUT IN THE REGISTER MESSAGE ITS DEFINED BY THE CLIENT
     const siteConfigurations = await buildSiteConfigurationForOlmClient(
         client,
         client.pubKey,
-        false
+        false,
+        jitMode
     );
 
     // Get all exit nodes from sites where the client has peers
@@ -82,7 +116,6 @@ export async function sendOlmSyncMessage(olm: Olm, client: Client) {
                 exitNodes: exitNodesData
             }
         },
-
         {
             compress: canCompress(olm.version, "olm")
         }

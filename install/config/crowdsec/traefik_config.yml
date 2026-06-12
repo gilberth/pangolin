@@ -81,11 +81,19 @@ entryPoints:
     transport:
       respondingTimeouts:
         readTimeout: "30m"
+    http3:
+      advertisedPort: 443
     http:
       tls:
         certResolver: "letsencrypt"
-      middlewares: 
+      middlewares:
         - crowdsec@file
+      encodedCharacters:
+        allowEncodedSlash: true
+        allowEncodedQuestionMark: true
 
 serversTransport:
   insecureSkipVerify: true
+
+ping:
+  entryPoint: "web"

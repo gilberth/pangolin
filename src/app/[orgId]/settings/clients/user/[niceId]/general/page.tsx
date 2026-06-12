@@ -153,6 +153,69 @@ export default function GeneralPage() {
     const [approvalId, setApprovalId] = useState<number | null>(null);
     const [isRefreshing, setIsRefreshing] = useState(false);
     const [, startTransition] = useTransition();
+    const [cacheCheck, setCacheCheck] = useState<null | {
+        consistent: boolean;
+        missingSiteResourceIds: number[];
+        extraSiteResourceIds: number[];
+        missingSiteIds: number[];
+        extraSiteIds: number[];
+        expectedSiteResourceIds: number[];
+        actualSiteResourceIds: number[];
+        expectedSiteIds: number[];
+        actualSiteIds: number[];
+    }>(null);
+    const [isCheckingCache, setIsCheckingCache] = useState(false);
+    const [isRebuildingCache, setIsRebuildingCache] = useState(false);
+
+    // get "imp" from local storage to determine if we should show the verify button (imp = "1" means show)
+    const showVerifyButton =
+        typeof window !== "undefined" && localStorage.getItem("imp") === "1";
+
+    const handleRebuildCache = async () => {
+        if (!client.clientId) return;
+        setIsRebuildingCache(true);
+        try {
+            await api.post(
+                `/client/${client.clientId}/rebuild-associations-cache`
+            );
+            // Re-verify after rebuild so the result refreshes
+            const res = await api.get(
+                `/client/${client.clientId}/verify-associations-cache`
+            );
+            setCacheCheck(res.data.data);
+            toast({
+                title: "Cache rebuilt",
+                description: "Association cache rebuilt successfully."
+            });
+        } catch (e) {
+            toast({
+                variant: "destructive",
+                title: "Rebuild failed",
+                description: formatAxiosError(e, "Failed to rebuild cache")
+            });
+        } finally {
+            setIsRebuildingCache(false);
+        }
+    };
+
+    const handleVerifyCache = async () => {
+        if (!client.clientId) return;
+        setIsCheckingCache(true);
+        try {
+            const res = await api.get(
+                `/client/${client.clientId}/verify-associations-cache`
+            );
+            setCacheCheck(res.data.data);
+        } catch (e) {
+            toast({
+                variant: "destructive",
+                title: "Cache check failed",
+                description: formatAxiosError(e, "Failed to verify cache")
+            });
+        } finally {
+            setIsCheckingCache(false);
+        }
+    };
     const { env } = useEnvContext();
 
     const showApprovalFeatures =
@@ -843,6 +906,78 @@ export default function GeneralPage() {
                         )}
                     </SettingsSectionBody>
                 </SettingsSection>
+            )}
+
+            {showVerifyButton && (
+                <div className="mt-8 flex flex-col gap-2 items-start opacity-30 hover:opacity-100 transition-opacity">
+                    <button
+                        type="button"
+                        onClick={handleVerifyCache}
+                        disabled={isCheckingCache}
+                        className="text-xs text-muted-foreground underline disabled:opacity-50"
+                        title="Verify the client's site association cache against current permissions (read-only)"
+                    >
+                        {isCheckingCache
+                            ? "Checking cache…"
+                            : "Verify association cache"}
+                    </button>
+                    {cacheCheck && (
+                        <div
+                            className={
+                                "text-xs rounded border px-2 py-1 " +
+                                (cacheCheck.consistent
+                                    ? "border-green-600 text-green-700"
+                                    : "border-red-600 text-red-700")
+                            }
+                        >
+                            {cacheCheck.consistent ? (
+                                <span className="flex items-center gap-1">
+                                    <CheckCircle2 className="h-3 w-3" />
+                                    Cache is consistent
+                                </span>
+                            ) : (
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-1 font-semibold">
+                                        <XCircle className="h-3 w-3" />
+                                        Cache is INCONSISTENT
+                                    </div>
+                                    <div>
+                                        Missing site resources: [
+                                        {cacheCheck.missingSiteResourceIds.join(
+                                            ", "
+                                        )}
+                                        ]
+                                    </div>
+                                    <div>
+                                        Extra site resources: [
+                                        {cacheCheck.extraSiteResourceIds.join(
+                                            ", "
+                                        )}
+                                        ]
+                                    </div>
+                                    <div>
+                                        Missing sites: [
+                                        {cacheCheck.missingSiteIds.join(", ")}]
+                                    </div>
+                                    <div>
+                                        Extra sites: [
+                                        {cacheCheck.extraSiteIds.join(", ")}]
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={handleRebuildCache}
+                                        disabled={isRebuildingCache}
+                                        className="mt-1 text-xs underline font-semibold disabled:opacity-50"
+                                    >
+                                        {isRebuildingCache
+                                            ? "Rebuilding…"
+                                            : "Rebuild cache now"}
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </div>
             )}
         </SettingsContainer>
     );

@@ -6,6 +6,7 @@ import createHttpError from "http-errors";
 import HttpCode from "@server/types/HttpCode";
 import logger from "@server/logger";
 import { checkOrgAccessPolicy } from "#dynamic/lib/checkOrgAccessPolicy";
+import { getUserOrgRoleIds } from "@server/lib/userOrgRoles";
 
 export async function verifyRoleAccess(
     req: Request,
@@ -99,7 +100,6 @@ export async function verifyRoleAccess(
         }
 
         if (!req.userOrg) {
-            // get the userORg
             const userOrg = await db
                 .select()
                 .from(userOrgs)
@@ -109,7 +109,7 @@ export async function verifyRoleAccess(
                 .limit(1);
 
             req.userOrg = userOrg[0];
-            req.userOrgRoleId = userOrg[0].roleId;
+            req.userOrgRoleIds = await getUserOrgRoleIds(userId, orgId!);
         }
 
         if (!req.userOrg) {

@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -79,7 +79,7 @@ export async function createRemoteExitNode(
 
         const { remoteExitNodeId, secret } = parsedBody.data;
 
-        if (req.user && !req.userOrgRoleId) {
+        if (req.user && (!req.userOrgRoleIds || req.userOrgRoleIds.length === 0)) {
             return next(
                 createHttpError(HttpCode.FORBIDDEN, "User does not have a role")
             );

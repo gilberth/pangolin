@@ -1,6 +1,5 @@
 "use client";
 
-import { ColumnDef } from "@tanstack/react-table";
 import { ExtendedColumnDef } from "@app/components/ui/data-table";
 import { DataTable } from "@app/components/ui/data-table";
 import { Button } from "@app/components/ui/button";

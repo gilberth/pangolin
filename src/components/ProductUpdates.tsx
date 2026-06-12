@@ -81,10 +81,10 @@ export default function ProductUpdates({
 
     const showNewVersionPopup = Boolean(
         latestVersion &&
-        valid(latestVersion) &&
-        valid(currentVersion) &&
-        ignoredVersionUpdate !== latestVersion &&
-        gt(latestVersion, currentVersion)
+            valid(latestVersion) &&
+            valid(currentVersion) &&
+            ignoredVersionUpdate !== latestVersion &&
+            gt(latestVersion, currentVersion)
     );
 
     const filteredUpdates = data.updates.filter(
@@ -103,42 +103,51 @@ export default function ProductUpdates({
             )}
         >
             <div className="flex flex-col gap-1">
-                <small
-                    className={cn(
-                        "text-xs text-muted-foreground flex items-center gap-1 mt-2 empty:mt-0",
-                        showMoreUpdatesText
-                            ? "animate-in fade-in duration-300"
-                            : "opacity-0"
-                    )}
-                >
-                    {filteredUpdates.length > 1 && (
-                        <>
-                            <BellIcon className="flex-none size-3" />
-                            <span>
-                                {showNewVersionPopup
-                                    ? t("productUpdateMoreInfo", {
-                                          noOfUpdates: filteredUpdates.length
-                                      })
-                                    : t("productUpdateInfo", {
-                                          noOfUpdates: filteredUpdates.length
-                                      })}
-                            </span>
-                        </>
-                    )}
-                </small>
-                <ProductUpdatesListPopup
-                    updates={filteredUpdates}
-                    show={filteredUpdates.length > 0}
-                    onDimissAll={() =>
-                        setProductUpdatesRead([
-                            ...productUpdatesRead,
-                            ...filteredUpdates.map((update) => update.id)
-                        ])
-                    }
-                    onDimiss={(id) =>
-                        setProductUpdatesRead([...productUpdatesRead, id])
-                    }
-                />
+                {filteredUpdates.length > 0 && (
+                    <div className="mt-3 flex flex-col gap-2">
+                        {filteredUpdates.length > 1 && (
+                            <small
+                                className={cn(
+                                    "text-xs text-muted-foreground flex items-center gap-1",
+                                    showMoreUpdatesText
+                                        ? "animate-in fade-in duration-300"
+                                        : "opacity-0"
+                                )}
+                            >
+                                <BellIcon className="flex-none size-3" />
+                                <span>
+                                    {showNewVersionPopup
+                                        ? t("productUpdateMoreInfo", {
+                                              noOfUpdates:
+                                                  filteredUpdates.length
+                                          })
+                                        : t("productUpdateInfo", {
+                                              noOfUpdates:
+                                                  filteredUpdates.length
+                                          })}
+                                </span>
+                            </small>
+                        )}
+                        <ProductUpdatesListPopup
+                            updates={filteredUpdates}
+                            show={filteredUpdates.length > 0}
+                            onDimissAll={() =>
+                                setProductUpdatesRead([
+                                    ...productUpdatesRead,
+                                    ...filteredUpdates.map(
+                                        (update) => update.id
+                                    )
+                                ])
+                            }
+                            onDimiss={(id) =>
+                                setProductUpdatesRead([
+                                    ...productUpdatesRead,
+                                    id
+                                ])
+                            }
+                        />
+                    </div>
+                )}
             </div>
 
             <NewVersionAvailable
@@ -192,13 +201,13 @@ function ProductUpdatesListPopup({
                     <div
                         className={cn(
                             "relative z-1 cursor-pointer block group",
-                            "rounded-md border border-primary/30 bg-linear-to-br dark:from-primary/20 from-primary/20 via-background to-background p-2 py-3 w-full flex flex-col gap-2 text-sm",
+                            "rounded-md border bg-secondary p-2 py-3 w-full flex flex-col gap-2 text-sm",
                             "transition duration-300 ease-in-out",
                             "data-closed:opacity-0 data-closed:translate-y-full"
                         )}
                     >
                         <div className="flex items-center gap-2">
-                            <BellIcon className="flex-none size-4 text-primary" />
+                            <BellIcon className="flex-none size-4" />
                             <div className="flex justify-between items-center flex-1">
                                 <p className="font-medium text-start">
                                     {t("productUpdateWhatsNew")}
@@ -346,13 +355,13 @@ function NewVersionAvailable({
                     rel="noopener noreferrer"
                     className={cn(
                         "relative z-2 group cursor-pointer block",
-                        "rounded-md border border-primary/30 bg-linear-to-br dark:from-primary/20 from-primary/20 via-background to-background p-2 py-3 w-full flex flex-col gap-2 text-sm",
+                        "rounded-md border bg-secondary p-2 py-3 w-full flex flex-col gap-2 text-sm",
                         "transition duration-300 ease-in-out",
                         "data-closed:opacity-0 data-closed:translate-y-full"
                     )}
                 >
                     <div className="flex items-center gap-2">
-                        <RocketIcon className="flex-none size-4 text-primary" />
+                        <RocketIcon className="flex-none size-4" />
                         <p className="font-medium flex-1">
                             {t("pangolinUpdateAvailable")}
                         </p>
@@ -378,7 +387,7 @@ function NewVersionAvailable({
                             <span>
                                 {t("pangolinUpdateAvailableReleaseNotes")}
                             </span>
-                            <ArrowRight className="flex-none size-3 transition-transform duration-300 ease-in-out group-hover:translate-x-1" />
+                            <ArrowRight className="flex-none size-3" />
                         </div>
                     </div>
                 </a>

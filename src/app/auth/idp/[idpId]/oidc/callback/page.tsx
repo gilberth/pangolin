@@ -8,6 +8,11 @@ import { getTranslations } from "next-intl/server";
 import { pullEnv } from "@app/lib/pullEnv";
 import { LoadLoginPageResponse } from "@server/routers/loginPage/types";
 import { redirect } from "next/navigation";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Complete Login"
+};
 
 export const dynamic = "force-dynamic";
 

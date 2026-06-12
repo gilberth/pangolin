@@ -3,6 +3,7 @@ import config from "@server/lib/config";
 import * as site from "./site";
 import * as org from "./org";
 import * as resource from "./resource";
+import * as policy from "./policy";
 import * as domain from "./domain";
 import * as target from "./target";
 import * as user from "./user";
@@ -42,7 +43,8 @@ import {
     verifyUserIsOrgOwner,
     verifySiteResourceAccess,
     verifyOlmAccess,
-    verifyLimits
+    verifyLimits,
+    verifyResourcePolicyAccess
 } from "@server/middlewares";
 import { ActionsEnum } from "@server/auth/actions";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
@@ -102,6 +104,7 @@ authenticated.put(
     logActionAudit(ActionsEnum.createSite),
     site.createSite
 );
+
 authenticated.get(
     "/org/:orgId/sites",
     verifyOrgAccess,
@@ -283,6 +286,13 @@ authenticated.get(
     site.listContainers
 );
 
+authenticated.get(
+    "/site/:siteId/status-history",
+    verifySiteAccess,
+    verifyUserHasAction(ActionsEnum.getSite),
+    site.getSiteStatusHistory
+);
+
 // Site Resource endpoints
 authenticated.put(
     "/org/:orgId/site-resource",
@@ -419,6 +429,13 @@ authenticated.get(
 );
 
 authenticated.get(
+    "/resource/:resourceId/status-history",
+    verifyResourceAccess,
+    verifyUserHasAction(ActionsEnum.getResource),
+    resource.getResourceStatusHistory
+);
+
+authenticated.get(
     "/org/:orgId/resources",
     verifyOrgAccess,
     verifyUserHasAction(ActionsEnum.listResources),
@@ -436,6 +453,12 @@ authenticated.get(
     "/org/:orgId/user-resources",
     verifyOrgAccess,
     resource.getUserResources
+);
+
+authenticated.get(
+    "/org/:orgId/user-resource-aliases",
+    verifyOrgAccess,
+    resource.listUserResourceAliases
 );
 
 authenticated.get(
@@ -518,6 +541,7 @@ authenticated.get(
     verifyUserHasAction(ActionsEnum.getResource),
     resource.getResource
 );
+
 authenticated.post(
     "/resource/:resourceId",
     verifyResourceAccess,
@@ -537,6 +561,7 @@ authenticated.delete(
 authenticated.put(
     "/resource/:resourceId/target",
     verifyResourceAccess,
+    verifySiteAccess,
     verifyLimits,
     verifyUserHasAction(ActionsEnum.createTarget),
     logActionAudit(ActionsEnum.createTarget),
@@ -588,6 +613,7 @@ authenticated.get(
 authenticated.post(
     "/target/:targetId",
     verifyTargetAccess,
+    verifySiteAccess,
     verifyLimits,
     verifyUserHasAction(ActionsEnum.updateTarget),
     logActionAudit(ActionsEnum.updateTarget),
@@ -624,6 +650,36 @@ authenticated.post(
     logActionAudit(ActionsEnum.updateRole),
     role.updateRole
 );
+
+authenticated.get(
+    "/org/:orgId/resource-policy/:niceId",
+    verifyOrgAccess,
+    verifyResourcePolicyAccess,
+    verifyUserHasAction(ActionsEnum.getResourcePolicy),
+    policy.getResourcePolicy
+);
+
+authenticated.get(
+    "/resource/:resourceId/policies",
+    verifyResourceAccess,
+    verifyUserHasAction(ActionsEnum.getResourcePolicy),
+    resource.getResourcePolicies
+);
+
+authenticated.get(
+    "/resource-policy/:resourcePolicyId",
+    verifyResourcePolicyAccess,
+    verifyUserHasAction(ActionsEnum.getResourcePolicy),
+    policy.getResourcePolicy
+);
+
+authenticated.put(
+    "/resource-policy/:resourcePolicyId",
+    verifyResourcePolicyAccess,
+    verifyUserHasAction(ActionsEnum.updateResourcePolicy),
+    policy.updateResourcePolicy
+);
+
 // authenticated.get(
 //     "/role/:roleId",
 //     verifyRoleAccess,
@@ -644,6 +700,7 @@ authenticated.delete(
     logActionAudit(ActionsEnum.deleteRole),
     role.deleteRole
 );
+
 authenticated.post(
     "/role/:roleId/add/:userId",
     verifyRoleAccess,
@@ -651,7 +708,7 @@ authenticated.post(
     verifyLimits,
     verifyUserHasAction(ActionsEnum.addUserRole),
     logActionAudit(ActionsEnum.addUserRole),
-    user.addUserRole
+    user.addUserRoleLegacy
 );
 
 authenticated.post(
@@ -672,6 +729,59 @@ authenticated.post(
     verifyUserHasAction(ActionsEnum.setResourceUsers),
     logActionAudit(ActionsEnum.setResourceUsers),
     resource.setResourceUsers
+);
+
+authenticated.put(
+    "/resource-policy/:resourcePolicyId/access-control",
+    verifyResourcePolicyAccess,
+    verifyUserHasAction(ActionsEnum.setResourcePolicyUsers),
+    logActionAudit(ActionsEnum.setResourcePolicyUsers),
+    policy.setResourcePolicyAccessControl
+);
+
+authenticated.put(
+    "/resource-policy/:resourcePolicyId/password",
+    verifyResourcePolicyAccess,
+    verifyLimits,
+    verifyUserHasAction(ActionsEnum.setResourcePolicyPassword),
+    logActionAudit(ActionsEnum.setResourcePolicyPassword),
+    policy.setResourcePolicyPassword
+);
+
+authenticated.put(
+    "/resource-policy/:resourcePolicyId/pincode",
+    verifyResourcePolicyAccess,
+    verifyLimits,
+    verifyUserHasAction(ActionsEnum.setResourcePolicyPincode),
+    logActionAudit(ActionsEnum.setResourcePolicyPincode),
+    policy.setResourcePolicyPincode
+);
+
+authenticated.put(
+    "/resource-policy/:resourcePolicyId/header-auth",
+    verifyResourcePolicyAccess,
+    verifyLimits,
+    verifyUserHasAction(ActionsEnum.setResourcePolicyHeaderAuth),
+    logActionAudit(ActionsEnum.setResourcePolicyHeaderAuth),
+    policy.setResourcePolicyHeaderAuth
+);
+
+authenticated.put(
+    "/resource-policy/:resourcePolicyId/whitelist",
+    verifyResourcePolicyAccess,
+    verifyLimits,
+    verifyUserHasAction(ActionsEnum.setResourcePolicyWhitelist),
+    logActionAudit(ActionsEnum.setResourcePolicyWhitelist),
+    policy.setResourcePolicyWhitelist
+);
+
+authenticated.put(
+    "/resource-policy/:resourcePolicyId/rules",
+    verifyResourcePolicyAccess,
+    verifyLimits,
+    verifyUserHasAction(ActionsEnum.setResourcePolicyRules),
+    logActionAudit(ActionsEnum.setResourcePolicyRules),
+    policy.setResourcePolicyRules
 );
 
 authenticated.post(
@@ -793,6 +903,11 @@ unauthenticated.get(
 // );
 
 unauthenticated.get("/user", verifySessionMiddleware, user.getUser);
+unauthenticated.post(
+    "/user/locale",
+    verifySessionMiddleware,
+    user.updateUserLocale
+);
 unauthenticated.get("/my-device", verifySessionMiddleware, user.myDevice);
 
 authenticated.get("/users", verifyUserIsServerAdmin, user.adminListUsers);
@@ -1128,7 +1243,8 @@ export const authRouter = Router();
 unauthenticated.use("/auth", authRouter);
 authRouter.use(
     rateLimit({
-        windowMs: config.getRawConfig().rate_limits.auth.window_minutes,
+        windowMs:
+            config.getRawConfig().rate_limits.auth.window_minutes * 60 * 1000,
         max: config.getRawConfig().rate_limits.auth.max_requests,
         keyGenerator: (req) =>
             `authRouterGlobal:${ipKeyGenerator(req.ip || "")}:${req.path}`,
@@ -1202,13 +1318,45 @@ authRouter.post(
     }),
     newt.getNewtToken
 );
+
+authRouter.post(
+    "/newt/version",
+    rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 60,
+        keyGenerator: (req) =>
+            `newtVersion:${req.body.newtId || ipKeyGenerator(req.ip || "")}`,
+        handler: (req, res, next) => {
+            const message = `You can only check the Newt version ${60} times every ${15} minutes. Please try again later.`;
+            return next(createHttpError(HttpCode.TOO_MANY_REQUESTS, message));
+        },
+        store: createStore()
+    }),
+    newt.getNewtVersion
+);
+
+authRouter.post(
+    "/newt/register",
+    rateLimit({
+        windowMs: 15 * 60 * 1000,
+        max: 30,
+        keyGenerator: (req) =>
+            `newtRegister:${req.body.provisioningKey?.split(".")[0] || ipKeyGenerator(req.ip || "")}`,
+        handler: (req, res, next) => {
+            const message = `You can only register a newt ${30} times every ${15} minutes. Please try again later.`;
+            return next(createHttpError(HttpCode.TOO_MANY_REQUESTS, message));
+        },
+        store: createStore()
+    }),
+    newt.registerNewt
+);
 authRouter.post(
     "/olm/get-token",
     rateLimit({
         windowMs: 15 * 60 * 1000,
         max: 900,
         keyGenerator: (req) =>
-            `olmGetToken:${req.body.newtId || ipKeyGenerator(req.ip || "")}`,
+            `olmGetToken:${req.body.olmId || ipKeyGenerator(req.ip || "")}`,
         handler: (req, res, next) => {
             const message = `You can only request an Olm token ${900} times every ${15} minutes. Please try again later.`;
             return next(createHttpError(HttpCode.TOO_MANY_REQUESTS, message));

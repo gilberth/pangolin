@@ -318,11 +318,28 @@ export default function DeviceLoginForm({
                                     <FormControl>
                                         <div className="flex justify-center">
                                             <InputOTP
-                                                maxLength={9}
+                                                maxLength={8}
+                                                pattern={REGEXP_ONLY_DIGITS_AND_CHARS}
                                                 {...field}
                                                 value={field.value
                                                     .replace(/-/g, "")
                                                     .toUpperCase()}
+                                                onPaste={(event) => {
+                                                    event.preventDefault();
+                                                    const pastedText =
+                                                        event.clipboardData.getData(
+                                                            "text"
+                                                        );
+                                                    const cleanedValue =
+                                                        pastedText
+                                                            .replace(
+                                                                /[^a-zA-Z0-9]/g,
+                                                                ""
+                                                            )
+                                                            .toUpperCase()
+                                                            .slice(0, 8);
+                                                    field.onChange(cleanedValue);
+                                                }}
                                                 onChange={(value) => {
                                                     // Strip hyphens and convert to uppercase
                                                     const cleanedValue = value

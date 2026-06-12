@@ -7,6 +7,11 @@ import { getTranslations } from "next-intl/server";
 import { getCachedOrgUser } from "@app/lib/api/getCachedOrgUser";
 import { getCachedOrg } from "@app/lib/api/getCachedOrg";
 import { build } from "@server/build";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Billing"
+};
 
 type BillingSettingsProps = {
     children: React.ReactNode;

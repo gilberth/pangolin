@@ -1,7 +1,8 @@
 export * from "./getUser";
 export * from "./removeUserOrg";
 export * from "./listUsers";
-export * from "./addUserRole";
+export * from "./types";
+export * from "./addUserRoleLegacy";
 export * from "./inviteUser";
 export * from "./acceptInvite";
 export * from "./getOrgUser";
@@ -16,4 +17,5 @@ export * from "./createOrgUser";
 export * from "./adminUpdateUser2FA";
 export * from "./adminGetUser";
 export * from "./updateOrgUser";
+export * from "./updateUserLocale";
 export * from "./myDevice";

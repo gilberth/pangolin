@@ -1,176 +1,159 @@
 "use client";
 
+import { HorizontalTabs } from "@app/components/HorizontalTabs";
+import RoleMappingConfigFields from "@app/components/RoleMappingConfigFields";
+import { SwitchInput } from "@app/components/SwitchInput";
 import {
+    FormControl,
     FormField,
     FormItem,
     FormLabel,
-    FormControl,
-    FormDescription,
     FormMessage
 } from "@app/components/ui/form";
-import { SwitchInput } from "@app/components/SwitchInput";
-import { RadioGroup, RadioGroupItem } from "@app/components/ui/radio-group";
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue
-} from "@app/components/ui/select";
 import { Input } from "@app/components/ui/input";
-import { useTranslations } from "next-intl";
-import { Control, FieldValues, Path } from "react-hook-form";
+import { MappingBuilderRule, RoleMappingMode } from "@app/lib/idpRoleMapping";
 import { usePaidStatus } from "@app/hooks/usePaidStatus";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
+import { useTranslations } from "next-intl";
+import type { Control } from "react-hook-form";
 
 type Role = {
     roleId: number;
     name: string;
 };
 
-type AutoProvisionConfigWidgetProps<T extends FieldValues> = {
-    control: Control<T>;
-    autoProvision: boolean;
-    onAutoProvisionChange: (checked: boolean) => void;
-    roleMappingMode: "role" | "expression";
-    onRoleMappingModeChange: (mode: "role" | "expression") => void;
-    roles: Role[];
-    roleIdFieldName: Path<T>;
-    roleMappingFieldName: Path<T>;
+export type IdpOrgMappingFieldBinding = {
+    control: unknown;
+    name: string;
+    labelKey?: string;
 };
 
-export default function AutoProvisionConfigWidget<T extends FieldValues>({
-    control,
+type AutoProvisionConfigWidgetProps = {
+    autoProvision: boolean;
+    onAutoProvisionChange: (checked: boolean) => void;
+    roleMappingMode: RoleMappingMode;
+    onRoleMappingModeChange: (mode: RoleMappingMode) => void;
+    roles: Role[];
+    fixedRoleNames: string[];
+    onFixedRoleNamesChange: (roleNames: string[]) => void;
+    mappingBuilderClaimPath: string;
+    onMappingBuilderClaimPathChange: (claimPath: string) => void;
+    mappingBuilderRules: MappingBuilderRule[];
+    onMappingBuilderRulesChange: (rules: MappingBuilderRule[]) => void;
+    rawExpression: string;
+    onRawExpressionChange: (expression: string) => void;
+    orgMappingField: IdpOrgMappingFieldBinding;
+    showAutoProvisionSwitch?: boolean;
+    roleMappingFieldIdPrefix?: string;
+    showFreeformRoleNamesHint?: boolean;
+    autoProvisionSwitchId?: string;
+    orgId?: string;
+};
+
+export default function AutoProvisionConfigWidget({
     autoProvision,
     onAutoProvisionChange,
     roleMappingMode,
     onRoleMappingModeChange,
     roles,
-    roleIdFieldName,
-    roleMappingFieldName
-}: AutoProvisionConfigWidgetProps<T>) {
+    fixedRoleNames,
+    onFixedRoleNamesChange,
+    mappingBuilderClaimPath,
+    onMappingBuilderClaimPathChange,
+    mappingBuilderRules,
+    onMappingBuilderRulesChange,
+    rawExpression,
+    onRawExpressionChange,
+    orgMappingField,
+    showAutoProvisionSwitch = true,
+    roleMappingFieldIdPrefix = "org-idp-auto-provision",
+    showFreeformRoleNamesHint = false,
+    autoProvisionSwitchId = "auto-provision-toggle",
+    orgId
+}: AutoProvisionConfigWidgetProps) {
     const t = useTranslations();
-
     const { isPaidUser } = usePaidStatus();
+
+    const showMappingTabs = showAutoProvisionSwitch === false || autoProvision;
+
+    const orgMappingLabelKey =
+        orgMappingField.labelKey ?? "orgMappingPathOptional";
 
     return (
         <div className="space-y-4">
-            <div className="mb-4">
-                <SwitchInput
-                    id="auto-provision-toggle"
-                    label={t("idpAutoProvisionUsers")}
-                    defaultChecked={autoProvision}
-                    onCheckedChange={onAutoProvisionChange}
-                    disabled={!isPaidUser(tierMatrix.autoProvisioning)}
-                />
-                <span className="text-sm text-muted-foreground">
-                    {t("idpAutoProvisionUsersDescription")}
-                </span>
-            </div>
-
-            {autoProvision && (
-                <div className="space-y-4">
-                    <div>
-                        <FormLabel className="mb-2">
-                            {t("roleMapping")}
-                        </FormLabel>
-                        <FormDescription className="mb-4">
-                            {t("roleMappingDescription")}
-                        </FormDescription>
-
-                        <RadioGroup
-                            value={roleMappingMode}
-                            onValueChange={onRoleMappingModeChange}
-                            className="flex space-x-6"
-                        >
-                            <div className="flex items-center space-x-2">
-                                <RadioGroupItem value="role" id="role-mode" />
-                                <label
-                                    htmlFor="role-mode"
-                                    className="text-sm font-medium"
-                                >
-                                    {t("selectRole")}
-                                </label>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                                <RadioGroupItem
-                                    value="expression"
-                                    id="expression-mode"
-                                />
-                                <label
-                                    htmlFor="expression-mode"
-                                    className="text-sm font-medium"
-                                >
-                                    {t("roleMappingExpression")}
-                                </label>
-                            </div>
-                        </RadioGroup>
-                    </div>
-
-                    {roleMappingMode === "role" ? (
-                        <FormField
-                            control={control}
-                            name={roleIdFieldName}
-                            render={({ field }) => (
-                                <FormItem>
-                                    <Select
-                                        onValueChange={(value) =>
-                                            field.onChange(Number(value))
-                                        }
-                                        value={field.value?.toString()}
-                                    >
-                                        <FormControl>
-                                            <SelectTrigger>
-                                                <SelectValue
-                                                    placeholder={t(
-                                                        "selectRolePlaceholder"
-                                                    )}
-                                                />
-                                            </SelectTrigger>
-                                        </FormControl>
-                                        <SelectContent>
-                                            {roles.map((role) => (
-                                                <SelectItem
-                                                    key={role.roleId}
-                                                    value={role.roleId.toString()}
-                                                >
-                                                    {role.name}
-                                                </SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
-                                    <FormDescription>
-                                        {t("selectRoleDescription")}
-                                    </FormDescription>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                    ) : (
-                        <FormField
-                            control={control}
-                            name={roleMappingFieldName}
-                            render={({ field }) => (
-                                <FormItem>
-                                    <FormControl>
-                                        <Input
-                                            {...field}
-                                            defaultValue={field.value || ""}
-                                            value={field.value || ""}
-                                            placeholder={t(
-                                                "roleMappingExpressionPlaceholder"
-                                            )}
-                                        />
-                                    </FormControl>
-                                    <FormDescription>
-                                        {t("roleMappingExpressionDescription")}
-                                    </FormDescription>
-                                    <FormMessage />
-                                </FormItem>
-                            )}
-                        />
-                    )}
+            {showAutoProvisionSwitch && (
+                <div className="mb-4">
+                    <SwitchInput
+                        id={autoProvisionSwitchId}
+                        label={t("idpAutoProvisionUsers")}
+                        defaultChecked={autoProvision}
+                        onCheckedChange={onAutoProvisionChange}
+                        disabled={!isPaidUser(tierMatrix.autoProvisioning)}
+                    />
                 </div>
+            )}
+
+            {showMappingTabs && (
+                <HorizontalTabs
+                    clientSide
+                    defaultTab={0}
+                    items={[
+                        { title: t("roleMapping"), href: "#" },
+                        { title: t("orgMapping"), href: "#" }
+                    ]}
+                >
+                    <div className="space-y-4 mt-4 p-1">
+                        <RoleMappingConfigFields
+                            fieldIdPrefix={roleMappingFieldIdPrefix}
+                            showFreeformRoleNamesHint={
+                                showFreeformRoleNamesHint
+                            }
+                            orgId={orgId}
+                            roleMappingMode={roleMappingMode}
+                            onRoleMappingModeChange={onRoleMappingModeChange}
+                            roles={roles}
+                            fixedRoleNames={fixedRoleNames}
+                            onFixedRoleNamesChange={onFixedRoleNamesChange}
+                            mappingBuilderClaimPath={mappingBuilderClaimPath}
+                            onMappingBuilderClaimPathChange={
+                                onMappingBuilderClaimPathChange
+                            }
+                            mappingBuilderRules={mappingBuilderRules}
+                            onMappingBuilderRulesChange={
+                                onMappingBuilderRulesChange
+                            }
+                            rawExpression={rawExpression}
+                            onRawExpressionChange={onRawExpressionChange}
+                        />
+                    </div>
+                    <div className="space-y-4 mt-4 p-1">
+                        <div className="space-y-4">
+                            <p className="text-sm text-muted-foreground">
+                                {t("defaultMappingsOrgDescription")}
+                            </p>
+                            <FormField
+                                control={
+                                    orgMappingField.control as Control<any>
+                                }
+                                name={orgMappingField.name}
+                                render={({ field }) => (
+                                    <FormItem>
+                                        <FormLabel>
+                                            {t(orgMappingLabelKey)}
+                                        </FormLabel>
+                                        <FormControl>
+                                            <Input
+                                                {...field}
+                                                placeholder="e.g., ends_with(email, '@organization.com')"
+                                            />
+                                        </FormControl>
+                                        <FormMessage />
+                                    </FormItem>
+                                )}
+                            />
+                        </div>
+                    </div>
+                </HorizontalTabs>
             )}
         </div>
     );

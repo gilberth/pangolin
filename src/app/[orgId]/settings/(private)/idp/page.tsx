@@ -7,6 +7,11 @@ import { getTranslations } from "next-intl/server";
 import { PaidFeaturesAlert } from "@app/components/PaidFeaturesAlert";
 import { IdpGlobalModeBanner } from "@app/components/IdpGlobalModeBanner";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "Identity Providers"
+};
 
 type OrgIdpPageProps = {
     params: Promise<{ orgId: string }>;

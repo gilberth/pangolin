@@ -12,6 +12,7 @@ import { authCookieHeader } from "@app/lib/api/cookies";
 import { Layout } from "@app/components/Layout";
 import { adminNavSections } from "../navigation";
 import { pullEnv } from "@app/lib/pullEnv";
+import SubscriptionStatusProvider from "@app/providers/SubscriptionStatusProvider";
 
 export const dynamic = "force-dynamic";
 
@@ -51,9 +52,15 @@ export default async function AdminLayout(props: LayoutProps) {
 
     return (
         <UserProvider user={user}>
-            <Layout orgs={orgs} navItems={adminNavSections(env)}>
-                {props.children}
-            </Layout>
+            <SubscriptionStatusProvider
+                subscriptionStatus={null}
+                env={env.app.environment}
+                sandbox_mode={env.app.sandbox_mode}
+            >
+                <Layout orgs={orgs} navItems={adminNavSections(env)}>
+                    {props.children}
+                </Layout>
+            </SubscriptionStatusProvider>
         </UserProvider>
     );
 }

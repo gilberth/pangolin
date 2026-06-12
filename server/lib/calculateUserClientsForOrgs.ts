@@ -10,6 +10,7 @@ import {
     roles,
     Transaction,
     userClients,
+    userOrgRoles,
     userOrgs
 } from "@server/db";
 import { getUniqueClientName } from "@server/db/names";
@@ -24,9 +25,162 @@ import { tierMatrix } from "./billing/tierMatrix";
 
 export async function calculateUserClientsForOrgs(
     userId: string,
-    trx?: Transaction
+    trx: Transaction | typeof db = db
 ): Promise<void> {
-    const execute = async (transaction: Transaction) => {
+    const execute = async (transaction: Transaction | typeof db) => {
+        const orgCache = new Map<string, typeof orgs.$inferSelect | null>();
+        const adminRoleCache = new Map<
+            string,
+            typeof roles.$inferSelect | null
+        >();
+        const exitNodesCache = new Map<
+            string,
+            Awaited<ReturnType<typeof listExitNodes>>
+        >();
+        const isOrgLicensedCache = new Map<string, boolean>();
+        const existingClientCache = new Map<
+            string,
+            typeof clients.$inferSelect | null
+        >();
+        const roleClientAccessCache = new Map<string, boolean>();
+        const userClientAccessCache = new Map<string, boolean>();
+
+        const getOrgOlmKey = (orgId: string, olmId: string) =>
+            `${orgId}:${olmId}`;
+        const getRoleClientKey = (roleId: number, clientId: number) =>
+            `${roleId}:${clientId}`;
+        const getUserClientKey = (cachedUserId: string, clientId: number) =>
+            `${cachedUserId}:${clientId}`;
+
+        const getOrg = async (orgId: string) => {
+            if (orgCache.has(orgId)) {
+                return orgCache.get(orgId) ?? null;
+            }
+
+            const [org] = await transaction
+                .select()
+                .from(orgs)
+                .where(eq(orgs.orgId, orgId));
+            orgCache.set(orgId, org ?? null);
+
+            return org ?? null;
+        };
+
+        const getAdminRole = async (orgId: string) => {
+            if (adminRoleCache.has(orgId)) {
+                return adminRoleCache.get(orgId) ?? null;
+            }
+
+            const [adminRole] = await transaction
+                .select()
+                .from(roles)
+                .where(and(eq(roles.isAdmin, true), eq(roles.orgId, orgId)))
+                .limit(1);
+            adminRoleCache.set(orgId, adminRole ?? null);
+
+            return adminRole ?? null;
+        };
+
+        const getExitNodes = async (orgId: string) => {
+            if (exitNodesCache.has(orgId)) {
+                return exitNodesCache.get(orgId)!;
+            }
+
+            const exitNodes = await listExitNodes(orgId);
+            exitNodesCache.set(orgId, exitNodes);
+
+            return exitNodes;
+        };
+
+        const getIsOrgLicensed = async (orgId: string) => {
+            if (isOrgLicensedCache.has(orgId)) {
+                return isOrgLicensedCache.get(orgId)!;
+            }
+
+            const isOrgLicensed = await isLicensedOrSubscribed(
+                orgId,
+                tierMatrix.deviceApprovals
+            );
+            isOrgLicensedCache.set(orgId, isOrgLicensed);
+
+            return isOrgLicensed;
+        };
+
+        const getExistingClient = async (orgId: string, olmId: string) => {
+            const key = getOrgOlmKey(orgId, olmId);
+            if (existingClientCache.has(key)) {
+                return existingClientCache.get(key) ?? null;
+            }
+
+            const [existingClient] = await transaction
+                .select()
+                .from(clients)
+                .where(
+                    and(
+                        eq(clients.userId, userId),
+                        eq(clients.orgId, orgId),
+                        eq(clients.olmId, olmId)
+                    )
+                )
+                .limit(1);
+
+            existingClientCache.set(key, existingClient ?? null);
+
+            return existingClient ?? null;
+        };
+
+        const hasRoleClientAccess = async (
+            roleId: number,
+            clientId: number
+        ) => {
+            const key = getRoleClientKey(roleId, clientId);
+            if (roleClientAccessCache.has(key)) {
+                return roleClientAccessCache.get(key)!;
+            }
+
+            const [existingRoleClient] = await transaction
+                .select()
+                .from(roleClients)
+                .where(
+                    and(
+                        eq(roleClients.roleId, roleId),
+                        eq(roleClients.clientId, clientId)
+                    )
+                )
+                .limit(1);
+
+            const hasAccess = Boolean(existingRoleClient);
+            roleClientAccessCache.set(key, hasAccess);
+
+            return hasAccess;
+        };
+
+        const hasUserClientAccess = async (
+            cachedUserId: string,
+            clientId: number
+        ) => {
+            const key = getUserClientKey(cachedUserId, clientId);
+            if (userClientAccessCache.has(key)) {
+                return userClientAccessCache.get(key)!;
+            }
+
+            const [existingUserClient] = await transaction
+                .select()
+                .from(userClients)
+                .where(
+                    and(
+                        eq(userClients.userId, cachedUserId),
+                        eq(userClients.clientId, clientId)
+                    )
+                )
+                .limit(1);
+
+            const hasAccess = Boolean(existingUserClient);
+            userClientAccessCache.set(key, hasAccess);
+
+            return hasAccess;
+        };
+
         // Get all OLMs for this user
         const userOlms = await transaction
             .select()
@@ -39,25 +193,47 @@ export async function calculateUserClientsForOrgs(
             return;
         }
 
-        // Get all user orgs
-        const allUserOrgs = await transaction
+        // Get all user orgs with all roles (for org list and role-based logic)
+        const userOrgRoleRows = await transaction
             .select()
             .from(userOrgs)
-            .innerJoin(roles, eq(roles.roleId, userOrgs.roleId))
+            .innerJoin(
+                userOrgRoles,
+                and(
+                    eq(userOrgs.userId, userOrgRoles.userId),
+                    eq(userOrgs.orgId, userOrgRoles.orgId)
+                )
+            )
+            .innerJoin(roles, eq(userOrgRoles.roleId, roles.roleId))
             .where(eq(userOrgs.userId, userId));
 
-        const userOrgIds = allUserOrgs.map(({ userOrgs: uo }) => uo.orgId);
+        const userOrgIds = [
+            ...new Set(userOrgRoleRows.map((r) => r.userOrgs.orgId))
+        ];
+        const orgIdToRoleRows = new Map<
+            string,
+            (typeof userOrgRoleRows)[0][]
+        >();
+        for (const r of userOrgRoleRows) {
+            const list = orgIdToRoleRows.get(r.userOrgs.orgId) ?? [];
+            list.push(r);
+            orgIdToRoleRows.set(r.userOrgs.orgId, list);
+        }
+        const orgRequiresDeviceApprovalRole = new Map<string, boolean>();
+        for (const [orgId, roleRowsForOrg] of orgIdToRoleRows.entries()) {
+            orgRequiresDeviceApprovalRole.set(
+                orgId,
+                roleRowsForOrg.some((r) => r.roles.requireDeviceApproval)
+            );
+        }
 
         // For each OLM, ensure there's a client in each org the user is in
         for (const olm of userOlms) {
-            for (const userRoleOrg of allUserOrgs) {
-                const { userOrgs: userOrg, roles: role } = userRoleOrg;
-                const orgId = userOrg.orgId;
+            for (const orgId of orgIdToRoleRows.keys()) {
+                const roleRowsForOrg = orgIdToRoleRows.get(orgId)!;
+                const userOrg = roleRowsForOrg[0].userOrgs;
 
-                const [org] = await transaction
-                    .select()
-                    .from(orgs)
-                    .where(eq(orgs.orgId, orgId));
+                const org = await getOrg(orgId);
 
                 if (!org) {
                     logger.warn(
@@ -74,11 +250,7 @@ export async function calculateUserClientsForOrgs(
                 }
 
                 // Get admin role for this org (needed for access grants)
-                const [adminRole] = await transaction
-                    .select()
-                    .from(roles)
-                    .where(and(eq(roles.isAdmin, true), eq(roles.orgId, orgId)))
-                    .limit(1);
+                const adminRole = await getAdminRole(orgId);
 
                 if (!adminRole) {
                     logger.warn(
@@ -88,64 +260,50 @@ export async function calculateUserClientsForOrgs(
                 }
 
                 // Check if a client already exists for this OLM+user+org combination
-                const [existingClient] = await transaction
-                    .select()
-                    .from(clients)
-                    .where(
-                        and(
-                            eq(clients.userId, userId),
-                            eq(clients.orgId, orgId),
-                            eq(clients.olmId, olm.olmId)
-                        )
-                    )
-                    .limit(1);
+                const existingClient = await getExistingClient(
+                    orgId,
+                    olm.olmId
+                );
 
                 if (existingClient) {
                     // Ensure admin role has access to the client
-                    const [existingRoleClient] = await transaction
-                        .select()
-                        .from(roleClients)
-                        .where(
-                            and(
-                                eq(roleClients.roleId, adminRole.roleId),
-                                eq(
-                                    roleClients.clientId,
-                                    existingClient.clientId
-                                )
-                            )
-                        )
-                        .limit(1);
+                    const hasRoleAccess = await hasRoleClientAccess(
+                        adminRole.roleId,
+                        existingClient.clientId
+                    );
 
-                    if (!existingRoleClient) {
+                    if (!hasRoleAccess) {
                         await transaction.insert(roleClients).values({
                             roleId: adminRole.roleId,
                             clientId: existingClient.clientId
                         });
+                        roleClientAccessCache.set(
+                            getRoleClientKey(
+                                adminRole.roleId,
+                                existingClient.clientId
+                            ),
+                            true
+                        );
                         logger.debug(
                             `Granted admin role access to existing client ${existingClient.clientId} for OLM ${olm.olmId} in org ${orgId} (user ${userId})`
                         );
                     }
 
                     // Ensure user has access to the client
-                    const [existingUserClient] = await transaction
-                        .select()
-                        .from(userClients)
-                        .where(
-                            and(
-                                eq(userClients.userId, userId),
-                                eq(
-                                    userClients.clientId,
-                                    existingClient.clientId
-                                )
-                            )
-                        )
-                        .limit(1);
+                    const hasUserAccess = await hasUserClientAccess(
+                        userId,
+                        existingClient.clientId
+                    );
 
-                    if (!existingUserClient) {
+                    if (!hasUserAccess) {
                         await transaction.insert(userClients).values({
                             userId,
                             clientId: existingClient.clientId
                         });
+                        userClientAccessCache.set(
+                            getUserClientKey(userId, existingClient.clientId),
+                            true
+                        );
                         logger.debug(
                             `Granted user access to existing client ${existingClient.clientId} for OLM ${olm.olmId} in org ${orgId} (user ${userId})`
                         );
@@ -158,7 +316,7 @@ export async function calculateUserClientsForOrgs(
                 }
 
                 // Get exit nodes for this org
-                const exitNodesList = await listExitNodes(orgId);
+                const exitNodesList = await getExitNodes(orgId);
 
                 if (exitNodesList.length === 0) {
                     logger.warn(
@@ -173,30 +331,19 @@ export async function calculateUserClientsForOrgs(
                     ];
 
                 // Get next available subnet
-                const newSubnet = await getNextAvailableClientSubnet(
-                    orgId,
-                    transaction
-                );
-                if (!newSubnet) {
-                    logger.warn(
-                        `Skipping org ${orgId} for OLM ${olm.olmId} (user ${userId}): no available subnet found`
-                    );
-                    continue;
-                }
+                const { value: newSubnet, release: releaseSubnetLock } =
+                    await getNextAvailableClientSubnet(orgId, transaction);
 
                 const subnet = newSubnet.split("/")[0];
                 const updatedSubnet = `${subnet}/${org.subnet.split("/")[1]}`;
 
                 const niceId = await getUniqueClientName(orgId);
 
-                const isOrgLicensed = await isLicensedOrSubscribed(
-                    userOrg.orgId,
-                    tierMatrix.deviceApprovals
-                );
+                const isOrgLicensed = await getIsOrgLicensed(userOrg.orgId);
                 const requireApproval =
                     build !== "oss" &&
                     isOrgLicensed &&
-                    role.requireDeviceApproval;
+                    orgRequiresDeviceApprovalRole.get(orgId) === true;
 
                 const newClientData: InferInsertModel<typeof clients> = {
                     userId,
@@ -215,6 +362,11 @@ export async function calculateUserClientsForOrgs(
                     .insert(clients)
                     .values(newClientData)
                     .returning();
+                await releaseSubnetLock();
+                existingClientCache.set(
+                    getOrgOlmKey(orgId, olm.olmId),
+                    newClient
+                );
 
                 // create approval request
                 if (requireApproval) {
@@ -240,12 +392,20 @@ export async function calculateUserClientsForOrgs(
                     roleId: adminRole.roleId,
                     clientId: newClient.clientId
                 });
+                roleClientAccessCache.set(
+                    getRoleClientKey(adminRole.roleId, newClient.clientId),
+                    true
+                );
 
                 // Grant user access to the client
                 await transaction.insert(userClients).values({
                     userId,
                     clientId: newClient.clientId
                 });
+                userClientAccessCache.set(
+                    getUserClientKey(userId, newClient.clientId),
+                    true
+                );
 
                 logger.debug(
                     `Created client for OLM ${olm.olmId} in org ${orgId} (user ${userId}) with access granted to admin role and user`
@@ -270,7 +430,7 @@ export async function calculateUserClientsForOrgs(
 
 async function cleanupOrphanedClients(
     userId: string,
-    trx: Transaction,
+    trx: Transaction | typeof db,
     userOrgIds: string[] = []
 ): Promise<void> {
     // Find all OLM clients for this user that should be deleted

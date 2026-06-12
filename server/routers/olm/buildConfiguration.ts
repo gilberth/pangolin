@@ -4,6 +4,9 @@ import {
     clientSitesAssociationsCache,
     db,
     exitNodes,
+    networks,
+    SiteResource,
+    siteNetworks,
     siteResources,
     sites
 } from "@server/db";
@@ -13,7 +16,7 @@ import {
     generateRemoteSubnets
 } from "@server/lib/ip";
 import logger from "@server/logger";
-import { and, eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { addPeer, deletePeer } from "../newt/peers";
 import config from "@server/lib/config";
 
@@ -25,11 +28,11 @@ export async function buildSiteConfigurationForOlmClient(
 ) {
     const siteConfigurations: {
         siteId: number;
-        name?: string
-        endpoint?: string
-        publicKey?: string
-        serverIP?: string | null
-        serverPort?: number | null
+        name?: string;
+        endpoint?: string;
+        publicKey?: string;
+        serverIP?: string | null;
+        serverPort?: number | null;
         remoteSubnets?: string[];
         aliases: Alias[];
     }[] = [];
@@ -44,41 +47,79 @@ export async function buildSiteConfigurationForOlmClient(
         )
         .where(eq(clientSitesAssociationsCache.clientId, client.clientId));
 
+    if (sitesData.length === 0) {
+        return siteConfigurations;
+    }
+
+    // Batch-fetch every site resource this client has access to across ALL sites
+    // in a single query, then group by siteId in memory. This avoids issuing one
+    // query per site (which would be N round-trips for N sites).
+    const allClientSiteResources = await db
+        .select({
+            siteResource: siteResources,
+            siteId: siteNetworks.siteId
+        })
+        .from(siteResources)
+        .innerJoin(
+            clientSiteResourcesAssociationsCache,
+            eq(
+                siteResources.siteResourceId,
+                clientSiteResourcesAssociationsCache.siteResourceId
+            )
+        )
+        .innerJoin(networks, eq(siteResources.networkId, networks.networkId))
+        .innerJoin(siteNetworks, eq(networks.networkId, siteNetworks.networkId))
+        .where(
+            eq(clientSiteResourcesAssociationsCache.clientId, client.clientId)
+        );
+
+    const siteResourcesBySiteId = new Map<number, SiteResource[]>();
+    for (const row of allClientSiteResources) {
+        const arr = siteResourcesBySiteId.get(row.siteId);
+        if (arr) {
+            arr.push(row.siteResource);
+        } else {
+            siteResourcesBySiteId.set(row.siteId, [row.siteResource]);
+        }
+    }
+
+    // Batch-fetch exit nodes for all sites in one query (only needed in relay mode).
+    const exitNodesById = new Map<number, typeof exitNodes.$inferSelect>();
+    if (!jitMode && relay) {
+        const exitNodeIds = Array.from(
+            new Set(
+                sitesData
+                    .map(({ sites: s }) => s.exitNodeId)
+                    .filter((id): id is number => id != null)
+            )
+        );
+        if (exitNodeIds.length > 0) {
+            const nodes = await db
+                .select()
+                .from(exitNodes)
+                .where(inArray(exitNodes.exitNodeId, exitNodeIds));
+            for (const n of nodes) {
+                exitNodesById.set(n.exitNodeId, n);
+            }
+        }
+    }
+
+    const clientsStartPort = config.getRawConfig().gerbil.clients_start_port;
+    const peerOps: Promise<unknown>[] = [];
+
     // Process each site
     for (const {
         sites: site,
         clientSitesAssociationsCache: association
     } of sitesData) {
-        const allSiteResources = await db // only get the site resources that this client has access to
-            .select()
-            .from(siteResources)
-            .innerJoin(
-                clientSiteResourcesAssociationsCache,
-                eq(
-                    siteResources.siteResourceId,
-                    clientSiteResourcesAssociationsCache.siteResourceId
-                )
-            )
-            .where(
-                and(
-                    eq(siteResources.siteId, site.siteId),
-                    eq(
-                        clientSiteResourcesAssociationsCache.clientId,
-                        client.clientId
-                    )
-                )
-            );
+        const allSiteResources = siteResourcesBySiteId.get(site.siteId) ?? [];
 
         if (jitMode) {
             // Add site configuration to the array
             siteConfigurations.push({
                 siteId: site.siteId,
-                // remoteSubnets: generateRemoteSubnets(
-                //     allSiteResources.map(({ siteResources }) => siteResources)
-                // ),
-                aliases: generateAliasConfig(
-                    allSiteResources.map(({ siteResources }) => siteResources)
-                )
+                // remoteSubnets: generateRemoteSubnets(allSiteResources),
+                aliases: generateAliasConfig(allSiteResources)
             });
             continue;
         }
@@ -98,10 +139,9 @@ export async function buildSiteConfigurationForOlmClient(
             continue;
         }
 
-        if (!site.publicKey || site.publicKey == "") { // the site is not ready to accept new peers
-            logger.warn(
-                `Site ${site.siteId} has no public key, skipping`
-            );
+        if (!site.publicKey || site.publicKey == "") {
+            // the site is not ready to accept new peers
+            logger.warn(`Site ${site.siteId} has no public key, skipping`);
             continue;
         }
 
@@ -117,7 +157,7 @@ export async function buildSiteConfigurationForOlmClient(
             logger.info(
                 `Public key mismatch. Deleting old peer from site ${site.siteId}...`
             );
-            await deletePeer(site.siteId, client.pubKey!);
+            peerOps.push(deletePeer(site.siteId, client.pubKey!));
         }
 
         if (!site.subnet) {
@@ -125,27 +165,19 @@ export async function buildSiteConfigurationForOlmClient(
             continue;
         }
 
-        const [clientSite] = await db
-            .select()
-            .from(clientSitesAssociationsCache)
-            .where(
-                and(
-                    eq(clientSitesAssociationsCache.clientId, client.clientId),
-                    eq(clientSitesAssociationsCache.siteId, site.siteId)
-                )
-            )
-            .limit(1);
-
-        // Add the peer to the exit node for this site
-        if (clientSite.endpoint && publicKey) {
+        // Add the peer to the exit node for this site. The endpoint comes from
+        // the already-joined association row above, so no extra query needed.
+        if (association.endpoint && publicKey) {
             logger.info(
-                `Adding peer ${publicKey} to site ${site.siteId} with endpoint ${clientSite.endpoint}`
+                `Adding peer ${publicKey} to site ${site.siteId} with endpoint ${association.endpoint}`
             );
-            await addPeer(site.siteId, {
-                publicKey: publicKey,
-                allowedIps: [`${client.subnet.split("/")[0]}/32`], // we want to only allow from that client
-                endpoint: relay ? "" : clientSite.endpoint
-            });
+            peerOps.push(
+                addPeer(site.siteId, {
+                    publicKey: publicKey,
+                    allowedIps: [`${client.subnet.split("/")[0]}/32`], // we want to only allow from that client
+                    endpoint: relay ? "" : association.endpoint
+                })
+            );
         } else {
             logger.warn(
                 `Client ${client.clientId} has no endpoint, skipping peer addition`
@@ -154,16 +186,12 @@ export async function buildSiteConfigurationForOlmClient(
 
         let relayEndpoint: string | undefined = undefined;
         if (relay) {
-            const [exitNode] = await db
-                .select()
-                .from(exitNodes)
-                .where(eq(exitNodes.exitNodeId, site.exitNodeId))
-                .limit(1);
+            const exitNode = exitNodesById.get(site.exitNodeId);
             if (!exitNode) {
                 logger.warn(`Exit node not found for site ${site.siteId}`);
                 continue;
             }
-            relayEndpoint = `${exitNode.endpoint}:${config.getRawConfig().gerbil.clients_start_port}`;
+            relayEndpoint = `${exitNode.endpoint}:${clientsStartPort}`;
         }
 
         // Add site configuration to the array
@@ -175,12 +203,16 @@ export async function buildSiteConfigurationForOlmClient(
             publicKey: site.publicKey,
             serverIP: site.address,
             serverPort: site.listenPort,
-            remoteSubnets: generateRemoteSubnets(
-                allSiteResources.map(({ siteResources }) => siteResources)
-            ),
-            aliases: generateAliasConfig(
-                allSiteResources.map(({ siteResources }) => siteResources)
-            )
+            remoteSubnets: generateRemoteSubnets(allSiteResources),
+            aliases: generateAliasConfig(allSiteResources)
+        });
+    }
+
+    // Run all peer add/delete operations concurrently rather than serially per
+    // site, so total time is bounded by the slowest call instead of the sum.
+    if (peerOps.length > 0) {
+        Promise.allSettled(peerOps).catch((err) => {
+            logger.error("Error processing peer operations: ", err);
         });
     }
 

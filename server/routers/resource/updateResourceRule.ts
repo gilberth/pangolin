@@ -14,18 +14,21 @@ import {
     isValidUrlGlobPattern
 } from "@server/lib/validators";
 import { OpenAPITags, registry } from "@server/openApi";
+import { isValidRegionId } from "@server/db/regions";
 
 // Define Zod schema for request parameters validation
 const updateResourceRuleParamsSchema = z.strictObject({
-    ruleId: z.string().transform(Number).pipe(z.int().positive()),
-    resourceId: z.string().transform(Number).pipe(z.int().positive())
+    ruleId: z.coerce.number().int().positive(),
+    resourceId: z.coerce.number().int().positive()
 });
 
 // Define Zod schema for request body validation
 const updateResourceRuleSchema = z
     .strictObject({
         action: z.enum(["ACCEPT", "DROP", "PASS"]).optional(),
-        match: z.enum(["CIDR", "IP", "PATH", "COUNTRY", "ASN"]).optional(),
+        match: z
+            .enum(["CIDR", "IP", "PATH", "COUNTRY", "ASN", "REGION"])
+            .optional(),
         value: z.string().min(1).optional(),
         priority: z.int(),
         enabled: z.boolean().optional()
@@ -49,7 +52,22 @@ registry.registerPath({
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function updateResourceRule(
@@ -101,7 +119,7 @@ export async function updateResourceRule(
             );
         }
 
-        if (!resource.http) {
+        if (!["http", "ssh", "rdp", "vnc"].includes(resource.mode)) {
             return next(
                 createHttpError(
                     HttpCode.BAD_REQUEST,
@@ -163,6 +181,15 @@ export async function updateResourceRule(
                         createHttpError(
                             HttpCode.BAD_REQUEST,
                             "Invalid URL glob pattern provided"
+                        )
+                    );
+                }
+            } else if (match === "REGION") {
+                if (!isValidRegionId(value)) {
+                    return next(
+                        createHttpError(
+                            HttpCode.BAD_REQUEST,
+                            "Invalid region ID provided"
                         )
                     );
                 }

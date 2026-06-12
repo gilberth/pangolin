@@ -7,6 +7,11 @@ import { type ListUserDevicesResponse } from "@server/routers/client";
 import type { Pagination } from "@server/types/Pagination";
 import { AxiosResponse } from "axios";
 import { getTranslations } from "next-intl/server";
+import type { Metadata } from "next";
+
+export const metadata: Metadata = {
+    title: "User Devices"
+};
 
 type ClientsPageProps = {
     params: Promise<{ orgId: string }>;
@@ -91,6 +96,9 @@ export default async function ClientsPage(props: ClientsPageProps) {
             userId: client.userId,
             username: client.username,
             userEmail: client.userEmail,
+            userType: client.userType ?? null,
+            idpName: client.idpName ?? null,
+            idpVariant: client.idpVariant ?? null,
             niceId: client.niceId,
             agent: client.agent,
             archived: Boolean(client.archived),

@@ -1,7 +1,7 @@
 /*
  * This file is part of a proprietary work.
  *
- * Copyright (c) 2025 Fossorial, Inc.
+ * Copyright (c) 2025-2026 Fossorial, Inc.
  * All rights reserved.
  *
  * This file is licensed under the Fossorial Commercial License.
@@ -109,14 +109,14 @@ class RedisManager {
             password: redisConfig.password,
             db: redisConfig.db
         };
-        
+
         // Enable TLS if configured (required for AWS ElastiCache in-transit encryption)
         if (redisConfig.tls) {
             opts.tls = {
                 rejectUnauthorized: redisConfig.tls.rejectUnauthorized ?? true
             };
         }
-        
+
         return opts;
     }
 
@@ -135,14 +135,14 @@ class RedisManager {
             password: replica.password,
             db: replica.db || redisConfig.db
         };
-        
+
         // Enable TLS if configured (required for AWS ElastiCache in-transit encryption)
         if (redisConfig.tls) {
             opts.tls = {
                 rejectUnauthorized: redisConfig.tls.rejectUnauthorized ?? true
             };
         }
-        
+
         return opts;
     }
 
@@ -855,3 +855,163 @@ class RedisManager {
 export const redisManager = new RedisManager();
 export const redis = redisManager.getClient();
 export default redisManager;
+
+/**
+ * Lightweight Redis manager for the regional (in-cluster) Redis instance.
+ * Connects only when `redis.regional_redis` is present in the private config
+ * and `flags.enable_redis` is true. No pub/sub — designed for low-latency
+ * caching of regionally-scoped data.
+ */
+class RegionalRedisManager {
+    private writeClient: Redis | null = null;
+    private readClient: Redis | null = null;
+    private isEnabled: boolean = false;
+    private isHealthy: boolean = false;
+    private connectionTimeout: number = 5000;
+    private commandTimeout: number = 5000;
+
+    constructor() {
+        if (build === "oss") return;
+
+        const cfg = privateConfig.getRawPrivateConfig();
+        if (!cfg.flags.enable_redis || !cfg.redis?.regional_redis) return;
+
+        this.isEnabled = true;
+        this.initializeClients();
+    }
+
+    private getConfig(): RedisOptions {
+        const r = privateConfig.getRawPrivateConfig().redis!.regional_redis!;
+        const opts: RedisOptions = {
+            host: r.host,
+            port: r.port,
+            password: r.password,
+            db: r.db
+        };
+        if (r.tls) {
+            opts.tls = { rejectUnauthorized: r.tls.rejectUnauthorized ?? true };
+        }
+        return opts;
+    }
+
+    private initializeClients(): void {
+        const cfg = this.getConfig();
+        const baseOpts = {
+            ...cfg,
+            enableReadyCheck: false,
+            maxRetriesPerRequest: 3,
+            keepAlive: 10000,
+            connectTimeout: this.connectionTimeout,
+            commandTimeout: this.commandTimeout
+        };
+
+        try {
+            this.writeClient = new Redis(baseOpts);
+            // redis-1 (replica) handles reads; fall back to primary if not resolvable
+            this.readClient = new Redis({
+                ...baseOpts,
+                host: cfg.host!.replace(/^(.*?)(\.\S+)$/, (_, h, rest) => {
+                    // Derive replica hostname from the headless service pattern:
+                    // redis.redis.svc.cluster.local -> redis-1.redis-headless.redis.svc.cluster.local
+                    // If it doesn't look like a k8s service, just use the same host
+                    return h + rest;
+                })
+            });
+
+            // For simplicity use same host for both; callers can always read from primary
+            // The real replica routing is handled by the StatefulSet headless service
+            this.readClient = this.writeClient;
+
+            this.writeClient.on("ready", () => {
+                logger.info("Regional Redis client ready");
+                this.isHealthy = true;
+            });
+            this.writeClient.on("error", (err) => {
+                logger.error("Regional Redis client error:", err);
+                this.isHealthy = false;
+            });
+            this.writeClient.on("reconnecting", () => {
+                logger.info("Regional Redis client reconnecting...");
+                this.isHealthy = false;
+            });
+
+            logger.info("Regional Redis client initialized");
+        } catch (error) {
+            logger.error("Failed to initialize regional Redis client:", error);
+            this.isEnabled = false;
+        }
+    }
+
+    public isRedisEnabled(): boolean {
+        return this.isEnabled && this.writeClient !== null && this.isHealthy;
+    }
+
+    public getHealthStatus() {
+        return { isEnabled: this.isEnabled, isHealthy: this.isHealthy };
+    }
+
+    public async set(
+        key: string,
+        value: string,
+        ttl?: number
+    ): Promise<boolean> {
+        if (!this.isRedisEnabled() || !this.writeClient) return false;
+        try {
+            if (ttl) {
+                await this.writeClient.setex(key, ttl, value);
+            } else {
+                await this.writeClient.set(key, value);
+            }
+            return true;
+        } catch (error) {
+            logger.error("Regional Redis SET error:", error);
+            return false;
+        }
+    }
+
+    public async get(key: string): Promise<string | null> {
+        if (!this.isRedisEnabled() || !this.readClient) return null;
+        try {
+            return await this.readClient.get(key);
+        } catch (error) {
+            logger.error("Regional Redis GET error:", error);
+            return null;
+        }
+    }
+
+    public async del(key: string): Promise<boolean> {
+        if (!this.isRedisEnabled() || !this.writeClient) return false;
+        try {
+            await this.writeClient.del(key);
+            return true;
+        } catch (error) {
+            logger.error("Regional Redis DEL error:", error);
+            return false;
+        }
+    }
+
+    public async keys(pattern: string): Promise<string[]> {
+        if (!this.isRedisEnabled() || !this.readClient) return [];
+        try {
+            return await this.readClient.keys(pattern);
+        } catch (error) {
+            logger.error("Regional Redis KEYS error:", error);
+            return [];
+        }
+    }
+
+    public async disconnect(): Promise<void> {
+        try {
+            if (this.writeClient) {
+                await this.writeClient.quit();
+                this.writeClient = null;
+            }
+            this.readClient = null;
+            logger.info("Regional Redis client disconnected");
+        } catch (error) {
+            logger.error("Error disconnecting regional Redis client:", error);
+        }
+    }
+}
+
+export const regionalRedisManager = new RegionalRedisManager();

@@ -1,5 +1,3 @@
-import { Request, Response, NextFunction } from "express";
-import { z } from "zod";
 import {
     clientSiteResources,
     clientSiteResourcesAssociationsCache,
@@ -8,47 +6,60 @@ import {
     orgs,
     roles,
     roleSiteResources,
+    siteNetworks,
+    SiteResource,
+    siteResources,
     sites,
+    networks,
     Transaction,
     userSiteResources
 } from "@server/db";
-import { siteResources, SiteResource } from "@server/db";
+import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
+import { TierFeature, tierMatrix } from "@server/lib/billing/tierMatrix";
+import { validateAndConstructDomain } from "@server/lib/domainUtils";
 import response from "@server/lib/response";
-import HttpCode from "@server/types/HttpCode";
-import createHttpError from "http-errors";
-import { eq, and, ne } from "drizzle-orm";
-import { fromError } from "zod-validation-error";
-import logger from "@server/logger";
+import { eq, and, ne, inArray } from "drizzle-orm";
 import { OpenAPITags, registry } from "@server/openApi";
 import { updatePeerData, updateTargets } from "@server/routers/client/targets";
 import {
     generateAliasConfig,
     generateRemoteSubnets,
-    generateSubnetProxyTargets,
+    generateSubnetProxyTargetV2,
     isIpInCidr,
     portRangeStringSchema
 } from "@server/lib/ip";
-import {
-    getClientSiteResourceAccess,
-    rebuildClientAssociationsFromSiteResource
-} from "@server/lib/rebuildClientAssociations";
-import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
-import { tierMatrix } from "@server/lib/billing/tierMatrix";
+import { rebuildClientAssociationsFromSiteResource } from "@server/lib/rebuildClientAssociations";
+import logger from "@server/logger";
+import HttpCode from "@server/types/HttpCode";
+import { NextFunction, Request, Response } from "express";
+import createHttpError from "http-errors";
+import { z } from "zod";
+import { fromError } from "zod-validation-error";
 
 const updateSiteResourceParamsSchema = z.strictObject({
-    siteResourceId: z.string().transform(Number).pipe(z.int().positive())
+    siteResourceId: z.coerce.number().int().positive()
 });
 
 const updateSiteResourceSchema = z
     .strictObject({
         name: z.string().min(1).max(255).optional(),
-        siteId: z.int(),
+        siteIds: z.array(z.int()).optional(),
+        siteId: z.int().positive().optional(),
         // niceId: z.string().min(1).max(255).regex(/^[a-zA-Z0-9-]+$/, "niceId can only contain letters, numbers, and dashes").optional(),
+        niceId: z
+            .string()
+            .min(1)
+            .max(255)
+            .regex(
+                /^[a-zA-Z0-9-]+$/,
+                "niceId can only contain letters, numbers, and dashes"
+            )
+            .optional(),
         // mode: z.enum(["host", "cidr", "port"]).optional(),
-        mode: z.enum(["host", "cidr"]).optional(),
-        // protocol: z.enum(["tcp", "udp"]).nullish(),
-        // proxyPort: z.int().positive().nullish(),
-        // destinationPort: z.int().positive().nullish(),
+        mode: z.enum(["host", "cidr", "http", "ssh"]).optional(),
+        ssl: z.boolean().optional(),
+        scheme: z.enum(["http", "https"]).nullish(),
+        destinationPort: z.int().positive().nullish(),
         destination: z.string().min(1).optional(),
         enabled: z.boolean().optional(),
         alias: z
@@ -57,7 +68,12 @@ const updateSiteResourceSchema = z
                 /^(?:[a-zA-Z0-9*?](?:[a-zA-Z0-9*?-]{0,61}[a-zA-Z0-9*?])?\.)+[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/,
                 "Alias must be a fully qualified domain name with optional wildcards (e.g., example.internal, *.example.internal, host-0?.example.internal)"
             )
-            .nullish(),
+            .nullish()
+            .openapi({
+                description:
+                    "Fully qualified domain name with optional wildcards, e.g., example.internal, *.example.internal, or host-0?.example.internal",
+                example: "service.example.internal"
+            }),
         userIds: z.array(z.string()),
         roleIds: z.array(z.int()),
         clientIds: z.array(z.int()),
@@ -65,12 +81,18 @@ const updateSiteResourceSchema = z
         udpPortRangeString: portRangeStringSchema,
         disableIcmp: z.boolean().optional(),
         authDaemonPort: z.int().positive().nullish(),
-        authDaemonMode: z.enum(["site", "remote"]).optional()
+        authDaemonMode: z.enum(["site", "remote", "native"]).optional(),
+        pamMode: z.enum(["passthrough", "push"]).optional(),
+        domainId: z.string().optional(),
+        subdomain: z.string().optional()
     })
     .strict()
     .refine(
         (data) => {
-            if (data.mode === "host" && data.destination) {
+            if (
+                (data.mode === "host" || data.mode == "ssh") &&
+                data.destination
+            ) {
                 const isValidIP = z
                     // .union([z.ipv4(), z.ipv6()])
                     .union([z.ipv4()]) // for now lets just do ipv4 until we verify ipv6 works everywhere
@@ -90,6 +112,17 @@ const updateSiteResourceSchema = z
                     data.alias.trim() !== "";
 
                 return isValidDomain && isValidAlias; // require the alias to be set in the case of domain
+            } else if (data.mode === "cidr" && data.destination) {
+                // Check if it's a valid CIDR (v4 or v6)
+                const isValidCIDR = z
+                    .union([z.cidrv4(), z.cidrv6()])
+                    .safeParse(data.destination).success;
+                return isValidCIDR;
+            } else if (data.mode === "http") {
+                // we have to have a domainId defined
+                if (!data.domainId) {
+                    return false;
+                }
             }
             return true;
         },
@@ -100,17 +133,72 @@ const updateSiteResourceSchema = z
     )
     .refine(
         (data) => {
-            if (data.mode === "cidr" && data.destination) {
-                // Check if it's a valid CIDR (v4 or v6)
-                const isValidCIDR = z
-                    .union([z.cidrv4(), z.cidrv6()])
-                    .safeParse(data.destination).success;
-                return isValidCIDR;
+            if (data.mode === "http") {
+                return (
+                    data.scheme !== undefined &&
+                    data.scheme !== null &&
+                    data.destinationPort !== undefined &&
+                    data.destinationPort !== null &&
+                    data.destinationPort >= 1 &&
+                    data.destinationPort <= 65535
+                );
+            } else if (data.mode === "ssh") {
+                // destinationPort is optional for native mode; allow null/undefined
+                return (
+                    data.destinationPort == null ||
+                    (data.destinationPort >= 1 && data.destinationPort <= 65535)
+                );
             }
             return true;
         },
         {
-            message: "Destination must be a valid CIDR notation for cidr mode"
+            message:
+                "HTTP mode requires scheme (http or https) and a valid destination port"
+        }
+    )
+    .refine(
+        (data) => {
+            // destination is only optional for ssh mode with native authDaemonMode
+            if (data.mode === "ssh" && data.authDaemonMode === "native") {
+                return true;
+            }
+            return (
+                data.destination !== undefined && data.destination.trim() !== ""
+            );
+        },
+        {
+            message:
+                "Destination is required unless mode is ssh with authDaemonMode native"
+        }
+    )
+    .refine(
+        (data) => {
+            return (
+                (data.siteIds !== undefined && data.siteIds.length > 0) ||
+                data.siteId !== undefined
+            );
+        },
+        {
+            message: "At least one of siteIds or siteId must be provided"
+        }
+    )
+    .refine(
+        (data) => {
+            if (data.mode !== "ssh") return true;
+            const isSingleSiteMode =
+                data.authDaemonMode === "native" ||
+                (data.pamMode === "push" && data.authDaemonMode === "site") ||
+                (data.pamMode === "push" && data.authDaemonMode === undefined);
+            if (!isSingleSiteMode) return true;
+            const effectiveSiteIds = [
+                ...(data.siteIds ?? []),
+                ...(data.siteId !== undefined ? [data.siteId] : [])
+            ];
+            const uniqueSiteIds = new Set(effectiveSiteIds);
+            return uniqueSiteIds.size <= 1;
+        },
+        {
+            message: "Only one site is allowed for this SSH daemon mode"
         }
     );
 
@@ -132,7 +220,22 @@ registry.registerPath({
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function updateSiteResource(
@@ -166,10 +269,15 @@ export async function updateSiteResource(
         const { siteResourceId } = parsedParams.data;
         const {
             name,
-            siteId, // because it can change
+            siteIds: siteIdsInput = [], // because it can change
+            siteId,
+            niceId,
             mode,
+            scheme,
             destination,
+            destinationPort,
             alias,
+            ssl,
             enabled,
             userIds,
             roleIds,
@@ -178,17 +286,16 @@ export async function updateSiteResource(
             udpPortRangeString,
             disableIcmp,
             authDaemonPort,
-            authDaemonMode
+            authDaemonMode,
+            pamMode,
+            domainId,
+            subdomain
         } = parsedBody.data;
 
-        const [site] = await db
-            .select()
-            .from(sites)
-            .where(eq(sites.siteId, siteId))
-            .limit(1);
-
-        if (!site) {
-            return next(createHttpError(HttpCode.NOT_FOUND, "Site not found"));
+        // Backward compatibility: merge deprecated siteId into siteIds array
+        const siteIds = [...siteIdsInput];
+        if (siteId !== undefined && !siteIds.includes(siteId)) {
+            siteIds.push(siteId);
         }
 
         // Check if site resource exists
@@ -204,9 +311,24 @@ export async function updateSiteResource(
             );
         }
 
+        if (mode == "http") {
+            const hasHttpFeature = await isLicensedOrSubscribed(
+                existingSiteResource.orgId,
+                tierMatrix[TierFeature.AdvancedPrivateResources]
+            );
+            if (!hasHttpFeature) {
+                return next(
+                    createHttpError(
+                        HttpCode.FORBIDDEN,
+                        "HTTP private resources are not included in your current plan. Please upgrade."
+                    )
+                );
+            }
+        }
+
         const isLicensedSshPam = await isLicensedOrSubscribed(
             existingSiteResource.orgId,
-            tierMatrix.sshPam
+            tierMatrix.advancedPrivateResources
         );
 
         const [org] = await db
@@ -230,6 +352,23 @@ export async function updateSiteResource(
             );
         }
 
+        // Verify the site exists and belongs to the org
+        const sitesToAssign = await db
+            .select()
+            .from(sites)
+            .where(
+                and(
+                    inArray(sites.siteId, siteIds),
+                    eq(sites.orgId, existingSiteResource.orgId)
+                )
+            );
+
+        if (sitesToAssign.length !== siteIds.length) {
+            return next(
+                createHttpError(HttpCode.NOT_FOUND, "Some site not found")
+            );
+        }
+
         // Only check if destination is an IP address
         const isIp = z
             .union([z.ipv4(), z.ipv6()])
@@ -247,22 +386,60 @@ export async function updateSiteResource(
             );
         }
 
-        let existingSite = site;
-        let siteChanged = false;
-        if (existingSiteResource.siteId !== siteId) {
-            siteChanged = true;
-            // get the existing site
-            [existingSite] = await db
-                .select()
-                .from(sites)
-                .where(eq(sites.siteId, existingSiteResource.siteId))
-                .limit(1);
+        let sitesChanged = false;
+        const existingSiteIds = existingSiteResource.networkId
+            ? await db
+                  .select()
+                  .from(siteNetworks)
+                  .where(
+                      eq(siteNetworks.networkId, existingSiteResource.networkId)
+                  )
+            : [];
 
-            if (!existingSite) {
+        const existingSiteIdSet = new Set(existingSiteIds.map((s) => s.siteId));
+        const newSiteIdSet = new Set(siteIds);
+
+        if (
+            existingSiteIdSet.size !== newSiteIdSet.size ||
+            ![...existingSiteIdSet].every((id) => newSiteIdSet.has(id))
+        ) {
+            sitesChanged = true;
+        }
+
+        let fullDomain: string | null = null;
+        let finalSubdomain: string | null = null;
+        if (domainId) {
+            // Validate domain and construct full domain
+            const domainResult = await validateAndConstructDomain(
+                domainId,
+                org.orgId,
+                subdomain
+            );
+
+            if (!domainResult.success) {
+                return next(
+                    createHttpError(HttpCode.BAD_REQUEST, domainResult.error)
+                );
+            }
+
+            fullDomain = domainResult.fullDomain;
+            finalSubdomain = domainResult.subdomain;
+
+            // make sure the full domain is unique
+            const [existingDomain] = await db
+                .select()
+                .from(siteResources)
+                .where(eq(siteResources.fullDomain, fullDomain));
+
+            if (
+                existingDomain &&
+                existingDomain.siteResourceId !==
+                    existingSiteResource.siteResourceId
+            ) {
                 return next(
                     createHttpError(
-                        HttpCode.NOT_FOUND,
-                        "Existing site not found"
+                        HttpCode.CONFLICT,
+                        "Resource with that domain already exists"
                     )
                 );
             }
@@ -295,7 +472,7 @@ export async function updateSiteResource(
         let updatedSiteResource: SiteResource | undefined;
         await db.transaction(async (trx) => {
             // if the site is changed we need to delete and recreate the resource to avoid complications with the rebuild function otherwise we can just update in place
-            if (siteChanged) {
+            if (sitesChanged) {
                 // delete the existing site resource
                 await trx
                     .delete(siteResources)
@@ -316,33 +493,56 @@ export async function updateSiteResource(
                     })
                     .returning();
 
-                // wait some time to allow for messages to be handled
-                await new Promise((resolve) => setTimeout(resolve, 750));
-
                 const sshPamSet =
                     isLicensedSshPam &&
-                    (authDaemonPort !== undefined || authDaemonMode !== undefined)
+                    (authDaemonPort !== undefined ||
+                        authDaemonMode !== undefined ||
+                        pamMode !== undefined)
                         ? {
                               ...(authDaemonPort !== undefined && {
                                   authDaemonPort
                               }),
                               ...(authDaemonMode !== undefined && {
                                   authDaemonMode
+                              }),
+                              ...(pamMode !== undefined && {
+                                  pamMode
                               })
                           }
                         : {};
+
+                let tcpPortRangeStringAdjusted = tcpPortRangeString;
+                if (mode === "http") {
+                    tcpPortRangeStringAdjusted = "443,80";
+                } else if (mode === "ssh") {
+                    tcpPortRangeStringAdjusted = destinationPort
+                        ? destinationPort.toString()
+                        : "22";
+                }
+
                 [updatedSiteResource] = await trx
                     .update(siteResources)
                     .set({
-                        name: name,
-                        siteId: siteId,
-                        mode: mode,
-                        destination: destination,
-                        enabled: enabled,
-                        alias: alias && alias.trim() ? alias : null,
-                        tcpPortRangeString: tcpPortRangeString,
-                        udpPortRangeString: udpPortRangeString,
-                        disableIcmp: disableIcmp,
+                        name,
+                        niceId,
+                        mode,
+                        scheme,
+                        ssl,
+                        destination,
+                        destinationPort,
+                        enabled,
+                        alias: alias ? alias.trim() : null,
+                        tcpPortRangeString: tcpPortRangeStringAdjusted,
+                        udpPortRangeString:
+                            mode == "http" || mode == "ssh"
+                                ? ""
+                                : udpPortRangeString,
+                        disableIcmp:
+                            disableIcmp ||
+                            (mode == "http" || mode == "ssh" ? true : false), // default to true for http resources, otherwise false
+                        domainId,
+                        subdomain: finalSubdomain,
+                        fullDomain,
                         ...sshPamSet
                     })
                     .where(
@@ -362,6 +562,23 @@ export async function updateSiteResource(
                 }
 
                 //////////////////// update the associations ////////////////////
+
+                // delete the site - site resources associations
+                await trx
+                    .delete(siteNetworks)
+                    .where(
+                        eq(
+                            siteNetworks.networkId,
+                            updatedSiteResource.networkId!
+                        )
+                    );
+
+                for (const siteId of siteIds) {
+                    await trx.insert(siteNetworks).values({
+                        siteId: siteId,
+                        networkId: updatedSiteResource.networkId!
+                    });
+                }
 
                 const [adminRole] = await trx
                     .select()
@@ -414,37 +631,57 @@ export async function updateSiteResource(
                         }))
                     );
                 }
-
-                await rebuildClientAssociationsFromSiteResource(
-                    updatedSiteResource,
-                    trx
-                );
             } else {
                 // Update the site resource
                 const sshPamSet =
                     isLicensedSshPam &&
-                    (authDaemonPort !== undefined || authDaemonMode !== undefined)
+                    (authDaemonPort !== undefined ||
+                        authDaemonMode !== undefined ||
+                        pamMode !== undefined)
                         ? {
                               ...(authDaemonPort !== undefined && {
                                   authDaemonPort
                               }),
                               ...(authDaemonMode !== undefined && {
                                   authDaemonMode
+                              }),
+                              ...(pamMode !== undefined && {
+                                  pamMode
                               })
                           }
                         : {};
+                let tcpPortRangeStringAdjusted = tcpPortRangeString;
+                if (mode === "http") {
+                    tcpPortRangeStringAdjusted = "443,80";
+                } else if (mode === "ssh") {
+                    tcpPortRangeStringAdjusted = destinationPort
+                        ? destinationPort.toString()
+                        : "22";
+                }
+
                 [updatedSiteResource] = await trx
                     .update(siteResources)
                     .set({
                         name: name,
-                        siteId: siteId,
+                        niceId: niceId,
                         mode: mode,
+                        scheme,
+                        ssl,
                         destination: destination,
+                        destinationPort: destinationPort,
                         enabled: enabled,
-                        alias: alias && alias.trim() ? alias : null,
-                        tcpPortRangeString: tcpPortRangeString,
-                        udpPortRangeString: udpPortRangeString,
-                        disableIcmp: disableIcmp,
+                        alias: alias ? alias.trim() : null,
+                        tcpPortRangeString: tcpPortRangeStringAdjusted,
+                        udpPortRangeString:
+                            mode == "http" || mode == "ssh"
+                                ? ""
+                                : udpPortRangeString,
+                        disableIcmp:
+                            disableIcmp ||
+                            (mode == "http" || mode == "ssh" ? true : false),
+                        domainId,
+                        subdomain: finalSubdomain,
+                        fullDomain,
                         ...sshPamSet
                     })
                     .where(
@@ -453,6 +690,23 @@ export async function updateSiteResource(
                     .returning();
 
                 //////////////////// update the associations ////////////////////
+
+                // delete the site - site resources associations
+                await trx
+                    .delete(siteNetworks)
+                    .where(
+                        eq(
+                            siteNetworks.networkId,
+                            updatedSiteResource.networkId!
+                        )
+                    );
+
+                for (const siteId of siteIds) {
+                    await trx.insert(siteNetworks).values({
+                        siteId: siteId,
+                        networkId: updatedSiteResource.networkId!
+                    });
+                }
 
                 await trx
                     .delete(clientSiteResources)
@@ -523,17 +777,40 @@ export async function updateSiteResource(
                     );
                 }
 
-                logger.info(
-                    `Updated site resource ${siteResourceId} for site ${siteId}`
-                );
+                logger.info(`Updated site resource ${siteResourceId}`);
+            }
+        });
 
+        // Background: wait for removal messages to propagate, then rebuild
+        // associations for the re-created resource. Own transaction ensures
+        // execution on the primary against fully committed state.
+        (async () => {
+            await db.transaction(async (trx) => {
+                if (!updatedSiteResource) {
+                    throw new Error("No updated resource found after update");
+                }
+                if (sitesChanged) {
+                    await new Promise((resolve) => setTimeout(resolve, 750));
+                    await rebuildClientAssociationsFromSiteResource(
+                        updatedSiteResource,
+                        trx
+                    );
+                }
                 await handleMessagingForUpdatedSiteResource(
                     existingSiteResource,
                     updatedSiteResource,
-                    { siteId: site.siteId, orgId: site.orgId },
+                    siteIds.map((siteId) => ({
+                        siteId,
+                        orgId: existingSiteResource.orgId
+                    })),
                     trx
                 );
-            }
+            });
+        })().catch((err) => {
+            logger.error(
+                `Error rebuilding client associations for site resource ${updatedSiteResource?.siteResourceId}:`,
+                err
+            );
         });
 
         return response(res, {
@@ -557,7 +834,7 @@ export async function updateSiteResource(
 export async function handleMessagingForUpdatedSiteResource(
     existingSiteResource: SiteResource | undefined,
     updatedSiteResource: SiteResource,
-    site: { siteId: number; orgId: string },
+    sites: { siteId: number; orgId: string }[],
     trx: Transaction
 ) {
     logger.debug(
@@ -579,9 +856,19 @@ export async function handleMessagingForUpdatedSiteResource(
     const destinationChanged =
         existingSiteResource &&
         existingSiteResource.destination !== updatedSiteResource.destination;
+    const destinationPortChanged =
+        existingSiteResource &&
+        existingSiteResource.destinationPort !==
+            updatedSiteResource.destinationPort;
     const aliasChanged =
         existingSiteResource &&
         existingSiteResource.alias !== updatedSiteResource.alias;
+    const fullDomainChanged =
+        existingSiteResource &&
+        existingSiteResource.fullDomain !== updatedSiteResource.fullDomain;
+    const sslChanged =
+        existingSiteResource &&
+        existingSiteResource.ssl !== updatedSiteResource.ssl;
     const portRangesChanged =
         existingSiteResource &&
         (existingSiteResource.tcpPortRangeString !==
@@ -593,102 +880,130 @@ export async function handleMessagingForUpdatedSiteResource(
 
     // if the existingSiteResource is undefined (new resource) we don't need to do anything here, the rebuild above handled it all
 
-    if (destinationChanged || aliasChanged || portRangesChanged) {
-        const [newt] = await trx
-            .select()
-            .from(newts)
-            .where(eq(newts.siteId, site.siteId))
-            .limit(1);
-
-        if (!newt) {
-            throw new Error(
-                "Newt not found for site during site resource update"
-            );
-        }
-
-        // Only update targets on newt if destination changed
-        if (destinationChanged || portRangesChanged) {
-            const oldTargets = generateSubnetProxyTargets(
-                existingSiteResource,
-                mergedAllClients
-            );
-            const newTargets = generateSubnetProxyTargets(
-                updatedSiteResource,
-                mergedAllClients
-            );
-
-            await updateTargets(newt.newtId, {
-                oldTargets: oldTargets,
-                newTargets: newTargets
-            }, newt.version);
-        }
-
-        const olmJobs: Promise<void>[] = [];
-        for (const client of mergedAllClients) {
-            // does this client have access to another resource on this site that has the same destination still? if so we dont want to remove it from their olm yet
-            // todo: optimize this query if needed
-            const oldDestinationStillInUseSites = await trx
+    if (
+        destinationChanged ||
+        aliasChanged ||
+        fullDomainChanged ||
+        sslChanged ||
+        portRangesChanged ||
+        destinationPortChanged
+    ) {
+        for (const site of sites) {
+            const [newt] = await trx
                 .select()
-                .from(siteResources)
-                .innerJoin(
-                    clientSiteResourcesAssociationsCache,
-                    eq(
-                        clientSiteResourcesAssociationsCache.siteResourceId,
-                        siteResources.siteResourceId
-                    )
-                )
-                .where(
-                    and(
-                        eq(
-                            clientSiteResourcesAssociationsCache.clientId,
-                            client.clientId
-                        ),
-                        eq(siteResources.siteId, site.siteId),
-                        eq(
-                            siteResources.destination,
-                            existingSiteResource.destination
-                        ),
-                        ne(
-                            siteResources.siteResourceId,
-                            existingSiteResource.siteResourceId
-                        )
-                    )
+                .from(newts)
+                .where(eq(newts.siteId, site.siteId))
+                .limit(1);
+
+            if (!newt) {
+                throw new Error(
+                    "Newt not found for site during site resource update"
+                );
+            }
+
+            // Only update targets on newt if these items change
+            if (
+                destinationChanged ||
+                sslChanged || // we need to push a new cert if the ssl changed
+                portRangesChanged ||
+                fullDomainChanged || // if the domain changes we need to update the certs and stuff
+                destinationPortChanged
+            ) {
+                const oldTargets = await generateSubnetProxyTargetV2(
+                    existingSiteResource,
+                    mergedAllClients
+                );
+                const newTargets = await generateSubnetProxyTargetV2(
+                    updatedSiteResource,
+                    mergedAllClients
                 );
 
-            const oldDestinationStillInUseByASite =
-                oldDestinationStillInUseSites.length > 0;
+                await updateTargets(
+                    newt.newtId,
+                    {
+                        oldTargets: oldTargets ? oldTargets : [],
+                        newTargets: newTargets ? newTargets : []
+                    },
+                    newt.version
+                );
+            }
 
-            // we also need to update the remote subnets on the olms for each client that has access to this site
-            olmJobs.push(
-                updatePeerData(
-                    client.clientId,
-                    updatedSiteResource.siteId,
-                    destinationChanged
-                        ? {
-                              oldRemoteSubnets: !oldDestinationStillInUseByASite
-                                  ? generateRemoteSubnets([
-                                        existingSiteResource
-                                    ])
-                                  : [],
-                              newRemoteSubnets: generateRemoteSubnets([
-                                  updatedSiteResource
-                              ])
-                          }
-                        : undefined,
-                    aliasChanged
-                        ? {
-                              oldAliases: generateAliasConfig([
-                                  existingSiteResource
-                              ]),
-                              newAliases: generateAliasConfig([
-                                  updatedSiteResource
-                              ])
-                          }
-                        : undefined
-                )
-            );
+            const olmJobs: Promise<void>[] = [];
+            for (const client of mergedAllClients) {
+                // does this client have access to another resource on this site that has the same destination still? if so we dont want to remove it from their olm yet
+                // todo: optimize this query if needed
+                if (!existingSiteResource.destination) {
+                    continue;
+                }
+
+                const oldDestinationStillInUseSites = await trx
+                    .select()
+                    .from(siteResources)
+                    .innerJoin(
+                        clientSiteResourcesAssociationsCache,
+                        eq(
+                            clientSiteResourcesAssociationsCache.siteResourceId,
+                            siteResources.siteResourceId
+                        )
+                    )
+                    .innerJoin(
+                        siteNetworks,
+                        eq(siteNetworks.networkId, siteResources.networkId)
+                    )
+                    .where(
+                        and(
+                            eq(
+                                clientSiteResourcesAssociationsCache.clientId,
+                                client.clientId
+                            ),
+                            eq(siteNetworks.siteId, site.siteId),
+                            eq(
+                                siteResources.destination,
+                                existingSiteResource.destination
+                            ),
+                            ne(
+                                siteResources.siteResourceId,
+                                existingSiteResource.siteResourceId
+                            )
+                        )
+                    );
+
+                const oldDestinationStillInUseByASite =
+                    oldDestinationStillInUseSites.length > 0;
+
+                // we also need to update the remote subnets on the olms for each client that has access to this site
+                olmJobs.push(
+                    updatePeerData(
+                        client.clientId,
+                        site.siteId,
+                        destinationChanged
+                            ? {
+                                  oldRemoteSubnets:
+                                      !oldDestinationStillInUseByASite
+                                          ? generateRemoteSubnets([
+                                                existingSiteResource
+                                            ])
+                                          : [],
+                                  newRemoteSubnets: generateRemoteSubnets([
+                                      updatedSiteResource
+                                  ])
+                              }
+                            : undefined,
+                        aliasChanged || fullDomainChanged // the full domain is sent down as an alias
+                            ? {
+                                  oldAliases: generateAliasConfig([
+                                      existingSiteResource
+                                  ]),
+                                  newAliases: generateAliasConfig([
+                                      updatedSiteResource
+                                  ])
+                              }
+                            : undefined
+                    )
+                );
+            }
+
+            await Promise.all(olmJobs);
         }
-
-        await Promise.all(olmJobs);
     }
 }

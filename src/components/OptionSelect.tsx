@@ -32,9 +32,7 @@ export function OptionSelect<TValue extends string>({
 }: OptionSelectProps<TValue>) {
     return (
         <div className={className}>
-            {label && (
-                <p className="font-bold mb-3">{label}</p>
-            )}
+            {label && <p className="font-semibold mb-3">{label}</p>}
             <div
                 className={cn(
                     "grid gap-2",
@@ -51,7 +49,11 @@ export function OptionSelect<TValue extends string>({
                         <Button
                             key={option.value}
                             type="button"
-                            variant={isSelected ? "squareOutlinePrimary" : "squareOutline"}
+                            variant={
+                                isSelected
+                                    ? "squareOutlinePrimary"
+                                    : "squareOutline"
+                            }
                             className={cn(
                                 "flex-1 min-w-30 shadow-none",
                                 isSelected && "bg-primary/10"

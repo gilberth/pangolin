@@ -1,8 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { db } from "@server/db";
-import { roles, userOrgs } from "@server/db";
-import { eq } from "drizzle-orm";
+import { roles, userOrgRoles } from "@server/db";
+import { and, eq, exists, aliasedTable } from "drizzle-orm";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
@@ -11,11 +11,11 @@ import { fromError } from "zod-validation-error";
 import { OpenAPITags, registry } from "@server/openApi";
 
 const deleteRoleSchema = z.strictObject({
-    roleId: z.string().transform(Number).pipe(z.int().positive())
+    roleId: z.coerce.number().int().positive()
 });
 
-const deelteRoleBodySchema = z.strictObject({
-    roleId: z.string().transform(Number).pipe(z.int().positive())
+const deleteRoleBodySchema = z.strictObject({
+    roleId: z.coerce.number().int().positive()
 });
 
 registry.registerPath({
@@ -28,12 +28,27 @@ registry.registerPath({
         body: {
             content: {
                 "application/json": {
-                    schema: deelteRoleBodySchema
+                    schema: deleteRoleBodySchema
                 }
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function deleteRole(
@@ -52,7 +67,7 @@ export async function deleteRole(
             );
         }
 
-        const parsedBody = deelteRoleBodySchema.safeParse(req.body);
+        const parsedBody = deleteRoleBodySchema.safeParse(req.body);
         if (!parsedBody.success) {
             return next(
                 createHttpError(
@@ -114,13 +129,32 @@ export async function deleteRole(
         }
 
         await db.transaction(async (trx) => {
-            // move all users from the userOrgs table with roleId to newRoleId
-            await trx
-                .update(userOrgs)
-                .set({ roleId: newRoleId })
-                .where(eq(userOrgs.roleId, roleId));
+            const uorNewRole = aliasedTable(userOrgRoles, "user_org_roles_new");
 
-            // delete the old role
+            // Users who already have newRoleId: drop the old assignment only (unique on userId+orgId+roleId).
+            await trx.delete(userOrgRoles).where(
+                and(
+                    eq(userOrgRoles.roleId, roleId),
+                    exists(
+                        trx
+                            .select()
+                            .from(uorNewRole)
+                            .where(
+                                and(
+                                    eq(uorNewRole.userId, userOrgRoles.userId),
+                                    eq(uorNewRole.orgId, userOrgRoles.orgId),
+                                    eq(uorNewRole.roleId, newRoleId)
+                                )
+                            )
+                    )
+                )
+            );
+
+            await trx
+                .update(userOrgRoles)
+                .set({ roleId: newRoleId })
+                .where(eq(userOrgRoles.roleId, roleId));
+
             await trx.delete(roles).where(eq(roles.roleId, roleId));
         });
 

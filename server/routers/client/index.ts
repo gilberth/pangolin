@@ -10,3 +10,5 @@ export * from "./listUserDevices";
 export * from "./updateClient";
 export * from "./getClient";
 export * from "./createUserClient";
+export * from "./verifyClientAssociationsCache";
+export * from "./rebuildClientAssociationsCacheRoute";

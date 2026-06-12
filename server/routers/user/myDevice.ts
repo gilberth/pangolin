@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { db, Olm, olms, orgs, userOrgs } from "@server/db";
+import { db, Olm, olms, orgs, userOrgRoles, userOrgs } from "@server/db";
 import { idp, users } from "@server/db";
 import { and, eq } from "drizzle-orm";
 import response from "@server/lib/response";
@@ -63,7 +63,9 @@ export async function myDevice(
                 emailVerified: users.emailVerified,
                 serverAdmin: users.serverAdmin,
                 idpName: idp.name,
-                idpId: users.idpId
+                idpId: users.idpId,
+                locale: users.locale,
+                dateCreated: users.dateCreated
             })
             .from(users)
             .leftJoin(idp, eq(users.idpId, idp.idpId))
@@ -84,15 +86,30 @@ export async function myDevice(
             .from(olms)
             .where(and(eq(olms.userId, userId), eq(olms.olmId, olmId)));
 
-        const userOrganizations = await db
+        const userOrgRows = await db
             .select({
                 orgId: userOrgs.orgId,
-                orgName: orgs.name,
-                roleId: userOrgs.roleId
+                orgName: orgs.name
             })
             .from(userOrgs)
             .where(eq(userOrgs.userId, userId))
             .innerJoin(orgs, eq(userOrgs.orgId, orgs.orgId));
+
+        const roleRows = await db
+            .select({
+                orgId: userOrgRoles.orgId,
+                roleId: userOrgRoles.roleId
+            })
+            .from(userOrgRoles)
+            .where(eq(userOrgRoles.userId, userId));
+
+        const roleByOrg = new Map(
+            roleRows.map((r) => [r.orgId, r.roleId])
+        );
+        const userOrganizations = userOrgRows.map((row) => ({
+            ...row,
+            roleId: roleByOrg.get(row.orgId) ?? 0
+        }));
 
         return response<MyDeviceResponse>(res, {
             data: {

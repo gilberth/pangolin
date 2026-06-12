@@ -12,7 +12,7 @@ export interface CreateBlueprintPageProps {
 }
 
 export const metadata: Metadata = {
-    title: "Create blueprint"
+    title: "Create Blueprint"
 };
 
 export default async function CreateBlueprintPage(

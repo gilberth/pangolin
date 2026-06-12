@@ -9,8 +9,8 @@ export type LicensePriceSet = {
 
 export const licensePriceSet: LicensePriceSet = {
     // Free license matches the freeLimitSet
-    [LicenseId.SMALL_LICENSE]: "price_1SxKHiD3Ee2Ir7WmvtEh17A8",
-    [LicenseId.BIG_LICENSE]: "price_1SxKHiD3Ee2Ir7WmMUiP0H6Y"
+    [LicenseId.SMALL_LICENSE]: "price_1TMJzmD3Ee2Ir7Wm05NlGImT",
+    [LicenseId.BIG_LICENSE]: "price_1TMJzzD3Ee2Ir7WmzJw9TerS"
 };
 
 export const licensePriceSetSandbox: LicensePriceSet = {

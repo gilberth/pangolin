@@ -11,6 +11,8 @@ import { useTranslations } from "next-intl";
 export type TabItem = {
     title: string;
     href: string;
+    /** When set, active tab detection uses this path instead of `href` (link target unchanged). */
+    activePrefix?: string;
     icon?: React.ReactNode;
     showProfessional?: boolean;
     exact?: boolean;
@@ -115,18 +117,33 @@ export function HorizontalTabs({
     }
 
     // Server-side mode: original behavior with routing
+    const activeIndex: number | null = (() => {
+        if (pathname.includes("create")) return null;
+        let best: number | null = null;
+        let bestLen = -1;
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const matchBase = hydrateHref(item.activePrefix ?? item.href);
+            const matched = item.exact
+                ? pathname === matchBase
+                : pathname === matchBase ||
+                  pathname.startsWith(`${matchBase}/`);
+            if (matched && matchBase.length > bestLen) {
+                bestLen = matchBase.length;
+                best = i;
+            }
+        }
+        return best;
+    })();
+
     return (
         <div className="space-y-3">
             <div className="relative">
                 <div className="overflow-x-auto scrollbar-hide">
                     <div className="flex space-x-4 border-b min-w-max">
-                        {items.map((item) => {
+                        {items.map((item, index) => {
                             const hydratedHref = hydrateHref(item.href);
-                            const isActive =
-                                (item.exact
-                                    ? pathname === hydratedHref
-                                    : pathname.startsWith(hydratedHref)) &&
-                                !pathname.includes("create");
+                            const isActive = activeIndex === index;
 
                             const isProfessional =
                                 item.showProfessional && !isUnlocked();
@@ -135,7 +152,7 @@ export function HorizontalTabs({
 
                             return (
                                 <Link
-                                    key={hydratedHref}
+                                    key={`${hydratedHref}-${index}`}
                                     href={isProfessional ? "#" : hydratedHref}
                                     className={cn(
                                         "px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap relative",

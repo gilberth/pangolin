@@ -5,7 +5,8 @@ import {
     clients,
     clientSiteResources,
     siteResources,
-    apiKeyOrg
+    apiKeyOrg,
+    primaryDb
 } from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
@@ -14,14 +15,11 @@ import logger from "@server/logger";
 import { fromError } from "zod-validation-error";
 import { eq, and, inArray } from "drizzle-orm";
 import { OpenAPITags, registry } from "@server/openApi";
-import {
-    rebuildClientAssociationsFromClient,
-    rebuildClientAssociationsFromSiteResource
-} from "@server/lib/rebuildClientAssociations";
+import { rebuildClientAssociationsFromClient } from "@server/lib/rebuildClientAssociations";
 
 const batchAddClientToSiteResourcesParamsSchema = z
     .object({
-        clientId: z.string().transform(Number).pipe(z.number().int().positive())
+        clientId: z.coerce.number().int().positive()
     })
     .strict();
 
@@ -48,7 +46,22 @@ registry.registerPath({
             }
         }
     },
-    responses: {}
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
 });
 
 export async function batchAddClientToSiteResources(
@@ -220,8 +233,12 @@ export async function batchAddClientToSiteResources(
                     siteResourceId: siteResource.siteResourceId
                 });
             }
+        });
 
-            await rebuildClientAssociationsFromClient(client, trx);
+        rebuildClientAssociationsFromClient(client, primaryDb).catch((e) => {
+            logger.error(
+                `Failed to rebuild client associations after batch adding site resources for client ${clientId}: ${e}`
+            );
         });
 
         return response(res, {

@@ -1,5 +1,6 @@
 export async function getValidCertificatesForDomains(
-    domains: Set<string>
+    domains: Set<string>,
+    useCache: boolean = true
 ): Promise<
     Array<{
         id: number;
