@@ -71,7 +71,10 @@ export async function applyNewtDockerBlueprint(
     let skippedKeys: string[] = [];
 
     try {
-        const blueprint = processContainerLabels(containers);
+        // Some Newt clients can report null/undefined containers when Docker
+        // labels are unavailable. Treat that as an empty blueprint payload.
+        const safeContainers = Array.isArray(containers) ? containers : [];
+        const blueprint = processContainerLabels(safeContainers);
 
         logger.debug(
             `Received Docker blueprint with ${Object.keys(blueprint["proxy-resources"]).length} proxy, ${Object.keys(blueprint["client-resources"]).length} client resource(s)`

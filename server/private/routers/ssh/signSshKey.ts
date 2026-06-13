@@ -20,6 +20,8 @@ import {
     logsDb,
     newts,
     roles,
+    roleActions,
+    rolePolicies,
     roleResources,
     roleSiteResources,
     resources,
@@ -40,7 +42,7 @@ import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
 import logger from "@server/logger";
 import { fromError } from "zod-validation-error";
-import { and, eq, inArray, or } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import { canUserAccessResource } from "@server/auth/canUserAccessResource";
 import { canUserAccessSiteResource } from "@server/auth/canUserAccessSiteResource";
 import { signPublicKey, getOrgCAKeys } from "@server/lib/sshCA";
@@ -136,6 +138,27 @@ export async function signSshKey(
                 createHttpError(
                     HttpCode.FORBIDDEN,
                     "User does not belong to the specified organization"
+                )
+            );
+        }
+
+        const roleActionPermission = await db
+            .select({ roleId: roleActions.roleId })
+            .from(roleActions)
+            .where(
+                and(
+                    eq(roleActions.actionId, ActionsEnum.signSshKey),
+                    inArray(roleActions.roleId, roleIds),
+                    eq(roleActions.orgId, orgId)
+                )
+            )
+            .limit(1);
+
+        if (roleActionPermission.length === 0) {
+            return next(
+                createHttpError(
+                    HttpCode.FORBIDDEN,
+                    "User does not have permission perform this action"
                 )
             );
         }
@@ -435,50 +458,106 @@ export async function signSshKey(
                 usernameToUse = userOrg.pamUsername;
             }
 
-            const roleRows =
-                type === "private"
-                    ? await db
-                          .select({
-                              sshSudoCommands: roles.sshSudoCommands,
-                              sshUnixGroups: roles.sshUnixGroups,
-                              sshCreateHomeDir: roles.sshCreateHomeDir,
-                              sshSudoMode: roles.sshSudoMode
-                          })
-                          .from(roles)
-                          .innerJoin(
-                              roleSiteResources,
-                              eq(roleSiteResources.roleId, roles.roleId)
-                          )
-                          .where(
-                              and(
-                                  inArray(roles.roleId, roleIds),
-                                  eq(
-                                      roleSiteResources.siteResourceId,
-                                      (resource as SiteResource).siteResourceId
-                                  )
-                              )
-                          )
-                    : await db
-                          .select({
-                              sshSudoCommands: roles.sshSudoCommands,
-                              sshUnixGroups: roles.sshUnixGroups,
-                              sshCreateHomeDir: roles.sshCreateHomeDir,
-                              sshSudoMode: roles.sshSudoMode
-                          })
-                          .from(roles)
-                          .innerJoin(
-                              roleResources,
-                              eq(roleResources.roleId, roles.roleId)
-                          )
-                          .where(
-                              and(
-                                  inArray(roles.roleId, roleIds),
-                                  eq(
-                                      roleResources.resourceId,
-                                      (resource as Resource).resourceId
-                                  )
-                              )
-                          );
+            type RoleSshMeta = {
+                roleId: number;
+                sshSudoCommands: string | null;
+                sshUnixGroups: string | null;
+                sshCreateHomeDir: boolean | null;
+                sshSudoMode: string | null;
+            };
+
+            let roleRows: RoleSshMeta[] = [];
+
+            if (type === "private") {
+                roleRows = await db
+                    .select({
+                        roleId: roles.roleId,
+                        sshSudoCommands: roles.sshSudoCommands,
+                        sshUnixGroups: roles.sshUnixGroups,
+                        sshCreateHomeDir: roles.sshCreateHomeDir,
+                        sshSudoMode: roles.sshSudoMode
+                    })
+                    .from(roles)
+                    .innerJoin(
+                        roleSiteResources,
+                        eq(roleSiteResources.roleId, roles.roleId)
+                    )
+                    .where(
+                        and(
+                            inArray(roles.roleId, roleIds),
+                            eq(
+                                roleSiteResources.siteResourceId,
+                                (resource as SiteResource).siteResourceId
+                            )
+                        )
+                    );
+            } else {
+                const publicResourceId = (resource as Resource).resourceId;
+                const [directRoleRows, policyRoleRows] = await Promise.all([
+                    db
+                        .select({
+                            roleId: roles.roleId,
+                            sshSudoCommands: roles.sshSudoCommands,
+                            sshUnixGroups: roles.sshUnixGroups,
+                            sshCreateHomeDir: roles.sshCreateHomeDir,
+                            sshSudoMode: roles.sshSudoMode
+                        })
+                        .from(roles)
+                        .innerJoin(
+                            roleResources,
+                            eq(roleResources.roleId, roles.roleId)
+                        )
+                        .where(
+                            and(
+                                inArray(roles.roleId, roleIds),
+                                eq(roleResources.resourceId, publicResourceId)
+                            )
+                        ),
+                    db
+                        .select({
+                            roleId: roles.roleId,
+                            sshSudoCommands: roles.sshSudoCommands,
+                            sshUnixGroups: roles.sshUnixGroups,
+                            sshCreateHomeDir: roles.sshCreateHomeDir,
+                            sshSudoMode: roles.sshSudoMode
+                        })
+                        .from(roles)
+                        .innerJoin(
+                            rolePolicies,
+                            eq(rolePolicies.roleId, roles.roleId)
+                        )
+                        .innerJoin(
+                            resources,
+                            or(
+                                eq(
+                                    resources.resourcePolicyId,
+                                    rolePolicies.resourcePolicyId
+                                ),
+                                and(
+                                    isNull(resources.resourcePolicyId),
+                                    eq(
+                                        resources.defaultResourcePolicyId,
+                                        rolePolicies.resourcePolicyId
+                                    )
+                                )
+                            )
+                        )
+                        .where(
+                            and(
+                                inArray(roles.roleId, roleIds),
+                                eq(resources.resourceId, publicResourceId)
+                            )
+                        )
+                ]);
+
+                const uniqueByRoleId = new Map<number, RoleSshMeta>();
+                for (const row of [...directRoleRows, ...policyRoleRows]) {
+                    if (!uniqueByRoleId.has(row.roleId)) {
+                        uniqueByRoleId.set(row.roleId, row);
+                    }
+                }
+                roleRows = Array.from(uniqueByRoleId.values());
+            }
 
             const parsedSudoCommands: string[] = [];
             const parsedGroupsSet = new Set<string>();
@@ -565,14 +644,6 @@ export async function signSshKey(
                 messageIds.push(message.messageId);
 
                 const agentHost = siteAgentHostMap.get(siteId);
-                if (!agentHost) {
-                    return next(
-                        createHttpError(
-                            HttpCode.INTERNAL_SERVER_ERROR,
-                            `Unable to determine agent host for site ${siteId}`
-                        )
-                    );
-                }
 
                 await sendToClient(newt.newtId, {
                     type: `newt/pam/connection`,

@@ -612,7 +612,7 @@ authenticated.post(
     verifyValidSubscription(tierMatrix.advancedPrivateResources),
     verifyOrgAccess,
     verifyLimits,
-    verifyUserHasAction(ActionsEnum.signSshKey),
+    // verifyUserHasAction(ActionsEnum.signSshKey), // this check happens inside of the function now
     // logActionAudit(ActionsEnum.signSshKey), // it is handled inside of the function below so we can include more metadata
     ssh.signSshKey
 );

@@ -3,7 +3,7 @@ import { priv } from "@app/lib/api";
 import { generateBrowserGatewayMetadata } from "@app/lib/browserGatewayMetadata";
 import { getBrowserTargetForRequest } from "@app/lib/getBrowserTargetForRequest";
 import { loadOrgLoginPageBranding } from "@app/lib/loadOrgLoginPageBranding";
-import { AxiosResponse } from "axios";
+import axios, { AxiosResponse } from "axios";
 import { GetBrowserTargetResponse } from "@server/routers/browserGatewayTarget";
 import SshClient from "./SshClient";
 import crypto from "crypto";
@@ -152,8 +152,12 @@ export default async function SshPage() {
             await waitForRoundTripCompletion(messageIds, cookieHeader);
         } catch (err) {
             console.error("Error signing SSH key:", err);
-            const detail = err instanceof Error ? err.message : String(err);
-            error = `${t("sshErrorSignKeyFailed")}: ${detail}`;
+            if (axios.isAxiosError(err) && err.response?.status === 403) {
+                error = t("accessDeniedDescription");
+            } else {
+                const detail = err instanceof Error ? err.message : String(err);
+                error = `${t("sshErrorSignKeyFailed")}: ${detail}`;
+            }
         }
     }
 

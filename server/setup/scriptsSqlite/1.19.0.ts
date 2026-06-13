@@ -349,10 +349,10 @@ export default async function migration() {
             db.prepare(
                 `
             UPDATE 'targets'
-            SET "mode" = (
+            SET "mode" = COALESCE((
                 SELECT "mode" FROM 'resources'
                 WHERE "resources"."resourceId" = "targets"."resourceId"
-            );
+            ), 'http');
                 `
             ).run();
             db.prepare(

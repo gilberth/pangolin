@@ -945,7 +945,45 @@ export async function updatePublicResources(
                 }
             } else {
                 // INLINE POLICY MODE: sync rules into policy-level table
-                const inlinePolicyId = resource!.defaultResourcePolicyId!;
+                let inlinePolicyId = resource!.defaultResourcePolicyId;
+
+                // Targets-only updates skip the auth/policy update branch above,
+                // so pre-1.19 resources can still have no inline policy linked.
+                if (!inlinePolicyId) {
+                    const [adminRole] = await trx
+                        .select()
+                        .from(roles)
+                        .where(
+                            and(eq(roles.isAdmin, true), eq(roles.orgId, orgId))
+                        )
+                        .limit(1);
+
+                    if (!adminRole) {
+                        throw new Error(`Admin role not found`);
+                    }
+
+                    inlinePolicyId = await ensureInlinePolicy(
+                        existingResource.defaultResourcePolicyId,
+                        orgId,
+                        resourceNiceId,
+                        adminRole.roleId,
+                        trx
+                    );
+
+                    [resource] = await trx
+                        .update(resources)
+                        .set({
+                            resourcePolicyId: null,
+                            defaultResourcePolicyId: inlinePolicyId
+                        })
+                        .where(
+                            eq(
+                                resources.resourceId,
+                                existingResource.resourceId
+                            )
+                        )
+                        .returning();
+                }
 
                 // Clear the old resource-level rules table
                 await trx
