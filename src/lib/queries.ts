@@ -46,6 +46,20 @@ import { ListHealthChecksResponse } from "@server/routers/healthChecks/types";
 import { StatusHistoryResponse } from "@server/lib/statusHistory";
 import type { ListResourcePoliciesResponse } from "@server/routers/resource/types";
 import type { GetResourcePolicyResponse } from "@server/routers/policy";
+import type {
+    ListLauncherGroupsResponse,
+    ListLauncherLabelsResponse,
+    ListLauncherResourcesResponse,
+    ListLauncherSitesResponse,
+    ListLauncherViewsResponse,
+    LauncherListQuery,
+    LauncherViewConfig
+} from "@server/routers/launcher/types";
+import type { LauncherQueryFilters } from "@app/lib/launcherSearchParams";
+import { buildLauncherSearchParams } from "@app/lib/launcherSearchParams";
+
+export type { LauncherQueryFilters } from "@app/lib/launcherSearchParams";
+export { buildLauncherSearchParams } from "@app/lib/launcherSearchParams";
 
 export type ProductUpdate = {
     link: string | null;
@@ -60,6 +74,34 @@ export type ProductUpdate = {
 
 export type LatestVersionResponse = {
     pangolin: {
+        latestVersion: string;
+        releaseNotes: string;
+    };
+    newt: {
+        latestVersion: string;
+        releaseNotes: string;
+    };
+    cli: {
+        latestVersion: string;
+        releaseNotes: string;
+    };
+    "panglin-node": {
+        latestVersion: string;
+        releaseNotes: string;
+    };
+    windows: {
+        latestVersion: string;
+        releaseNotes: string;
+    };
+    android: {
+        latestVersion: string;
+        releaseNotes: string;
+    };
+    mac: {
+        latestVersion: string;
+        releaseNotes: string;
+    };
+    ios: {
         latestVersion: string;
         releaseNotes: string;
     };
@@ -1136,5 +1178,125 @@ export const domainQueries = {
                 return res.data.data;
             },
             refetchInterval: durationToMs(10, "seconds")
+        })
+};
+
+export const launcherQueries = {
+    views: (orgId: string) =>
+        queryOptions({
+            queryKey: ["ORG", orgId, "LAUNCHER", "VIEWS"] as const,
+            queryFn: async ({ signal, meta }) => {
+                const res = await meta!.api.get<
+                    AxiosResponse<ListLauncherViewsResponse>
+                >(`/org/${orgId}/launcher/views`, { signal });
+                return res.data.data.views;
+            }
+        }),
+    sites: ({
+        orgId,
+        query,
+        perPage = 500
+    }: {
+        orgId: string;
+        query?: string;
+        perPage?: number;
+    }) =>
+        queryOptions({
+            queryKey: [
+                "ORG",
+                orgId,
+                "LAUNCHER",
+                "SITES",
+                { query, perPage }
+            ] as const,
+            queryFn: async ({ signal, meta }) => {
+                const sp = new URLSearchParams({
+                    pageSize: perPage.toString()
+                });
+
+                if (query?.trim()) {
+                    sp.set("query", query);
+                }
+
+                const res = await meta!.api.get<
+                    AxiosResponse<ListLauncherSitesResponse>
+                >(`/org/${orgId}/launcher/sites?${sp.toString()}`, { signal });
+                return res.data.data.sites;
+            }
+        }),
+    labels: ({
+        orgId,
+        query,
+        perPage = 500
+    }: {
+        orgId: string;
+        query?: string;
+        perPage?: number;
+    }) =>
+        queryOptions({
+            queryKey: [
+                "ORG",
+                orgId,
+                "LAUNCHER",
+                "LABELS",
+                { query, perPage }
+            ] as const,
+            queryFn: async ({ signal, meta }) => {
+                const sp = new URLSearchParams({
+                    pageSize: perPage.toString()
+                });
+
+                if (query?.trim()) {
+                    sp.set("query", query);
+                }
+
+                const res = await meta!.api.get<
+                    AxiosResponse<ListLauncherLabelsResponse>
+                >(`/org/${orgId}/launcher/labels?${sp.toString()}`, {
+                    signal
+                });
+                return res.data.data.labels;
+            }
+        }),
+    groups: (orgId: string, filters: LauncherQueryFilters) =>
+        infiniteQueryOptions({
+            queryKey: ["ORG", orgId, "LAUNCHER", "GROUPS", filters] as const,
+            queryFn: async ({ pageParam = 1, signal, meta }) => {
+                const sp = buildLauncherSearchParams(filters, pageParam);
+                const res = await meta!.api.get<
+                    AxiosResponse<ListLauncherGroupsResponse>
+                >(`/org/${orgId}/launcher/groups?${sp.toString()}`, { signal });
+                return res.data.data;
+            },
+            initialPageParam: 1,
+            placeholderData: keepPreviousData,
+            getNextPageParam: (lastPage) => {
+                const { page, pageSize, total } = lastPage.pagination;
+                const nextPage = page + 1;
+                return page * pageSize < total ? nextPage : undefined;
+            }
+        }),
+    resources: (
+        orgId: string,
+        filters: LauncherQueryFilters & { groupKey: string }
+    ) =>
+        infiniteQueryOptions({
+            queryKey: ["ORG", orgId, "LAUNCHER", "RESOURCES", filters] as const,
+            queryFn: async ({ pageParam = 1, signal, meta }) => {
+                const sp = buildLauncherSearchParams(filters, pageParam);
+                const res = await meta!.api.get<
+                    AxiosResponse<ListLauncherResourcesResponse>
+                >(`/org/${orgId}/launcher/resources?${sp.toString()}`, {
+                    signal
+                });
+                return res.data.data;
+            },
+            initialPageParam: 1,
+            placeholderData: keepPreviousData,
+            getNextPageParam: (lastPage) => {
+                const { page, pageSize, total } = lastPage.pagination;
+                const nextPage = page + 1;
+                return page * pageSize < total ? nextPage : undefined;
+            }
         })
 };

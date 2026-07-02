@@ -61,7 +61,7 @@ export function parseUnixGroups(value: string | undefined): string[] {
     if (!value?.trim()) return [];
 
     return value
-        .split(/[,\s\n]+/)
+        .split(/\r?\n/)
         .map((group) => group.trim())
         .filter(Boolean);
 }
@@ -69,18 +69,10 @@ export function parseUnixGroups(value: string | undefined): string[] {
 export function parseSudoCommands(value: string | undefined): string[] {
     if (!value?.trim()) return [];
 
-    const commands: string[] = [];
-    for (const segment of value.split(/[,\n]+/)) {
-        const trimmed = segment.trim();
-        if (!trimmed) continue;
-
-        for (const part of trimmed.split(/ (?=\/)/)) {
-            const command = part.trim();
-            if (command) commands.push(command);
-        }
-    }
-
-    return commands;
+    return value
+        .split(/\r?\n/)
+        .map((command) => command.trim())
+        .filter(Boolean);
 }
 
 function hasOnlyAbsoluteSudoCommands(value: string | undefined): boolean {

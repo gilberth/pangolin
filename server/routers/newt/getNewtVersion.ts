@@ -10,7 +10,7 @@ import { verifyPassword } from "@server/auth/password";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
 import logger from "@server/logger";
-import cache from "#dynamic/lib/cache";
+import { regionalCache as cache } from "#dynamic/lib/cache";
 import config from "@server/lib/config";
 
 // Stale-while-revalidate in-memory fallback for the releases API.

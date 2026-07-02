@@ -1,15 +1,19 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
-import { db, newts, primaryDb, sites } from "@server/db";
-import { siteResources } from "@server/db";
+import { db, siteResources } from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { fromError } from "zod-validation-error";
 import logger from "@server/logger";
 import { OpenAPITags, registry } from "@server/openApi";
-import { rebuildClientAssociationsFromSiteResource } from "@server/lib/rebuildClientAssociations";
+import {
+    performDeleteSiteResource,
+    runSiteResourceDeleteSideEffects
+} from "@server/lib/deleteSiteResource";
+import { LimitId } from "@server/lib/billing";
+import { usageService } from "@server/lib/billing/usageService";
 
 const deleteSiteResourceParamsSchema = z.strictObject({
     siteResourceId: z.coerce.number().int().positive()
@@ -65,11 +69,10 @@ export async function deleteSiteResource(
 
         const { siteResourceId } = parsedParams.data;
 
-        // Check if site resource exists
         const [existingSiteResource] = await db
             .select()
             .from(siteResources)
-            .where(and(eq(siteResources.siteResourceId, siteResourceId)))
+            .where(eq(siteResources.siteResourceId, siteResourceId))
             .limit(1);
 
         if (!existingSiteResource) {
@@ -78,27 +81,30 @@ export async function deleteSiteResource(
             );
         }
 
-        // Delete the site resource
-        const [removedSiteResource] = await db
-            .delete(siteResources)
-            .where(eq(siteResources.siteResourceId, siteResourceId))
-            .returning();
+        let removedSiteResource = null;
 
-        // Run in the background after the response is sent. Wrapped in its
-        // own transaction so it always executes on the primary — avoiding any
-        // replica-lag issues while still allowing the HTTP response to return
-        // early.
-        rebuildClientAssociationsFromSiteResource(
-            removedSiteResource,
-            primaryDb
-        ).catch((err) => {
-            logger.error(
-                `Error rebuilding client associations for site resource ${removedSiteResource!.siteResourceId}:`,
-                err
+        await db.transaction(async (trx) => {
+            removedSiteResource = await performDeleteSiteResource(
+                siteResourceId,
+                trx
             );
+            if (removedSiteResource?.orgId) {
+                await usageService.add(
+                    removedSiteResource?.orgId,
+                    LimitId.PRIVATE_RESOURCES,
+                    -1,
+                    trx
+                );
+            }
         });
 
-        logger.info(`Deleted site resource ${siteResourceId}`);
+        if (!removedSiteResource) {
+            return next(
+                createHttpError(HttpCode.NOT_FOUND, "Site resource not found")
+            );
+        }
+
+        runSiteResourceDeleteSideEffects(removedSiteResource);
 
         return response(res, {
             data: { message: "Site resource deleted successfully" },

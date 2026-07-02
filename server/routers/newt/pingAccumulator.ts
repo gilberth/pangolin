@@ -57,9 +57,6 @@ export function recordSitePing(siteId: number): void {
     pendingSitePings.set(siteId, now);
 }
 
-/** @deprecated Use `recordSitePing` instead. Alias kept for existing call-sites. */
-export const recordPing = recordSitePing;
-
 /**
  * Record a ping for an OLM client. Batches the `clients` table update
  * (`online`, `lastPing`, `archived`) and, when `olmArchived` is true,

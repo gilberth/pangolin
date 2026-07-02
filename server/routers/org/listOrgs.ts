@@ -11,7 +11,7 @@ import { fromZodError } from "zod-validation-error";
 import { OpenAPITags, registry } from "@server/openApi";
 import { createApiResponseSchema } from "@server/lib/openapi/createApiResponseSchema";
 
-const listOrgsSchema = z.object({
+const listOrgsSchema = z.strictObject({
     limit: z
         .string()
         .optional()

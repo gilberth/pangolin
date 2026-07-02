@@ -1,20 +1,21 @@
 import {
     db,
     exitNodes,
+    labels,
     newts,
     orgs,
     remoteExitNodes,
     roleSites,
+    siteLabels,
     siteNetworks,
     siteResources,
-    targets,
     sites,
+    targets,
     userSites,
-    labels,
-    siteLabels,
     type Label
 } from "@server/db";
-import cache from "#dynamic/lib/cache";
+import { regionalCache as cache } from "#dynamic/lib/cache";
+import { tierMatrix } from "@server/lib/billing/tierMatrix";
 import response from "@server/lib/response";
 import logger from "@server/logger";
 import { OpenAPITags, registry } from "@server/openApi";
@@ -23,108 +24,15 @@ import type { PaginatedResponse } from "@server/types/Pagination";
 import { and, asc, desc, eq, inArray, like, or, sql } from "drizzle-orm";
 import { NextFunction, Request, Response } from "express";
 import createHttpError from "http-errors";
-import semver from "semver";
 import { z } from "zod";
 import { fromError } from "zod-validation-error";
 import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
-import { tierMatrix } from "@server/lib/billing/tierMatrix";
-
-// Stale-while-revalidate: keeps the last successfully fetched version so that
-// a transient network failure / timeout does not flip every site back to
-// newtUpdateAvailable: false.
-let staleNewtVersion: string | null = null;
-
-async function getLatestNewtVersion(): Promise<string | null> {
-    try {
-        const cachedVersion = await cache.get<string>(
-            "cache:latestNewtVersion"
-        );
-        if (cachedVersion) {
-            return cachedVersion;
-        }
-
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1500);
-
-        const response = await fetch(
-            "https://api.github.com/repos/fosrl/newt/tags",
-            {
-                signal: controller.signal
-            }
-        );
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-            logger.warn(
-                `Failed to fetch latest Newt version from GitHub: ${response.status} ${response.statusText}`
-            );
-            return staleNewtVersion;
-        }
-
-        let tags = await response.json();
-        if (!Array.isArray(tags) || tags.length === 0) {
-            logger.warn("No tags found for Newt repository");
-            return staleNewtVersion;
-        }
-
-        // Remove release-candidates, then sort descending by semver so that
-        // duplicate tags (e.g. "1.10.3" and "v1.10.3") and any ordering quirks
-        // from the GitHub API do not cause an older tag to be selected.
-        tags = tags.filter((tag: any) => !tag.name.includes("rc"));
-        tags.sort((a: any, b: any) => {
-            const va = semver.coerce(a.name);
-            const vb = semver.coerce(b.name);
-            if (!va && !vb) return 0;
-            if (!va) return 1;
-            if (!vb) return -1;
-            return semver.rcompare(va, vb);
-        });
-
-        // Deduplicate: keep only the first (highest) entry per normalised version
-        const seen = new Set<string>();
-        tags = tags.filter((tag: any) => {
-            const normalised = semver.coerce(tag.name)?.version;
-            if (!normalised || seen.has(normalised)) return false;
-            seen.add(normalised);
-            return true;
-        });
-
-        if (tags.length === 0) {
-            logger.warn("No valid semver tags found for Newt repository");
-            return staleNewtVersion;
-        }
-
-        const latestVersion = tags[0].name;
-
-        staleNewtVersion = latestVersion;
-        await cache.set("cache:latestNewtVersion", latestVersion, 3600);
-
-        return latestVersion;
-    } catch (error: any) {
-        if (error.name === "AbortError") {
-            logger.warn(
-                "Request to fetch latest Newt version timed out (1.5s)"
-            );
-        } else if (error.cause?.code === "UND_ERR_CONNECT_TIMEOUT") {
-            logger.warn(
-                "Connection timeout while fetching latest Newt version"
-            );
-        } else {
-            logger.warn(
-                "Error fetching latest Newt version:",
-                error.message || error
-            );
-        }
-        return staleNewtVersion;
-    }
-}
 
 const listSitesParamsSchema = z.strictObject({
     orgId: z.string()
 });
 
-const listSitesSchema = z.object({
+const listSitesSchema = z.strictObject({
     pageSize: z.coerce
         .number<string>() // for prettier formatting
         .int()
@@ -449,9 +357,6 @@ export async function listSites(
 
         const totalCount = Number(countRows[0]?.count ?? 0);
 
-        // Get latest version asynchronously without blocking the response
-        const latestNewtVersionPromise = getLatestNewtVersion();
-
         const siteIds = rows.map((site) => site.siteId);
 
         let labelsForSites: Array<{
@@ -493,36 +398,6 @@ export async function listSites(
 
             return { ...siteWithUpdate, labels: labelsForSite };
         });
-
-        // Try to get the latest version, but don't block if it fails
-        try {
-            const latestNewtVersion = await latestNewtVersionPromise;
-
-            if (latestNewtVersion) {
-                sitesWithUpdates.forEach((site) => {
-                    if (
-                        site.type === "newt" &&
-                        site.newtVersion &&
-                        latestNewtVersion
-                    ) {
-                        try {
-                            site.newtUpdateAvailable = semver.lt(
-                                site.newtVersion,
-                                latestNewtVersion
-                            );
-                        } catch (error) {
-                            site.newtUpdateAvailable = false;
-                        }
-                    }
-                });
-            }
-        } catch (error) {
-            // Log the error but don't let it block the response
-            logger.warn(
-                "Failed to check for Newt updates, continuing without update info:",
-                error
-            );
-        }
 
         const sitesPayload = sitesWithUpdates.map((site) =>
             site.type === "local" ? { ...site, online: undefined } : site

@@ -340,7 +340,8 @@ function PolicyAccessRulesSectionEdit({
             ? rules.filter((rule) => !rule.fromPolicy)
             : rules;
         const rulesPayload = rulesToValidate.map(
-            ({ action, match, value, priority, enabled }) => ({
+            ({ ruleId, action, match, value, priority, enabled, new: isNew }) => ({
+                ...(isNew ? {} : { ruleId }),
                 action,
                 match,
                 value,

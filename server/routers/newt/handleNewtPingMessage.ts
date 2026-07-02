@@ -5,7 +5,7 @@ import { Newt } from "@server/db";
 import { eq } from "drizzle-orm";
 import logger from "@server/logger";
 import { sendNewtSyncMessage } from "./sync";
-import { recordPing } from "./pingAccumulator";
+import { recordSitePing } from "./pingAccumulator";
 
 /**
  * Handles ping messages from newt clients.
@@ -35,7 +35,7 @@ export const handleNewtPingMessage: MessageHandler = async (context) => {
     // batched UPDATE instead of one query per ping. This prevents
     // connection pool exhaustion under load, especially with
     // cross-region latency to the database.
-    recordPing(newt.siteId);
+    recordSitePing(newt.siteId);
 
     // Check config version and sync if stale.
     const configVersion = await getClientConfigVersion(newt.newtId);

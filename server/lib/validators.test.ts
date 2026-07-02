@@ -1,4 +1,7 @@
-import { isValidUrlGlobPattern } from "./validators";
+import {
+    getResourceRuleValueValidationError,
+    isValidUrlGlobPattern
+} from "./validators";
 import { assertEquals } from "@test/assert";
 
 function runTests() {
@@ -234,6 +237,43 @@ function runTests() {
         isValidUrlGlobPattern("invalid%"),
         false,
         "Path with isolated percent sign should be invalid"
+    );
+
+    // ASN validation tests
+    assertEquals(
+        getResourceRuleValueValidationError("ASN", "AS15169"),
+        null,
+        "Standard ASN should be valid"
+    );
+    assertEquals(
+        getResourceRuleValueValidationError("ASN", "  As15169  "),
+        null,
+        "Standard ASN should be valid with mixed case and whitespace"
+    );
+    assertEquals(
+        getResourceRuleValueValidationError("ASN", "ALL"),
+        null,
+        "ALL ASN selector should be valid"
+    );
+    assertEquals(
+        getResourceRuleValueValidationError("ASN", " all "),
+        null,
+        "ALL ASN selector should be valid with mixed case and whitespace"
+    );
+    assertEquals(
+        getResourceRuleValueValidationError("ASN", "AS0"),
+        null,
+        "AS0 alias should be valid"
+    );
+    assertEquals(
+        getResourceRuleValueValidationError("ASN", " as0 "),
+        null,
+        "AS0 alias should be valid with mixed case and whitespace"
+    );
+    assertEquals(
+        getResourceRuleValueValidationError("ASN", "not-an-asn"),
+        "Invalid ASN provided",
+        "Invalid ASN should return an error"
     );
 
     console.log("All tests passed!");

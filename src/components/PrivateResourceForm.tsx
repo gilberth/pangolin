@@ -411,9 +411,9 @@ export function PrivateResourceForm({
 
     type FormData = z.infer<typeof formSchema>;
 
-    const rolesQuery = useQuery(orgQueries.roles({ orgId }));
-    const usersQuery = useQuery(orgQueries.users({ orgId }));
-    const clientsQuery = useQuery(orgQueries.machineClients({ orgId }));
+    const clientsQuery = useQuery(
+        orgQueries.machineClients({ orgId, perPage: 1 })
+    );
     const resourceRolesQuery = useQuery({
         ...resourceQueries.siteResourceRoles({
             siteResourceId: siteResourceId ?? 0
@@ -433,13 +433,6 @@ export function PrivateResourceForm({
         enabled: siteResourceId != null
     });
 
-    const allRoles = (rolesQuery.data ?? [])
-        .map((r) => ({ id: r.roleId.toString(), text: r.name }))
-        .filter((r) => r.text !== "Admin");
-    const allUsers = (usersQuery.data ?? []).map((u) => ({
-        id: u.id.toString(),
-        text: `${getUserDisplayName({ email: u.email, username: u.username })}${u.type !== UserType.Internal ? ` (${u.idpName})` : ""}`
-    }));
     const allClients = (clientsQuery.data ?? [])
         .filter((c) => !c.userId)
         .map((c) => ({ id: c.clientId.toString(), text: c.name }));
@@ -478,8 +471,6 @@ export function PrivateResourceForm({
     }
 
     const loadingRolesUsers =
-        rolesQuery.isLoading ||
-        usersQuery.isLoading ||
         clientsQuery.isLoading ||
         (siteResourceId != null &&
             (resourceRolesQuery.isLoading ||
@@ -487,16 +478,6 @@ export function PrivateResourceForm({
                 resourceClientsQuery.isLoading));
 
     const hasMachineClients = allClients.length > 0;
-
-    const [activeRolesTagIndex, setActiveRolesTagIndex] = useState<
-        number | null
-    >(null);
-    const [activeUsersTagIndex, setActiveUsersTagIndex] = useState<
-        number | null
-    >(null);
-    const [activeClientsTagIndex, setActiveClientsTagIndex] = useState<
-        number | null
-    >(null);
 
     const [sshServerMode, setSshServerMode] = useState<"standard" | "native">(
         () => {
@@ -599,6 +580,7 @@ export function PrivateResourceForm({
     });
 
     const mode = form.watch("mode");
+    const aliasValue = form.watch("alias");
     const httpConfigSubdomain = form.watch("httpConfigSubdomain");
     const httpConfigDomainId = form.watch("httpConfigDomainId");
     const httpConfigFullDomain = form.watch("httpConfigFullDomain");
@@ -614,6 +596,9 @@ export function PrivateResourceForm({
         !isNative &&
         pamMode === "push" &&
         authDaemonMode === "remote";
+    const aliasEndsWithLocal =
+        typeof aliasValue === "string" &&
+        aliasValue.trim().toLowerCase().endsWith(".local");
     const hasInitialized = useRef(false);
     const previousResourceId = useRef<number | null>(null);
     const initialSitesRef = useRef(initialSites);
@@ -1228,6 +1213,13 @@ export function PrivateResourceForm({
                                                             }
                                                         />
                                                     </FormControl>
+                                                    {aliasEndsWithLocal && (
+                                                        <p className="text-xs text-amber-700/80 mt-1">
+                                                            {t(
+                                                                "internalResourceAliasLocalWarning"
+                                                            )}
+                                                        </p>
+                                                    )}
                                                     <FormMessage />
                                                 </FormItem>
                                             )}
@@ -1756,6 +1748,7 @@ export function PrivateResourceForm({
                                                         field.value ?? []
                                                     }
                                                     orgId={orgId}
+                                                    restrictAdminRole
                                                     onSelectRoles={(
                                                         newUsers
                                                     ) => {

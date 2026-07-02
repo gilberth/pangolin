@@ -186,11 +186,11 @@ export default function PrivateResourcesTable({
                 });
             });
         } catch (e) {
-            console.error(t("resourceErrorDelete"), e);
+            console.error(t("resourceErrorDelte"), e);
             toast({
                 variant: "destructive",
                 title: t("resourceErrorDelte"),
-                description: formatAxiosError(e, t("v"))
+                description: formatAxiosError(e, t("resourceErrorDelte"))
             });
         }
     };

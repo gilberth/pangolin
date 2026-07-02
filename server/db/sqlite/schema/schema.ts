@@ -20,8 +20,10 @@ export const domains = sqliteTable("domains", {
     failed: integer("failed", { mode: "boolean" }).notNull().default(false),
     tries: integer("tries").notNull().default(0),
     certResolver: text("certResolver"),
+    customCertResolver: text("customCertResolver"),
     preferWildcardCert: integer("preferWildcardCert", { mode: "boolean" }),
-    errorMessage: text("errorMessage")
+    errorMessage: text("errorMessage"),
+    lastCheckedAt: integer("lastCheckedAt")
 });
 
 export const dnsRecords = sqliteTable("dnsRecords", {
@@ -219,6 +221,20 @@ export const labels = sqliteTable("labels", {
             onDelete: "cascade"
         })
         .notNull()
+});
+
+export const launcherViews = sqliteTable("launcherViews", {
+    viewId: integer("viewId").primaryKey({ autoIncrement: true }),
+    orgId: text("orgId")
+        .notNull()
+        .references(() => orgs.orgId, { onDelete: "cascade" }),
+    userId: text("userId").references(() => users.userId, {
+        onDelete: "cascade"
+    }),
+    name: text("name").notNull(),
+    config: text("config").notNull(),
+    createdAt: text("createdAt").notNull(),
+    updatedAt: text("updatedAt").notNull()
 });
 
 export const siteLabels = sqliteTable(
@@ -1549,6 +1565,7 @@ export type RoundTripMessageTracker = InferSelectModel<
 >;
 export type StatusHistory = InferSelectModel<typeof statusHistory>;
 export type Label = InferSelectModel<typeof labels>;
+export type LauncherView = InferSelectModel<typeof launcherViews>;
 export type ResourcePolicy = InferSelectModel<typeof resourcePolicies>;
 export type ResourcePolicyPincode = InferSelectModel<
     typeof resourcePolicyPincode

@@ -104,7 +104,7 @@ export async function createUserOlm(
             dateCreated: moment().toISOString()
         });
 
-        calculateUserClientsForOrgs(userId, primaryDb).catch((e) => {
+        calculateUserClientsForOrgs(userId).catch((e) => {
             console.error(
                 "Error calculating user clients after creating olm:",
                 e

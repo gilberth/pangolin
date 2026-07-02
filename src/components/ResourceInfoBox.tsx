@@ -90,7 +90,11 @@ export default function ResourceInfoBox({}: ResourceInfoBoxType) {
                                     </InfoSectionTitle>
                                     <InfoSectionContent>
                                         <span className="inline-flex items-center">
-                                            {resource.ssl ? "HTTPS" : "HTTP"}
+                                            {resource.mode == "http"
+                                                ? resource.ssl
+                                                    ? "HTTPS"
+                                                    : "HTTP"
+                                                : resource.mode?.toUpperCase()}
                                         </span>
                                     </InfoSectionContent>
                                 </InfoSection>

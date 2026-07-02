@@ -11,7 +11,7 @@ import logger from "@server/logger";
 import { OpenAPITags, registry } from "@server/openApi";
 import { getUserDeviceName } from "@server/db/names";
 
-const querySchema = z.object({
+const querySchema = z.strictObject({
     limit: z
         .string()
         .optional()

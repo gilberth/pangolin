@@ -24,7 +24,7 @@ import { fromZodError } from "zod-validation-error";
 import { OpenAPITags, registry } from "@server/openApi";
 import { Limit, limits, Usage, usage } from "@server/db";
 import { usageService } from "@server/lib/billing/usageService";
-import { FeatureId } from "@server/lib/billing";
+import { LimitId } from "@server/lib/billing";
 import { GetOrgUsageResponse } from "@server/routers/billing/types";
 
 const getOrgSchema = z.strictObject({
@@ -93,16 +93,16 @@ export async function getOrgUsage(
         // Get usage for org
         const usageData = [];
 
-        const sites = await usageService.getUsage(orgId, FeatureId.SITES);
-        const users = await usageService.getUsage(orgId, FeatureId.USERS);
-        const domains = await usageService.getUsage(orgId, FeatureId.DOMAINS);
+        const sites = await usageService.getUsage(orgId, LimitId.SITES);
+        const users = await usageService.getUsage(orgId, LimitId.USERS);
+        const domains = await usageService.getUsage(orgId, LimitId.DOMAINS);
         const remoteExitNodes = await usageService.getUsage(
             orgId,
-            FeatureId.REMOTE_EXIT_NODES
+            LimitId.REMOTE_EXIT_NODES
         );
         const organizations = await usageService.getUsage(
             orgId,
-            FeatureId.ORGINIZATIONS
+            LimitId.ORGANIZATIONS
         );
         // const egressData = await usageService.getUsage(
         //     orgId,

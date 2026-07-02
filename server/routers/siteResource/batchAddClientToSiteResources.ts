@@ -15,7 +15,10 @@ import logger from "@server/logger";
 import { fromError } from "zod-validation-error";
 import { eq, and, inArray } from "drizzle-orm";
 import { OpenAPITags, registry } from "@server/openApi";
-import { rebuildClientAssociationsFromClient } from "@server/lib/rebuildClientAssociations";
+import {
+    rebuildClientAssociationsFromClient,
+    isOrgRebuildRateLimited
+} from "@server/lib/rebuildClientAssociations";
 
 const batchAddClientToSiteResourcesParamsSchema = z
     .object({
@@ -186,6 +189,15 @@ export async function batchAddClientToSiteResources(
             );
         }
 
+        if (await isOrgRebuildRateLimited(client.orgId)) {
+            return next(
+                createHttpError(
+                    HttpCode.TOO_MANY_REQUESTS,
+                    "Too many concurrent rebuild operations for this organization. Please retry after a moment."
+                )
+            );
+        }
+
         if (client.userId !== null) {
             return next(
                 createHttpError(
@@ -235,7 +247,7 @@ export async function batchAddClientToSiteResources(
             }
         });
 
-        rebuildClientAssociationsFromClient(client, primaryDb).catch((e) => {
+        rebuildClientAssociationsFromClient(client).catch((e) => {
             logger.error(
                 `Failed to rebuild client associations after batch adding site resources for client ${clientId}: ${e}`
             );

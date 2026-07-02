@@ -14,7 +14,7 @@ const listTargetsParamsSchema = z.strictObject({
     resourceId: z.coerce.number().int().positive()
 });
 
-const listTargetsSchema = z.object({
+const listTargetsSchema = z.strictObject({
     limit: z
         .string()
         .optional()

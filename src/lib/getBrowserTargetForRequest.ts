@@ -6,7 +6,7 @@ import { cache } from "react";
 
 export const getBrowserTargetForRequest = cache(async () => {
     const headersList = await headers();
-    const host = headersList.get("host") || "";
+    const host = headersList.get("p-host") || headersList.get("host") || "";
     const hostname = host.split(":")[0];
 
     try {

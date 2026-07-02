@@ -33,12 +33,16 @@ import {
     loadEncryptedLocalStorage,
     saveEncryptedLocalStorage
 } from "@app/lib/secureLocalStorage";
+import { createApiClient } from "@app/lib/api";
+import { useEnvContext } from "@app/hooks/useEnvContext";
 
 type VncCredentialsForm = {
+    username: string;
     password: string;
 };
 
 const DEFAULT_VNC_CREDENTIALS: VncCredentialsForm = {
+    username: "",
     password: ""
 };
 
@@ -52,10 +56,12 @@ export default function VncClient({
     primaryColor?: string | null;
 }) {
     const t = useTranslations();
+    const api = createApiClient(useEnvContext());
     const STORAGE_KEY = "pangolin_vnc_credentials";
     const resourceName = target?.name?.trim() || null;
 
     const formSchema = z.object({
+        username: z.string(),
         password: z.string()
     });
 
@@ -165,8 +171,11 @@ export default function VncClient({
         screenRef.current.innerHTML = "";
 
         const options: Record<string, unknown> = {};
-        if (values.password) {
-            options.credentials = { password: values.password };
+        if (values.username || values.password) {
+            options.credentials = {
+                username: values.username,
+                password: values.password
+            };
         }
 
         let rfb: any;
@@ -179,6 +188,7 @@ export default function VncClient({
         }
 
         let authConfirmed = false;
+        let auditLogged = false;
 
         rfb.scaleViewport = true;
         rfb.resizeSession = true;
@@ -190,6 +200,12 @@ export default function VncClient({
                 target.authToken
             );
             authConfirmed = true;
+            auditLogged = true;
+            void api.post(`/org/${target.orgId}/logs/access/attempt`, {
+                resourceId: target.resourceId,
+                action: true,
+                type: "vnc"
+            });
             setConnecting(false);
             setConnected(true);
         });
@@ -201,6 +217,17 @@ export default function VncClient({
                 setConnecting(false);
                 setConnected(false);
                 if (!authConfirmed && !e.detail.clean) {
+                    if (!auditLogged) {
+                        auditLogged = true;
+                        void api.post(
+                            `/org/${target.orgId}/logs/access/attempt`,
+                            {
+                                resourceId: target.resourceId,
+                                action: false,
+                                type: "vnc"
+                            }
+                        );
+                    }
                     setConnectError(t("sshErrorConnectionClosed"));
                 }
             }
@@ -209,6 +236,12 @@ export default function VncClient({
         rfb.addEventListener(
             "securityfailure",
             (e: { detail: { status: number; reason?: string } }) => {
+                auditLogged = true;
+                void api.post(`/org/${target.orgId}/logs/access/attempt`, {
+                    resourceId: target.resourceId,
+                    action: false,
+                    type: "vnc"
+                });
                 disconnect();
                 setConnectError(
                     e.detail.reason ??
@@ -265,6 +298,25 @@ export default function VncClient({
                                     onSubmit={form.handleSubmit(onSubmit)}
                                     className="space-y-4"
                                 >
+                                    <FormField
+                                        control={form.control}
+                                        name="username"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>
+                                                    {t("vncUsernameOptional")}
+                                                </FormLabel>
+                                                <FormControl>
+                                                    <Input
+                                                        type="text"
+                                                        autoComplete="username"
+                                                        {...field}
+                                                    />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
                                     <FormField
                                         control={form.control}
                                         name="password"

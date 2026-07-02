@@ -18,7 +18,6 @@ import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { useStoredPageSize } from "@app/hooks/useStoredPageSize";
-import { build } from "@server/build";
 import type { QueryRequestAuditLogResponse } from "@server/routers/auditLogs/types";
 import { ColumnFilterButton } from "@app/components/ColumnFilterButton";
 
@@ -122,8 +121,7 @@ export default function GeneralPage() {
         ...logQueries.requests({
             orgId: orgId as string,
             filters: queryFilters
-        }),
-        enabled: build !== "oss"
+        })
     });
 
     const rows = isLoading ? generateSampleRequestLogs() : (data?.log ?? []);

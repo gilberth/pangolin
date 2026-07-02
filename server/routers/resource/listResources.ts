@@ -48,7 +48,7 @@ const listResourcesParamsSchema = z.strictObject({
     orgId: z.string()
 });
 
-const listResourcesSchema = z.object({
+const listResourcesSchema = z.strictObject({
     pageSize: z.coerce
         .number<string>() // for prettier formatting
         .int()

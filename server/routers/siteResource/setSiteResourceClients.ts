@@ -8,7 +8,10 @@ import logger from "@server/logger";
 import { fromError } from "zod-validation-error";
 import { eq, inArray } from "drizzle-orm";
 import { OpenAPITags, registry } from "@server/openApi";
-import { rebuildClientAssociationsFromSiteResource } from "@server/lib/rebuildClientAssociations";
+import {
+    rebuildClientAssociationsFromSiteResource,
+    isOrgRebuildRateLimited
+} from "@server/lib/rebuildClientAssociations";
 
 const setSiteResourceClientsBodySchema = z
     .object({
@@ -107,6 +110,15 @@ export async function setSiteResourceClients(
             );
         }
 
+        if (await isOrgRebuildRateLimited(siteResource.orgId)) {
+            return next(
+                createHttpError(
+                    HttpCode.TOO_MANY_REQUESTS,
+                    "Too many concurrent rebuild operations for this organization. Please retry after a moment."
+                )
+            );
+        }
+
         // Check if any clients have a userId (associated with a user)
         if (clientIds.length > 0) {
             const clientsWithUsers = await db
@@ -141,8 +153,12 @@ export async function setSiteResourceClients(
                     }))
                 );
             }
+        });
 
-            await rebuildClientAssociationsFromSiteResource(siteResource, trx);
+        rebuildClientAssociationsFromSiteResource(siteResource).catch((e) => {
+            logger.error(
+                `Failed to rebuild client associations for site resource ${siteResourceId}. Error: ${e}`
+            );
         });
 
         return response(res, {

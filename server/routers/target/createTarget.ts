@@ -33,41 +33,59 @@ const createTargetParamsSchema = z.strictObject({
     resourceId: z.coerce.number().int().positive()
 });
 
-const createTargetSchema = z.strictObject({
-    siteId: z.int().positive(),
-    ip: z.string().refine(isTargetValid),
-    mode: z.enum(["http", "tcp", "udp", "ssh", "rdp", "vnc"]).optional(),
-    method: z.string().optional().nullable(),
-    port: z.int().min(1).max(65535),
-    enabled: z.boolean().default(true),
-    hcEnabled: z.boolean().optional(),
-    hcPath: z.string().min(1).optional().nullable(),
-    hcScheme: z.string().optional().nullable(),
-    hcMode: z.string().optional().nullable(),
-    hcHostname: z.string().optional().nullable(),
-    hcPort: z.int().positive().optional().nullable(),
-    hcInterval: z.int().positive().min(1).optional().nullable(),
-    hcUnhealthyInterval: z.int().positive().min(1).optional().nullable(),
-    hcTimeout: z.int().positive().min(1).optional().nullable(),
-    hcHeaders: z
-        .array(z.strictObject({ name: z.string(), value: z.string() }))
-        .nullable()
-        .optional(),
-    hcFollowRedirects: z.boolean().optional().nullable(),
-    hcMethod: z.string().min(1).optional().nullable(),
-    hcStatus: z.int().optional().nullable(),
-    hcTlsServerName: z.string().optional().nullable(),
-    hcHealthyThreshold: z.int().positive().min(1).optional().nullable(),
-    hcUnhealthyThreshold: z.int().positive().min(1).optional().nullable(),
-    path: z.string().optional().nullable(),
-    pathMatchType: z.enum(["exact", "prefix", "regex"]).optional().nullable(),
-    rewritePath: z.string().optional().nullable(),
-    rewritePathType: z
-        .enum(["exact", "prefix", "regex", "stripPrefix"])
-        .optional()
-        .nullable(),
-    priority: z.int().min(1).max(1000).optional().nullable()
-});
+const createTargetSchema = z
+    .strictObject({
+        siteId: z.int().positive(),
+        ip: z.string().refine(isTargetValid),
+        mode: z.enum(["http", "tcp", "udp", "ssh", "rdp", "vnc"]).optional(),
+        method: z.string().optional().nullable(),
+        port: z.int().min(1).max(65535),
+        enabled: z.boolean().default(true),
+        hcEnabled: z.boolean().optional(),
+        hcPath: z.string().min(1).optional().nullable(),
+        hcScheme: z.string().optional().nullable(),
+        hcMode: z.string().optional().nullable(),
+        hcHostname: z.string().optional().nullable(),
+        hcPort: z.int().positive().optional().nullable(),
+        hcInterval: z.int().positive().min(1).optional().nullable(),
+        hcUnhealthyInterval: z.int().positive().min(1).optional().nullable(),
+        hcTimeout: z.int().positive().min(1).optional().nullable(),
+        hcHeaders: z
+            .array(z.strictObject({ name: z.string(), value: z.string() }))
+            .nullable()
+            .optional(),
+        hcFollowRedirects: z.boolean().optional().nullable(),
+        hcMethod: z.string().min(1).optional().nullable(),
+        hcStatus: z.int().optional().nullable(),
+        hcTlsServerName: z.string().optional().nullable(),
+        hcHealthyThreshold: z.int().positive().min(1).optional().nullable(),
+        hcUnhealthyThreshold: z.int().positive().min(1).optional().nullable(),
+        path: z.string().optional().nullable(),
+        pathMatchType: z
+            .enum(["exact", "prefix", "regex"])
+            .optional()
+            .nullable(),
+        rewritePath: z.string().optional().nullable(),
+        rewritePathType: z
+            .enum(["exact", "prefix", "regex", "stripPrefix"])
+            .optional()
+            .nullable(),
+        priority: z.int().min(1).max(1000).optional().nullable()
+    })
+    .superRefine((data, ctx) => {
+        const hcHostnameMissing =
+            data.hcHostname === undefined ||
+            data.hcHostname === null ||
+            data.hcHostname.trim().length === 0;
+
+        if (data.hcEnabled === true && hcHostnameMissing) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ["hcHostname"],
+                message: "hcHostname is required when hcEnabled is true"
+            });
+        }
+    });
 
 export type CreateTargetResponse = Target & TargetHealthCheck;
 

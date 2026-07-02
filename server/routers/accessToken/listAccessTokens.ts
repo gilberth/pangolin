@@ -30,7 +30,7 @@ const listAccessTokensParamsSchema = z
         error: "Either resourceId or orgId must be provided, but not both"
     });
 
-const listAccessTokensSchema = z.object({
+const listAccessTokensSchema = z.strictObject({
     limit: z
         .string()
         .optional()

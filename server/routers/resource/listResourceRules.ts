@@ -14,7 +14,7 @@ const listResourceRulesParamsSchema = z.strictObject({
     resourceId: z.coerce.number().int().positive()
 });
 
-const listResourceRulesSchema = z.object({
+const listResourceRulesSchema = z.strictObject({
     limit: z
         .string()
         .optional()

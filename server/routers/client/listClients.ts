@@ -41,7 +41,7 @@ const listClientsParamsSchema = z.strictObject({
     orgId: z.string()
 });
 
-const listClientsSchema = z.object({
+const listClientsSchema = z.strictObject({
     pageSize: z.coerce
         .number<string>() // for prettier formatting
         .int()

@@ -329,6 +329,44 @@ authenticated.delete(
     remoteExitNode.deleteRemoteExitNode
 );
 
+authenticated.get(
+    "/org/:orgId/remote-exit-node/:remoteExitNodeId/resources",
+    verifyValidLicense,
+    verifyOrgAccess,
+    verifyRemoteExitNodeAccess,
+    verifyUserHasAction(ActionsEnum.getRemoteExitNode),
+    remoteExitNode.listRemoteExitNodeResources
+);
+
+authenticated.post(
+    "/org/:orgId/remote-exit-node/:remoteExitNodeId/resources",
+    verifyValidLicense,
+    verifyOrgAccess,
+    verifyRemoteExitNodeAccess,
+    verifyUserHasAction(ActionsEnum.updateRemoteExitNode),
+    logActionAudit(ActionsEnum.updateRemoteExitNode),
+    remoteExitNode.setRemoteExitNodeResources
+);
+
+authenticated.get(
+    "/org/:orgId/remote-exit-node/:remoteExitNodeId/preference-labels",
+    verifyValidLicense,
+    verifyOrgAccess,
+    verifyRemoteExitNodeAccess,
+    verifyUserHasAction(ActionsEnum.getRemoteExitNode),
+    remoteExitNode.listRemoteExitNodePreferenceLabels
+);
+
+authenticated.post(
+    "/org/:orgId/remote-exit-node/:remoteExitNodeId/preference-labels",
+    verifyValidLicense,
+    verifyOrgAccess,
+    verifyRemoteExitNodeAccess,
+    verifyUserHasAction(ActionsEnum.updateRemoteExitNode),
+    logActionAudit(ActionsEnum.updateRemoteExitNode),
+    remoteExitNode.setRemoteExitNodePreferenceLabels
+);
+
 authenticated.put(
     "/org/:orgId/login-page",
     verifyValidLicense,
@@ -495,29 +533,31 @@ authRouter.post(
     auth.transferSession
 );
 
-authenticated.post(
-    "/license/activate",
-    verifyUserIsServerAdmin,
-    license.activateLicense
-);
+if (build !== "saas") {
+    authenticated.post(
+        "/license/activate",
+        verifyUserIsServerAdmin,
+        license.activateLicense
+    );
 
-authenticated.get(
-    "/license/keys",
-    verifyUserIsServerAdmin,
-    license.listLicenseKeys
-);
+    authenticated.get(
+        "/license/keys",
+        verifyUserIsServerAdmin,
+        license.listLicenseKeys
+    );
 
-authenticated.delete(
-    "/license/:licenseKey",
-    verifyUserIsServerAdmin,
-    license.deleteLicenseKey
-);
+    authenticated.delete(
+        "/license/:licenseKey",
+        verifyUserIsServerAdmin,
+        license.deleteLicenseKey
+    );
 
-authenticated.post(
-    "/license/recheck",
-    verifyUserIsServerAdmin,
-    license.recheckStatus
-);
+    authenticated.post(
+        "/license/recheck",
+        verifyUserIsServerAdmin,
+        license.recheckStatus
+    );
+}
 
 authenticated.get(
     "/org/:orgId/logs/action",
@@ -877,4 +917,10 @@ authenticated.post(
     "/client/:clientId/rebuild-associations-cache",
     verifyClientAccess,
     client.rebuildClientAssociationsCacheRoute
+);
+
+authenticated.post(
+    "/org/:orgId/logs/access/attempt",
+    verifyOrgAccess,
+    logs.logAccessAuditAttempt
 );

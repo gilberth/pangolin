@@ -15,7 +15,7 @@ const listSiteResourcesParamsSchema = z.strictObject({
     orgId: z.string()
 });
 
-const listSiteResourcesQuerySchema = z.object({
+const listSiteResourcesQuerySchema = z.strictObject({
     limit: z
         .string()
         .optional()

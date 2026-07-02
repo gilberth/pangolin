@@ -188,6 +188,38 @@ export async function updateTarget(
             );
         }
 
+        const [existingHc] = await db
+            .select()
+            .from(targetHealthCheck)
+            .where(eq(targetHealthCheck.targetId, targetId))
+            .limit(1);
+
+        if (!existingHc) {
+            return next(
+                createHttpError(
+                    HttpCode.NOT_FOUND,
+                    `Health check for target with ID ${targetId} not found`
+                )
+            );
+        }
+
+        const nextHcEnabled = parsedBody.data.hcEnabled ?? existingHc.hcEnabled;
+        const nextHcHostname =
+            parsedBody.data.hcHostname !== undefined
+                ? parsedBody.data.hcHostname
+                : existingHc.hcHostname;
+        const hcHostnameMissing =
+            !nextHcHostname || nextHcHostname.trim().length === 0;
+
+        if (nextHcEnabled && hcHostnameMissing) {
+            return next(
+                createHttpError(
+                    HttpCode.BAD_REQUEST,
+                    "hcHostname is required when hcEnabled is true"
+                )
+            );
+        }
+
         const pathMatchTypeRemoved = parsedBody.data.pathMatchType === null;
         const nextMode =
             parsedBody.data.mode === null ? undefined : parsedBody.data.mode;
@@ -217,21 +249,6 @@ export async function updateTarget(
                 })
                 .where(eq(targets.targetId, targetId))
                 .returning();
-
-            const [existingHc] = await trx
-                .select()
-                .from(targetHealthCheck)
-                .where(eq(targetHealthCheck.targetId, targetId))
-                .limit(1);
-
-            if (!existingHc) {
-                return next(
-                    createHttpError(
-                        HttpCode.NOT_FOUND,
-                        `Health check for target with ID ${targetId} not found`
-                    )
-                );
-            }
 
             let hcHeaders = null;
             if (parsedBody.data.hcHeaders) {

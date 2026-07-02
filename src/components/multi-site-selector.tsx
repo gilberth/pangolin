@@ -1,4 +1,4 @@
-import { orgQueries } from "@app/lib/queries";
+import { launcherQueries, orgQueries } from "@app/lib/queries";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import {
@@ -19,6 +19,7 @@ export type MultiSitesSelectorProps = {
     selectedSites: Selectedsite[];
     onSelectionChange: (sites: Selectedsite[]) => void;
     filterTypes?: string[];
+    scope?: "org" | "launcher";
 };
 
 export function formatMultiSitesSelectorLabel(
@@ -40,19 +41,33 @@ export function MultiSitesSelector({
     orgId,
     selectedSites,
     onSelectionChange,
-    filterTypes
+    filterTypes,
+    scope = "org"
 }: MultiSitesSelectorProps) {
     const t = useTranslations();
     const [siteSearchQuery, setSiteSearchQuery] = useState("");
     const [debouncedQuery] = useDebounce(siteSearchQuery, 150);
 
-    const { data: sites = [] } = useQuery(
-        orgQueries.sites({
+    const orgSitesQuery = useQuery({
+        ...orgQueries.sites({
             orgId,
             query: debouncedQuery,
             perPage: 10
-        })
-    );
+        }),
+        enabled: scope === "org"
+    });
+    const launcherSitesQuery = useQuery({
+        ...launcherQueries.sites({
+            orgId,
+            query: debouncedQuery,
+            perPage: 500
+        }),
+        enabled: scope === "launcher"
+    });
+    const sites =
+        scope === "launcher"
+            ? (launcherSitesQuery.data ?? [])
+            : (orgSitesQuery.data ?? []);
 
     const sitesShown = useMemo(() => {
         const base = filterTypes

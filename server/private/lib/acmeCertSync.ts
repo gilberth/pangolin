@@ -693,9 +693,9 @@ async function syncAcmeCerts(acmeJsonPath: string): Promise<void> {
             );
             continue;
         }
-        logger.debug(
-            `acmeCertSync: found ${resolverData.Certificates.length} certificate(s) for resolver "${resolver}"`
-        );
+        // logger.debug(
+        //     `acmeCertSync: found ${resolverData.Certificates.length} certificate(s) for resolver "${resolver}"`
+        // );
         for (const cert of resolverData.Certificates) {
             allCerts.push(cert);
         }

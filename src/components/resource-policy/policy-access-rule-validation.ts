@@ -83,9 +83,19 @@ export function createPolicyRuleValueSchema(t: TranslateFn, match: string) {
                 { message: t("rulesErrorInvalidCountryDescription") }
             );
         case "ASN":
-            return required.refine((value) => /^AS\d+$/i.test(value.trim()), {
-                message: t("rulesErrorInvalidAsnDescription")
-            });
+            return required.refine(
+                (value) => {
+                    const normalizedValue = value.trim().toUpperCase();
+                    return (
+                        /^AS\d+$/.test(normalizedValue) ||
+                        normalizedValue === "ALL" ||
+                        normalizedValue === "AS0"
+                    );
+                },
+                {
+                    message: t("rulesErrorInvalidAsnDescription")
+                }
+            );
         default:
             return required;
     }

@@ -277,6 +277,8 @@ hybridRouter.get(
             );
         }
 
+        const pangolinUIUrl = config.getRawConfig().app.dashboard_url; // points to the dashboard to serve from there
+
         try {
             const traefikConfig = await getTraefikConfig(
                 remoteExitNode.exitNodeId,
@@ -284,8 +286,8 @@ hybridRouter.get(
                 true, // But don't allow domain namespace resources
                 false, // Dont include login pages,
                 true, // allow raw resources
-                false, // dont generate maintenance page
-                false // dont generate browser gateway targets
+                pangolinUIUrl, // dont generate maintenance page
+                pangolinUIUrl // generate browser gateway targets
             );
 
             return response(res, {

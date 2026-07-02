@@ -35,7 +35,7 @@ import logger from "@server/logger";
 import { and, eq, inArray, ne } from "drizzle-orm";
 import { getNextAvailableSubnet } from "@server/lib/exitNodes";
 import { usageService } from "@server/lib/billing/usageService";
-import { FeatureId } from "@server/lib/billing";
+import { LimitId } from "@server/lib/billing";
 import { CreateRemoteExitNodeResponse } from "@server/routers/remoteExitNode/types";
 
 export const paramsSchema = z.object({
@@ -79,7 +79,10 @@ export async function createRemoteExitNode(
 
         const { remoteExitNodeId, secret } = parsedBody.data;
 
-        if (req.user && (!req.userOrgRoleIds || req.userOrgRoleIds.length === 0)) {
+        if (
+            req.user &&
+            (!req.userOrgRoleIds || req.userOrgRoleIds.length === 0)
+        ) {
             return next(
                 createHttpError(HttpCode.FORBIDDEN, "User does not have a role")
             );
@@ -87,13 +90,13 @@ export async function createRemoteExitNode(
 
         const usage = await usageService.getUsage(
             orgId,
-            FeatureId.REMOTE_EXIT_NODES
+            LimitId.REMOTE_EXIT_NODES
         );
         if (usage) {
             const rejectRemoteExitNodes = await usageService.checkLimitSet(
                 orgId,
 
-                FeatureId.REMOTE_EXIT_NODES,
+                LimitId.REMOTE_EXIT_NODES,
                 {
                     ...usage,
                     instantaneousValue: (usage.instantaneousValue || 0) + 1
@@ -264,7 +267,7 @@ export async function createRemoteExitNode(
                 if (orgsInBillingDomainThatTheNodeIsStillIn.length === 0) {
                     await usageService.add(
                         orgId,
-                        FeatureId.REMOTE_EXIT_NODES,
+                        LimitId.REMOTE_EXIT_NODES,
                         1,
                         trx
                     );

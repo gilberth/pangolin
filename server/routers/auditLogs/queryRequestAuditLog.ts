@@ -20,7 +20,7 @@ import response from "@server/lib/response";
 import logger from "@server/logger";
 import { getSevenDaysAgo } from "@app/lib/getSevenDaysAgo";
 
-export const queryAccessAuditLogsQuery = z.object({
+export const queryAccessAuditLogsQuery = z.strictObject({
     // iso string just validate its a parseable date
     timeStart: z
         .string()

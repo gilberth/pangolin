@@ -14,7 +14,7 @@ const listOrgsParamsSchema = z.object({
     userId: z.string()
 });
 
-const listOrgsSchema = z.object({
+const listOrgsSchema = z.strictObject({
     limit: z
         .string()
         .optional()

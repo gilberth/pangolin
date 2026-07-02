@@ -80,8 +80,7 @@ export async function getExchangeToken(
             return next(
                 createHttpError(
                     HttpCode.FORBIDDEN,
-                    "Failed organization access policy check: " +
-                        (hasAccess.error || "Unknown error")
+                    "" + (hasAccess.error || "Unknown error")
                 )
             );
         }

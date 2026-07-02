@@ -9,6 +9,7 @@ import { NextFunction, Request, Response } from "express";
 import createHttpError from "http-errors";
 import { z } from "zod";
 import { fromError } from "zod-validation-error";
+import { applyInlinePolicyFields } from "./inlinePolicyFields";
 
 const getResourceSchema = z.strictObject({
     resourceId: z
@@ -151,13 +152,7 @@ export async function getResource(
             const policy = await queryInlinePolicy(
                 resource.defaultResourcePolicyId!
             );
-            returnData = {
-                ...returnData,
-                sso: policy?.sso || null,
-                emailWhitelistEnabled: policy?.emailWhitelistEnabled || null,
-                applyRules: policy?.applyRules || null,
-                skipToIdpId: policy?.idpId || null
-            };
+            returnData = applyInlinePolicyFields(returnData, policy);
         }
 
         return response<GetResourceResponse>(res, {

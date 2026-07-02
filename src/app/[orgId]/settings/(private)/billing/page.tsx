@@ -58,7 +58,7 @@ import {
     tier2LimitSet,
     tier3LimitSet
 } from "@server/lib/billing/limitSet";
-import { FeatureId } from "@server/lib/billing/features";
+import { LimitId } from "@server/lib/billing/features";
 import TrialBillingBanner from "@app/components/TrialBillingBanner";
 
 // Plan tier definitions matching the mockup
@@ -161,32 +161,32 @@ const tierLimits: Record<
     }
 > = {
     basic: {
-        users: freeLimitSet[FeatureId.USERS]?.value ?? 0,
-        sites: freeLimitSet[FeatureId.SITES]?.value ?? 0,
-        domains: freeLimitSet[FeatureId.DOMAINS]?.value ?? 0,
-        remoteNodes: freeLimitSet[FeatureId.REMOTE_EXIT_NODES]?.value ?? 0,
-        organizations: freeLimitSet[FeatureId.ORGINIZATIONS]?.value ?? 0
+        users: freeLimitSet[LimitId.USERS]?.value ?? 0,
+        sites: freeLimitSet[LimitId.SITES]?.value ?? 0,
+        domains: freeLimitSet[LimitId.DOMAINS]?.value ?? 0,
+        remoteNodes: freeLimitSet[LimitId.REMOTE_EXIT_NODES]?.value ?? 0,
+        organizations: freeLimitSet[LimitId.ORGANIZATIONS]?.value ?? 0
     },
     tier1: {
-        users: tier1LimitSet[FeatureId.USERS]?.value ?? 0,
-        sites: tier1LimitSet[FeatureId.SITES]?.value ?? 0,
-        domains: tier1LimitSet[FeatureId.DOMAINS]?.value ?? 0,
-        remoteNodes: tier1LimitSet[FeatureId.REMOTE_EXIT_NODES]?.value ?? 0,
-        organizations: tier1LimitSet[FeatureId.ORGINIZATIONS]?.value ?? 0
+        users: tier1LimitSet[LimitId.USERS]?.value ?? 0,
+        sites: tier1LimitSet[LimitId.SITES]?.value ?? 0,
+        domains: tier1LimitSet[LimitId.DOMAINS]?.value ?? 0,
+        remoteNodes: tier1LimitSet[LimitId.REMOTE_EXIT_NODES]?.value ?? 0,
+        organizations: tier1LimitSet[LimitId.ORGANIZATIONS]?.value ?? 0
     },
     tier2: {
-        users: tier2LimitSet[FeatureId.USERS]?.value ?? 0,
-        sites: tier2LimitSet[FeatureId.SITES]?.value ?? 0,
-        domains: tier2LimitSet[FeatureId.DOMAINS]?.value ?? 0,
-        remoteNodes: tier2LimitSet[FeatureId.REMOTE_EXIT_NODES]?.value ?? 0,
-        organizations: tier2LimitSet[FeatureId.ORGINIZATIONS]?.value ?? 0
+        users: tier2LimitSet[LimitId.USERS]?.value ?? 0,
+        sites: tier2LimitSet[LimitId.SITES]?.value ?? 0,
+        domains: tier2LimitSet[LimitId.DOMAINS]?.value ?? 0,
+        remoteNodes: tier2LimitSet[LimitId.REMOTE_EXIT_NODES]?.value ?? 0,
+        organizations: tier2LimitSet[LimitId.ORGANIZATIONS]?.value ?? 0
     },
     tier3: {
-        users: tier3LimitSet[FeatureId.USERS]?.value ?? 0,
-        sites: tier3LimitSet[FeatureId.SITES]?.value ?? 0,
-        domains: tier3LimitSet[FeatureId.DOMAINS]?.value ?? 0,
-        remoteNodes: tier3LimitSet[FeatureId.REMOTE_EXIT_NODES]?.value ?? 0,
-        organizations: tier3LimitSet[FeatureId.ORGINIZATIONS]?.value ?? 0
+        users: tier3LimitSet[LimitId.USERS]?.value ?? 0,
+        sites: tier3LimitSet[LimitId.SITES]?.value ?? 0,
+        domains: tier3LimitSet[LimitId.DOMAINS]?.value ?? 0,
+        remoteNodes: tier3LimitSet[LimitId.REMOTE_EXIT_NODES]?.value ?? 0,
+        organizations: tier3LimitSet[LimitId.ORGANIZATIONS]?.value ?? 0
     },
     enterprise: {
         users: 0, // Custom for enterprise

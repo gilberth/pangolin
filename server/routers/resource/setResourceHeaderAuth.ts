@@ -107,6 +107,13 @@ export async function setResourceHeaderAuth(
             resource.resourcePolicyId === null &&
             resource.defaultResourcePolicyId !== null;
 
+        const headerAuthHash =
+            user && password && extendedCompatibility !== null
+                ? await hashPassword(
+                      Buffer.from(`${user}:${password}`).toString("base64")
+                  )
+                : null;
+
         await db.transaction(async (trx) => {
             if (isInlinePolicy) {
                 const policyId = resource.defaultResourcePolicyId!;
@@ -116,11 +123,7 @@ export async function setResourceHeaderAuth(
                         eq(resourcePolicyHeaderAuth.resourcePolicyId, policyId)
                     );
 
-                if (user && password && extendedCompatibility !== null) {
-                    const headerAuthHash = await hashPassword(
-                        Buffer.from(`${user}:${password}`).toString("base64")
-                    );
-
+                if (headerAuthHash !== null && extendedCompatibility !== null) {
                     await trx.insert(resourcePolicyHeaderAuth).values({
                         resourcePolicyId: policyId,
                         headerAuthHash,
@@ -140,11 +143,7 @@ export async function setResourceHeaderAuth(
                         )
                     );
 
-                if (user && password && extendedCompatibility !== null) {
-                    const headerAuthHash = await hashPassword(
-                        Buffer.from(`${user}:${password}`).toString("base64")
-                    );
-
+                if (headerAuthHash !== null && extendedCompatibility !== null) {
                     await Promise.all([
                         trx
                             .insert(resourceHeaderAuth)

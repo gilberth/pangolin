@@ -333,7 +333,7 @@ export async function getNextAvailableClientSubnet(
     if (!acquired) {
         throw new Error(`Failed to acquire lock: ${lockKey}`);
     }
-    const release = () => lockManager.releaseLock(lockKey);
+    const release = () => lockManager.releaseLock(lockKey, acquired);
 
     try {
         const [org] = await transaction
@@ -395,7 +395,7 @@ export async function getNextAvailableAliasAddress(
     if (!acquired) {
         throw new Error(`Failed to acquire lock: ${lockKey}`);
     }
-    const release = () => lockManager.releaseLock(lockKey);
+    const release = () => lockManager.releaseLock(lockKey, acquired);
 
     try {
         const [org] = await trx
@@ -463,7 +463,7 @@ export async function getNextAvailableOrgSubnet(): Promise<{
     if (!acquired) {
         throw new Error(`Failed to acquire lock: ${lockKey}`);
     }
-    const release = () => lockManager.releaseLock(lockKey);
+    const release = () => lockManager.releaseLock(lockKey, acquired);
 
     try {
         const existingAddresses = await db

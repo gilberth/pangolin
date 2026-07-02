@@ -12,7 +12,12 @@ import { CheckIcon } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Checkbox } from "../ui/checkbox";
 
-export type TagValue = { text: string; id: string; isAdmin?: boolean };
+export type TagValue = {
+    text: string;
+    id: string;
+    isAdmin?: boolean;
+    color?: string;
+};
 
 export type MultiSelectTagsProps<T extends TagValue> = {
     emptyPlaceholder?: string;
@@ -77,6 +82,14 @@ export function MultiSelectContent<T extends TagValue>({
                                     aria-hidden
                                     tabIndex={-1}
                                 />
+                                {option.color && (
+                                    <span
+                                        className="size-2 rounded-full flex-none"
+                                        style={{
+                                            backgroundColor: option.color
+                                        }}
+                                    />
+                                )}
                                 {`${option.text}`}
                             </CommandItem>
                         );

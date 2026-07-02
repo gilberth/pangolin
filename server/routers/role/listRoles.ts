@@ -15,7 +15,7 @@ const listRolesParamsSchema = z.strictObject({
     orgId: z.string()
 });
 
-const listRolesSchema = z.object({
+const listRolesSchema = z.strictObject({
     pageSize: z.coerce
         .number<string>() // for prettier formatting
         .int()

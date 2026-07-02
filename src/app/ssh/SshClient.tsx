@@ -36,6 +36,8 @@ import {
     loadEncryptedLocalStorage,
     saveEncryptedLocalStorage
 } from "@app/lib/secureLocalStorage";
+import { createApiClient } from "@app/lib/api";
+import { useEnvContext } from "@app/hooks/useEnvContext";
 
 type AuthTab = "password" | "privateKey";
 
@@ -73,6 +75,7 @@ export default function SshClient({
 }) {
     const STORAGE_KEY = "pangolin_ssh_credentials";
     const t = useTranslations();
+    const api = createApiClient(useEnvContext());
     const resourceName = target?.name?.trim() || null;
 
     const passwordTabSchema = z.object({
@@ -263,6 +266,17 @@ export default function SshClient({
         let authConfirmed = false;
         let authErrorShown = false;
         let socketOpened = false;
+        let auditLogged = false;
+
+        const logAudit = (action: boolean) => {
+            if (auditLogged || !target) return;
+            auditLogged = true;
+            void api.post(`/org/${target.orgId}/logs/access/attempt`, {
+                resourceId: target.resourceId,
+                action,
+                type: "ssh"
+            });
+        };
 
         ws.onopen = () => {
             socketOpened = true;
@@ -294,6 +308,7 @@ export default function SshClient({
                     if (msg.type === "data" && msg.data) {
                         if (!authConfirmed) {
                             authConfirmed = true;
+                            logAudit(true);
                             setConnecting(false);
                             setConnected(true);
                         }
@@ -301,6 +316,7 @@ export default function SshClient({
                     } else if (msg.type === "error") {
                         if (!authConfirmed) {
                             authErrorShown = true;
+                            logAudit(false);
                             setConnecting(false);
                             setConnectError(
                                 msg.error ?? t("sshErrorAuthFailed")
@@ -323,6 +339,7 @@ export default function SshClient({
                 evt.data.text().then((text) => {
                     if (!authConfirmed) {
                         authConfirmed = true;
+                        logAudit(true);
                         setConnecting(false);
                         setConnected(true);
                     }
@@ -332,6 +349,7 @@ export default function SshClient({
         };
 
         ws.onerror = () => {
+            logAudit(false);
             setConnecting(false);
             setConnected(false);
             setConnectError(t("sshErrorWebSocket"));
@@ -355,6 +373,7 @@ export default function SshClient({
                 );
             }
             if (!authConfirmed && !authErrorShown) {
+                logAudit(false);
                 setConnectError(t("sshErrorConnectionClosed"));
             }
         };

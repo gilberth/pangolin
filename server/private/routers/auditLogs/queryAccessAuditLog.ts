@@ -22,7 +22,7 @@ import {
 import { registry } from "@server/openApi";
 import { NextFunction } from "express";
 import { Request, Response } from "express";
-import { eq, gt, lt, and, count, desc, inArray, isNull } from "drizzle-orm";
+import { eq, gt, lt, and, count, desc, inArray, isNull, or } from "drizzle-orm";
 import { OpenAPITags } from "@server/openApi";
 import { z } from "zod";
 import createHttpError from "http-errors";
@@ -120,7 +120,10 @@ function getWhere(data: Q) {
         lt(accessAuditLog.timestamp, data.timeEnd),
         eq(accessAuditLog.orgId, data.orgId),
         data.resourceId
-            ? eq(accessAuditLog.resourceId, data.resourceId)
+            ? or(
+                  eq(accessAuditLog.resourceId, data.resourceId),
+                  eq(accessAuditLog.siteResourceId, data.resourceId)
+              )
             : undefined,
         data.actor ? eq(accessAuditLog.actor, data.actor) : undefined,
         data.actorType
@@ -233,7 +236,6 @@ async function enrichWithResourceDetails(
             const details = siteResourceMap.get(log.siteResourceId);
             return {
                 ...log,
-                resourceId: log.siteResourceId,
                 resourceName: details?.name ?? null,
                 resourceNiceId: details?.niceId ?? null
             };

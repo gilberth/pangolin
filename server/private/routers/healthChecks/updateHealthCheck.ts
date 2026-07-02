@@ -105,7 +105,6 @@ const UpdateHealthCheckResponseDataSchema = z.object({
     hcUnhealthyThreshold: z.number().nullable()
 });
 
-
 registry.registerPath({
     method: "post",
     path: "/org/{orgId}/health-check/{healthCheckId}",
@@ -126,7 +125,9 @@ registry.registerPath({
             description: "Successful response",
             content: {
                 "application/json": {
-                    schema: createApiResponseSchema(UpdateHealthCheckResponseDataSchema)
+                    schema: createApiResponseSchema(
+                        UpdateHealthCheckResponseDataSchema
+                    )
                 }
             }
         }
@@ -214,6 +215,32 @@ export async function updateHealthCheck(
                 )
             )
             .limit(1);
+
+        if (!existingHealthCheck) {
+            return next(
+                createHttpError(
+                    HttpCode.NOT_FOUND,
+                    "Standalone health check not found"
+                )
+            );
+        }
+
+        const nextHcEnabled = hcEnabled ?? existingHealthCheck.hcEnabled;
+        const nextHcHostname =
+            hcHostname !== undefined
+                ? hcHostname
+                : existingHealthCheck.hcHostname;
+        const hcHostnameMissing =
+            !nextHcHostname || nextHcHostname.trim().length === 0;
+
+        if (nextHcEnabled && hcHostnameMissing) {
+            return next(
+                createHttpError(
+                    HttpCode.BAD_REQUEST,
+                    "hcHostname is required when hcEnabled is true"
+                )
+            );
+        }
 
         if (name !== undefined) updateData.name = name;
         if (siteId !== undefined) updateData.siteId = siteId;

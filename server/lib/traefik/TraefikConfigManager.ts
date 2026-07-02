@@ -511,6 +511,12 @@ export class TraefikConfigManager {
         let traefikConfig;
         try {
             const currentExitNode = await getCurrentExitNodeId();
+
+            const maintenancePort = config.getRawConfig().server.next_port;
+            const maintenanceHost =
+                config.getRawConfig().server.internal_hostname;
+            const pangolinUIUrl = `http://${maintenanceHost}:${maintenancePort}`;
+
             // logger.debug(`Fetching traefik config for exit node: ${currentExitNode}`);
             traefikConfig = await getTraefikConfig(
                 // this is called by the local exit node to get its own config
@@ -521,7 +527,8 @@ export class TraefikConfigManager {
                 build == "saas"
                     ? false
                     : config.getRawConfig().traefik.allow_raw_resources, // dont allow raw resources on saas otherwise use config
-                build != "oss" // generate browser gateway targets on cloud and enterprise
+                pangolinUIUrl, // generate maintenance pages on cloud and hybrid
+                pangolinUIUrl // generate browser gateway targets on cloud and hybrid
             );
 
             const domains = new Set<string>();

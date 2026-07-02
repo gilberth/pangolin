@@ -342,7 +342,7 @@ export default function GeneralPage() {
                 return (
                     <Link
                         href={
-                            row.original.type === "ssh"
+                            row.original.siteResourceId != null
                                 ? `/${row.original.orgId}/settings/resources/private?query=${row.original.resourceNiceId}`
                                 : `/${row.original.orgId}/settings/resources/public/${row.original.resourceNiceId}`
                         }
@@ -369,7 +369,9 @@ export default function GeneralPage() {
                                     value: "whitelistedEmail",
                                     label: "Whitelisted Email"
                                 },
-                                { value: "ssh", label: "SSH" }
+                                { value: "ssh", label: "SSH" },
+                                { value: "rdp", label: "RDP" },
+                                { value: "vnc", label: "VNC" }
                             ]}
                             label={t("type")}
                             selectedValue={filters.type}
@@ -384,8 +386,10 @@ export default function GeneralPage() {
             },
             cell: ({ row }) => {
                 const typeLabel =
-                    row.original.type === "ssh"
-                        ? "SSH"
+                    row.original.type === "ssh" ||
+                    row.original.type === "rdp" ||
+                    row.original.type === "vnc"
+                        ? row.original.type.toUpperCase()
                         : row.original.type.charAt(0).toUpperCase() +
                           row.original.type.slice(1);
                 return <span>{typeLabel || "-"}</span>;
@@ -513,7 +517,15 @@ export default function GeneralPage() {
 
 function generateSampleAccessLogs(): QueryAccessAuditLogResponse["log"] {
     const locations = ["US", "DE", "GB", "FR", "JP", "CA", "AU"];
-    const types = ["password", "pincode", "login", "whitelistedEmail", "ssh"];
+    const types = [
+        "password",
+        "pincode",
+        "login",
+        "whitelistedEmail",
+        "ssh",
+        "rdp",
+        "vnc"
+    ];
     const actors = [
         "alice@example.com",
         "bob@example.com",
@@ -538,6 +550,7 @@ function generateSampleAccessLogs(): QueryAccessAuditLogResponse["log"] {
             actor,
             actorId: actor ? `user-${i}` : null,
             resourceId: Math.floor(Math.random() * 5) + 1,
+            siteResourceId: null,
             resourceNiceId: `resource-${(i % 3) + 1}`,
             resourceName: `Resource ${(i % 3) + 1}`,
             ip: `${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,

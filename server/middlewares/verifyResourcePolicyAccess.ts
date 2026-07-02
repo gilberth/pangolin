@@ -102,8 +102,7 @@ export async function verifyResourcePolicyAccess(
                 return next(
                     createHttpError(
                         HttpCode.FORBIDDEN,
-                        "Failed organization access policy check: " +
-                            (policyCheck.error || "Unknown error")
+                        "" + (policyCheck.error || "Unknown error")
                     )
                 );
             }

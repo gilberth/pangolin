@@ -25,6 +25,12 @@ import { getNextAvailableAliasAddress } from "../ip";
 import { createCertificate } from "#dynamic/routers/certificates/createCertificate";
 import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
 import { tierMatrix } from "../billing/tierMatrix";
+import { build } from "@server/build";
+import HttpCode from "@server/types/HttpCode";
+import createHttpError from "http-errors";
+import next from "next";
+import { LimitId } from "../billing";
+import { usageService } from "../billing/usageService";
 
 async function getDomainForSiteResource(
     siteResourceId: number | undefined,
@@ -413,6 +419,34 @@ export async function updatePrivateResources(
                 oldSites: existingSiteIds
             });
         } else {
+            // create a brand new resource
+
+            if (build == "saas") {
+                const usage = await usageService.getUsage(
+                    orgId,
+                    LimitId.PRIVATE_RESOURCES
+                );
+                if (!usage) {
+                    throw new Error(
+                        `Usage data not found for org ${orgId} and limit ${LimitId.PRIVATE_RESOURCES}`
+                    );
+                }
+                const rejectResource = await usageService.checkLimitSet(
+                    orgId,
+
+                    LimitId.PRIVATE_RESOURCES,
+                    {
+                        ...usage,
+                        instantaneousValue: (usage.instantaneousValue || 0) + 1
+                    } // We need to add one to know if we are violating the limit
+                );
+                if (rejectResource) {
+                    throw new Error(
+                        "Private resource limit exceeded. Please upgrade your plan."
+                    );
+                }
+            }
+
             let aliasAddress: string | null = null;
             let releaseAliasLock: (() => Promise<void>) | null = null;
             if (
@@ -608,6 +642,8 @@ export async function updatePrivateResources(
             logger.info(
                 `Created new client resource ${newResource.name} (${newResource.siteResourceId}) for org ${orgId}`
             );
+
+            await usageService.add(orgId, LimitId.PRIVATE_RESOURCES, 1, trx);
 
             results.push({
                 newSiteResource: newResource,

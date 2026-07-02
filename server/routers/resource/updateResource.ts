@@ -47,6 +47,7 @@ import { build } from "@server/build";
 import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
 import { isSubscribed } from "#dynamic/lib/isSubscribed";
+import { applyInlinePolicyFields } from "./inlinePolicyFields";
 
 const updateResourceParamsSchema = z.strictObject({
     resourceId: z.coerce.number().int().positive()
@@ -682,6 +683,12 @@ async function updateHttpResource(
                 .where(eq(resourcePolicies.resourcePolicyId, policyId));
         }
 
+        const [inlinePolicy] = await db
+            .select()
+            .from(resourcePolicies)
+            .where(eq(resourcePolicies.resourcePolicyId, policyId))
+            .limit(1);
+
         const updatedResource = await db
             .update(resources)
             .set({ ...resourceOnlyData, headers })
@@ -698,7 +705,7 @@ async function updateHttpResource(
         }
 
         return response(res, {
-            data: updatedResource[0],
+            data: applyInlinePolicyFields(updatedResource[0], inlinePolicy),
             success: true,
             error: false,
             message: "HTTP resource updated successfully",

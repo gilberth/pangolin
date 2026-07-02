@@ -25,6 +25,7 @@ import {
 } from "@server/db";
 import config from "@server/lib/config";
 import { isIpInCidr, stripPortFromHost } from "@server/lib/ip";
+import { isPathAllowed } from "@server/lib/pathMatch";
 import { response } from "@server/lib/response";
 import logger from "@server/logger";
 import HttpCode from "@server/types/HttpCode";
@@ -1090,143 +1091,7 @@ async function checkRules(
     return;
 }
 
-export function isPathAllowed(pattern: string, path: string): boolean {
-    logger.debug(`\nMatching path "${path}" against pattern "${pattern}"`);
-
-    // Normalize and split paths into segments
-    const normalize = (p: string) => p.split("/").filter(Boolean);
-    const patternParts = normalize(pattern);
-    const pathParts = normalize(path);
-
-    logger.debug(`Normalized pattern parts: [${patternParts.join(", ")}]`);
-    logger.debug(`Normalized path parts: [${pathParts.join(", ")}]`);
-
-    // Maximum recursion depth to prevent stack overflow and memory issues
-    const MAX_RECURSION_DEPTH = 100;
-
-    // Recursive function to try different wildcard matches
-    function matchSegments(
-        patternIndex: number,
-        pathIndex: number,
-        depth: number = 0
-    ): boolean {
-        // Check recursion depth limit
-        if (depth > MAX_RECURSION_DEPTH) {
-            logger.warn(
-                `Path matching exceeded maximum recursion depth (${MAX_RECURSION_DEPTH}) for pattern "${pattern}" and path "${path}"`
-            );
-            return false;
-        }
-
-        const indent = "  ".repeat(depth); // Indent based on recursion depth
-        const currentPatternPart = patternParts[patternIndex];
-        const currentPathPart = pathParts[pathIndex];
-
-        logger.debug(
-            `${indent}Checking patternIndex=${patternIndex} (${currentPatternPart || "END"}) vs pathIndex=${pathIndex} (${currentPathPart || "END"}) [depth=${depth}]`
-        );
-
-        // If we've consumed all pattern parts, we should have consumed all path parts
-        if (patternIndex >= patternParts.length) {
-            const result = pathIndex >= pathParts.length;
-            logger.debug(
-                `${indent}Reached end of pattern, remaining path: ${pathParts.slice(pathIndex).join("/")} -> ${result}`
-            );
-            return result;
-        }
-
-        // If we've consumed all path parts but still have pattern parts
-        if (pathIndex >= pathParts.length) {
-            // The only way this can match is if all remaining pattern parts are wildcards
-            const remainingPattern = patternParts.slice(patternIndex);
-            const result = remainingPattern.every((p) => p === "*");
-            logger.debug(
-                `${indent}Reached end of path, remaining pattern: ${remainingPattern.join("/")} -> ${result}`
-            );
-            return result;
-        }
-
-        // For full segment wildcards, try consuming different numbers of path segments
-        if (currentPatternPart === "*") {
-            logger.debug(
-                `${indent}Found wildcard at pattern index ${patternIndex}`
-            );
-
-            // Try consuming 0 segments (skip the wildcard)
-            logger.debug(
-                `${indent}Trying to skip wildcard (consume 0 segments)`
-            );
-            if (matchSegments(patternIndex + 1, pathIndex, depth + 1)) {
-                logger.debug(
-                    `${indent}Successfully matched by skipping wildcard`
-                );
-                return true;
-            }
-
-            // Try consuming current segment and recursively try rest
-            logger.debug(
-                `${indent}Trying to consume segment "${currentPathPart}" for wildcard`
-            );
-            if (matchSegments(patternIndex, pathIndex + 1, depth + 1)) {
-                logger.debug(
-                    `${indent}Successfully matched by consuming segment for wildcard`
-                );
-                return true;
-            }
-
-            logger.debug(`${indent}Failed to match wildcard`);
-            return false;
-        }
-
-        // Check for in-segment wildcard (e.g., "prefix*" or "prefix*suffix")
-        if (currentPatternPart.includes("*")) {
-            logger.debug(
-                `${indent}Found in-segment wildcard in "${currentPatternPart}"`
-            );
-
-            // Convert the pattern segment to a regex pattern
-            const regexPattern = currentPatternPart
-                .replace(/\*/g, ".*") // Replace * with .* for regex wildcard
-                .replace(/\?/g, "."); // Replace ? with . for single character wildcard if needed
-
-            const regex = new RegExp(`^${regexPattern}$`);
-
-            if (regex.test(currentPathPart)) {
-                logger.debug(
-                    `${indent}Segment with wildcard matches: "${currentPatternPart}" matches "${currentPathPart}"`
-                );
-                return matchSegments(
-                    patternIndex + 1,
-                    pathIndex + 1,
-                    depth + 1
-                );
-            }
-
-            logger.debug(
-                `${indent}Segment with wildcard mismatch: "${currentPatternPart}" doesn't match "${currentPathPart}"`
-            );
-            return false;
-        }
-
-        // For regular segments, they must match exactly
-        if (currentPatternPart !== currentPathPart) {
-            logger.debug(
-                `${indent}Segment mismatch: "${currentPatternPart}" != "${currentPathPart}"`
-            );
-            return false;
-        }
-
-        logger.debug(
-            `${indent}Segments match: "${currentPatternPart}" = "${currentPathPart}"`
-        );
-        // Move to next segments in both pattern and path
-        return matchSegments(patternIndex + 1, pathIndex + 1, depth + 1);
-    }
-
-    const result = matchSegments(0, 0, 0);
-    logger.debug(`Final result: ${result}`);
-    return result;
-}
+export { isPathAllowed };
 
 async function isIpInGeoIP(
     ipCountryCode: string | undefined,

@@ -36,6 +36,8 @@ import {
     getUniqueResourceName,
     getUniqueResourcePolicyName
 } from "@server/db/names";
+import { usageService } from "@server/lib/billing/usageService";
+import { LimitId } from "@server/lib/billing";
 
 const createResourceParamsSchema = z.strictObject({
     orgId: z.string()
@@ -233,6 +235,38 @@ export async function createResource(
 
         if (resolvedMode.mode) {
             req.body.mode = resolvedMode.mode;
+        }
+
+        if (build == "saas") {
+            const usage = await usageService.getUsage(
+                orgId,
+                LimitId.PUBLIC_RESOURCES
+            );
+            if (!usage) {
+                return next(
+                    createHttpError(
+                        HttpCode.NOT_FOUND,
+                        "No usage data found for this organization"
+                    )
+                );
+            }
+            const rejectResource = await usageService.checkLimitSet(
+                orgId,
+
+                LimitId.PUBLIC_RESOURCES,
+                {
+                    ...usage,
+                    instantaneousValue: (usage.instantaneousValue || 0) + 1
+                } // We need to add one to know if we are violating the limit
+            );
+            if (rejectResource) {
+                return next(
+                    createHttpError(
+                        HttpCode.FORBIDDEN,
+                        "Public resource limit exceeded. Please upgrade your plan."
+                    )
+                );
+            }
         }
 
         if (typeof req.body.proxyPort === "number") {
@@ -503,6 +537,8 @@ async function createHttpResource(
         }
 
         resource = newResource[0];
+
+        await usageService.add(orgId, LimitId.PUBLIC_RESOURCES, 1, trx);
     });
 
     if (!resource) {
@@ -631,6 +667,8 @@ async function createRawResource(
         }
 
         resource = newResource[0];
+
+        await usageService.add(orgId, LimitId.PUBLIC_RESOURCES, 1, trx);
     });
 
     if (!resource) {

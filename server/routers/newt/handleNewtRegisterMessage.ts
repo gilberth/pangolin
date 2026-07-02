@@ -1,4 +1,4 @@
-import { db, ExitNode, newts, Transaction } from "@server/db";
+import { db, ExitNode, newts, remoteExitNodes, Transaction } from "@server/db";
 import { MessageHandler } from "@server/routers/ws";
 import { exitNodes, Newt, sites } from "@server/db";
 import { eq } from "drizzle-orm";
@@ -196,12 +196,29 @@ export const handleNewtRegisterMessage: MessageHandler = async (context) => {
             .where(eq(newts.newtId, newt.newtId));
     }
 
+    let remoteExitNodeId: string | undefined;
+    if (exitNode.type == "remoteExitNode") {
+        // get the remote exit node ID associated with this exit node
+        const [remoteExitNode] = await db
+            .select()
+            .from(remoteExitNodes)
+            .where(eq(remoteExitNodes.exitNodeId, exitNode.exitNodeId))
+            .limit(1);
+
+        remoteExitNodeId = remoteExitNode?.remoteExitNodeId;
+    }
+
     const {
         tcpTargets,
         udpTargets,
         validHealthCheckTargets,
-        browserGatewayTargets
-    } = await buildTargetConfigurationForNewtClient(siteId, newtVersion);
+        browserGatewayTargets,
+        remoteExitNodeSubnets
+    } = await buildTargetConfigurationForNewtClient(
+        siteId,
+        newtVersion,
+        remoteExitNodeId // this is for the remote node resources
+    );
 
     logger.debug(
         `Sending health check targets to newt ${newt.newtId}: ${JSON.stringify(validHealthCheckTargets)}`
@@ -222,6 +239,7 @@ export const handleNewtRegisterMessage: MessageHandler = async (context) => {
                 },
                 healthCheckTargets: validHealthCheckTargets,
                 browserGatewayTargets: browserGatewayTargets,
+                remoteExitNodeSubnets: remoteExitNodeSubnets,
                 chainId: chainId
             }
         },

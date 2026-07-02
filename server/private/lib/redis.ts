@@ -1000,6 +1000,45 @@ class RegionalRedisManager {
         }
     }
 
+    public getClient(): Redis | null {
+        return this.writeClient;
+    }
+
+    public async hget(key: string, field: string): Promise<string | null> {
+        if (!this.isRedisEnabled() || !this.readClient) return null;
+        try {
+            return await this.readClient.hget(key, field);
+        } catch (error) {
+            logger.error("Regional Redis HGET error:", error);
+            return null;
+        }
+    }
+
+    public async hset(
+        key: string,
+        field: string,
+        value: string
+    ): Promise<boolean> {
+        if (!this.isRedisEnabled() || !this.writeClient) return false;
+        try {
+            await this.writeClient.hset(key, field, value);
+            return true;
+        } catch (error) {
+            logger.error("Regional Redis HSET error:", error);
+            return false;
+        }
+    }
+
+    public async hgetall(key: string): Promise<Record<string, string>> {
+        if (!this.isRedisEnabled() || !this.readClient) return {};
+        try {
+            return await this.readClient.hgetall(key);
+        } catch (error) {
+            logger.error("Regional Redis HGETALL error:", error);
+            return {};
+        }
+    }
+
     public async disconnect(): Promise<void> {
         try {
             if (this.writeClient) {

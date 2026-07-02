@@ -8,7 +8,10 @@ import logger from "@server/logger";
 import { fromError } from "zod-validation-error";
 import { eq, and } from "drizzle-orm";
 import { OpenAPITags, registry } from "@server/openApi";
-import { rebuildClientAssociationsFromSiteResource } from "@server/lib/rebuildClientAssociations";
+import {
+    rebuildClientAssociationsFromSiteResource,
+    isOrgRebuildRateLimited
+} from "@server/lib/rebuildClientAssociations";
 
 const removeClientFromSiteResourceBodySchema = z
     .object({
@@ -106,6 +109,14 @@ export async function removeClientFromSiteResource(
             );
         }
 
+        if (await isOrgRebuildRateLimited(siteResource.orgId)) {
+            return next(
+                createHttpError(
+                    HttpCode.TOO_MANY_REQUESTS,
+                    "Too many concurrent rebuild operations for this organization. Please retry after a moment."
+                )
+            );
+        }
         // Check if client exists and has a userId
         const [client] = await db
             .select()
@@ -148,17 +159,19 @@ export async function removeClientFromSiteResource(
             );
         }
 
-        await db.transaction(async (trx) => {
-            await trx
-                .delete(clientSiteResources)
-                .where(
-                    and(
-                        eq(clientSiteResources.siteResourceId, siteResourceId),
-                        eq(clientSiteResources.clientId, clientId)
-                    )
-                );
+        await db
+            .delete(clientSiteResources)
+            .where(
+                and(
+                    eq(clientSiteResources.siteResourceId, siteResourceId),
+                    eq(clientSiteResources.clientId, clientId)
+                )
+            );
 
-            await rebuildClientAssociationsFromSiteResource(siteResource, trx);
+        rebuildClientAssociationsFromSiteResource(siteResource).catch((e) => {
+            logger.error(
+                `Failed to rebuild client associations for site resource ${siteResourceId}. Error: ${e}`
+            );
         });
 
         return response(res, {

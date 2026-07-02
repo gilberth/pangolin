@@ -21,7 +21,10 @@ import {
 } from "@server/lib/ip";
 import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
 import { TierFeature, tierMatrix } from "@server/lib/billing/tierMatrix";
-import { rebuildClientAssociationsFromSiteResource } from "@server/lib/rebuildClientAssociations";
+import {
+    rebuildClientAssociationsFromSiteResource,
+    isOrgRebuildRateLimited
+} from "@server/lib/rebuildClientAssociations";
 import response from "@server/lib/response";
 import logger from "@server/logger";
 import { OpenAPITags, registry } from "@server/openApi";
@@ -34,6 +37,8 @@ import { fromError } from "zod-validation-error";
 import { validateAndConstructDomain } from "@server/lib/domainUtils";
 import { createCertificate } from "#dynamic/routers/certificates/createCertificate";
 import { build } from "@server/build";
+import { usageService } from "@server/lib/billing/usageService";
+import { LimitId } from "@server/lib/billing";
 
 const createSiteResourceParamsSchema = z.strictObject({
     orgId: z.string()
@@ -291,6 +296,38 @@ export async function createSiteResource(
             siteIds.push(siteId);
         }
 
+        if (build == "saas") {
+            const usage = await usageService.getUsage(
+                orgId,
+                LimitId.PRIVATE_RESOURCES
+            );
+            if (!usage) {
+                return next(
+                    createHttpError(
+                        HttpCode.NOT_FOUND,
+                        "No usage data found for this organization"
+                    )
+                );
+            }
+            const rejectResource = await usageService.checkLimitSet(
+                orgId,
+
+                LimitId.PRIVATE_RESOURCES,
+                {
+                    ...usage,
+                    instantaneousValue: (usage.instantaneousValue || 0) + 1
+                } // We need to add one to know if we are violating the limit
+            );
+            if (rejectResource) {
+                return next(
+                    createHttpError(
+                        HttpCode.FORBIDDEN,
+                        "Private resource limit exceeded. Please upgrade your plan."
+                    )
+                );
+            }
+        }
+
         if (mode == "http") {
             const hasHttpFeature = await isLicensedOrSubscribed(
                 orgId,
@@ -335,6 +372,15 @@ export async function createSiteResource(
                 createHttpError(
                     HttpCode.BAD_REQUEST,
                     `Organization with ID ${orgId} has no subnet or utilitySubnet defined defined`
+                )
+            );
+        }
+
+        if (await isOrgRebuildRateLimited(org.orgId)) {
+            return next(
+                createHttpError(
+                    HttpCode.TOO_MANY_REQUESTS,
+                    "Too many concurrent rebuild operations for this organization. Please retry after a moment."
                 )
             );
         }
@@ -593,6 +639,13 @@ export async function createSiteResource(
                         );
                     }
                 }
+
+                await usageService.add(
+                    orgId,
+                    LimitId.PRIVATE_RESOURCES,
+                    1,
+                    trx
+                );
             });
         } finally {
             await releaseAliasLock?.();
@@ -625,15 +678,14 @@ export async function createSiteResource(
         // own transaction so it always executes on the primary — avoiding any
         // replica-lag issues while still allowing the HTTP response to return
         // early.
-        rebuildClientAssociationsFromSiteResource(
-            newSiteResource!,
-            primaryDb
-        ).catch((err) => {
-            logger.error(
-                `Error rebuilding client associations for site resource ${newSiteResource!.siteResourceId}:`,
-                err
-            );
-        });
+        rebuildClientAssociationsFromSiteResource(newSiteResource!).catch(
+            (err) => {
+                logger.error(
+                    `Error rebuilding client associations for site resource ${newSiteResource!.siteResourceId}:`,
+                    err
+                );
+            }
+        );
 
         return response(res, {
             data: newSiteResource,

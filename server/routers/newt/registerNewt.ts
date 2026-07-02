@@ -25,7 +25,7 @@ import { getUniqueSiteName } from "@server/db/names";
 import moment from "moment";
 import { build } from "@server/build";
 import { usageService } from "@server/lib/billing/usageService";
-import { FeatureId } from "@server/lib/billing";
+import { LimitId } from "@server/lib/billing";
 import { INSPECT_MAX_BYTES } from "buffer";
 import { getNextAvailableClientSubnet } from "@server/lib/ip";
 
@@ -169,7 +169,7 @@ export async function registerNewt(
 
         // SaaS billing check
         if (build == "saas") {
-            const usage = await usageService.getUsage(orgId, FeatureId.SITES);
+            const usage = await usageService.getUsage(orgId, LimitId.SITES);
             if (!usage) {
                 return next(
                     createHttpError(
@@ -180,7 +180,7 @@ export async function registerNewt(
             }
             const rejectSites = await usageService.checkLimitSet(
                 orgId,
-                FeatureId.SITES,
+                LimitId.SITES,
                 {
                     ...usage,
                     instantaneousValue: (usage.instantaneousValue || 0) + 1
@@ -274,7 +274,7 @@ export async function registerNewt(
                         )
                     );
 
-                await usageService.add(orgId, FeatureId.SITES, 1, trx);
+                await usageService.add(orgId, LimitId.SITES, 1, trx);
             });
         } finally {
             await releaseSubnetLock();

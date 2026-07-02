@@ -42,6 +42,8 @@ import {
     loadEncryptedLocalStorage,
     saveEncryptedLocalStorage
 } from "@app/lib/secureLocalStorage";
+import { createApiClient } from "@app/lib/api";
+import { useEnvContext } from "@app/hooks/useEnvContext";
 
 declare module "react" {
     namespace JSX {
@@ -96,6 +98,7 @@ export default function RdpClient({
     primaryColor?: string | null;
 }) {
     const t = useTranslations();
+    const api = createApiClient(useEnvContext());
     const STORAGE_KEY = "pangolin_rdp_credentials";
     const resourceName = target?.name?.trim() || null;
 
@@ -311,6 +314,11 @@ export default function RdpClient({
                 values,
                 target.authToken
             );
+            void api.post(`/org/${target.orgId}/logs/access/attempt`, {
+                resourceId: target.resourceId,
+                action: true,
+                type: "rdp"
+            });
             setConnecting(false);
             setShowLogin(false);
             userInteraction.setVisibility(true);
@@ -320,6 +328,11 @@ export default function RdpClient({
             fileTransferRef.current = null;
             setShowLogin(true);
         } catch (err) {
+            void api.post(`/org/${target.orgId}/logs/access/attempt`, {
+                resourceId: target.resourceId,
+                action: false,
+                type: "rdp"
+            });
             setConnecting(false);
             setShowLogin(true);
             if (isIronError(err)) {

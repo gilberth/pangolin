@@ -38,6 +38,21 @@ export type LabelsSelectorProps = {
     toggleLabel: (newlabel: SelectedLabel, action: "detach" | "attach") => void;
 };
 
+export function formatLabelsSelectorLabel(
+    selectedLabels: SelectedLabel[],
+    t: (key: string, values?: { count: number }) => string
+): string {
+    if (selectedLabels.length === 0) {
+        return t("selectLabels");
+    }
+    if (selectedLabels.length === 1) {
+        return selectedLabels[0]!.name;
+    }
+    return t("labelsSelectorLabelsCount", {
+        count: selectedLabels.length
+    });
+}
+
 export const LABEL_COLORS = {
     red: "#ff6467",
     green: "#05df72",

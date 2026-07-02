@@ -24,6 +24,7 @@ import license from "#dynamic/license/license";
 import { initLogCleanupInterval } from "@server/lib/cleanupLogs";
 import { initAcmeCertSync } from "#dynamic/lib/acmeCertSync";
 import { fetchServerIp } from "@server/lib/serverIpService";
+import { startRebuildQueueProcessor } from "@server/lib/rebuildClientAssociations";
 
 async function startServers() {
     await setHostMeta();
@@ -41,6 +42,7 @@ async function startServers() {
 
     initLogCleanupInterval();
     initAcmeCertSync();
+    startRebuildQueueProcessor();
 
     // Start all servers
     const apiServer = createApiServer();

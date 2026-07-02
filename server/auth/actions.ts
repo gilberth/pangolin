@@ -21,6 +21,7 @@ export enum ActionsEnum {
     getSite = "getSite",
     listSites = "listSites",
     updateSite = "updateSite",
+    restartSite = "restartSite",
     resetSiteBandwidth = "resetSiteBandwidth",
     reGenerateSecret = "reGenerateSecret",
     createResource = "createResource",
@@ -178,7 +179,8 @@ export enum ActionsEnum {
     setResourcePolicyPincode = "setResourcePolicyPincode",
     setResourcePolicyHeaderAuth = "setResourcePolicyHeaderAuth",
     setResourcePolicyWhitelist = "setResourcePolicyWhitelist",
-    setResourcePolicyRules = "setResourcePolicyRules"
+    setResourcePolicyRules = "setResourcePolicyRules",
+    createOrgWideLauncherView = "createOrgWideLauncherView"
 }
 
 export async function checkUserActionPermission(

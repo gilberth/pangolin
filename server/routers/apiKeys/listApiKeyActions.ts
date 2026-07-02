@@ -15,7 +15,7 @@ const paramsSchema = z.object({
     apiKeyId: z.string().nonempty()
 });
 
-const querySchema = z.object({
+const querySchema = z.strictObject({
     limit: z
         .string()
         .optional()

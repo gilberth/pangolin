@@ -41,6 +41,13 @@ import { useParams } from "next/navigation";
 import { FaApple, FaWindows, FaLinux } from "react-icons/fa";
 import { SiAndroid } from "react-icons/si";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
+import {
+    productUpdatesQueries,
+    type LatestVersionResponse
+} from "@app/lib/queries";
+import { useQuery } from "@tanstack/react-query";
+import semver from "semver";
+import { InfoPopup } from "@app/components/ui/info-popup";
 
 function formatTimestamp(timestamp: number | null | undefined): string {
     if (!timestamp) return "-";
@@ -166,6 +173,34 @@ export default function GeneralPage() {
     }>(null);
     const [isCheckingCache, setIsCheckingCache] = useState(false);
     const [isRebuildingCache, setIsRebuildingCache] = useState(false);
+    const data = useQuery(productUpdatesQueries.latestVersion(true));
+    const latestPlatformVersions = data.data?.data;
+
+    const agentVersionMap: Record<string, string> = {
+        "Pangolin Windows": "windows",
+        "Pangolin Android": "android",
+        "Pangolin iOS": "ios",
+        "Pangolin iPadOS": "ios",
+        "Pangolin macOS": "mac",
+        "Pangolin CLI": "cli",
+        "Olm CLI": "olm"
+    };
+
+    let updateAvailable = false;
+    if (client.agent && client.olmVersion && latestPlatformVersions) {
+        const agent = agentVersionMap[
+            client.agent
+        ] as keyof LatestVersionResponse;
+
+        if (agent in latestPlatformVersions) {
+            const agentVersion = latestPlatformVersions[agent];
+
+            updateAvailable = semver.lt(
+                client.olmVersion,
+                agentVersion.latestVersion
+            );
+        }
+    }
 
     // get "imp" from local storage to determine if we should show the verify button (imp = "1" means show)
     const showVerifyButton =
@@ -451,11 +486,21 @@ export default function GeneralPage() {
                                         {t("agent")}
                                     </InfoSectionTitle>
                                     <InfoSectionContent>
-                                        <Badge variant="secondary">
-                                            {client.agent +
-                                                " v" +
-                                                client.olmVersion}
-                                        </Badge>
+                                        <div className="flex items-center">
+                                            <Badge variant="secondary">
+                                                {client.agent +
+                                                    " v" +
+                                                    client.olmVersion}
+                                            </Badge>
+
+                                            {updateAvailable && (
+                                                <InfoPopup
+                                                    info={t(
+                                                        "updateAvailableInfo"
+                                                    )}
+                                                />
+                                            )}
+                                        </div>
                                     </InfoSectionContent>
                                 </InfoSection>
                             </div>

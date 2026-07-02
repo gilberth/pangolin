@@ -20,7 +20,8 @@ import { handleFingerprintInsertion } from "./fingerprintingUtils";
 import { build } from "@server/build";
 import { canCompress } from "@server/lib/clientVersionChecks";
 import config from "@server/lib/config";
-import cache from "#dynamic/lib/cache";
+import cache from "#dynamic/lib/cache"; // not using regional here because we need this in the register message handler before we know where the client is
+import { waitForClientRebuildIdle } from "@server/lib/rebuildClientAssociations";
 
 const HOLEPUNCH_STALE_CHAIN_THRESHOLD = 18;
 const HOLEPUNCH_STALE_CHAIN_TTL_SECONDS = 1800;
@@ -196,15 +197,6 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
             policyCheck
         });
 
-        if (policyCheck?.error) {
-            logger.error(
-                `[handleOlmRegisterMessage] Error checking access policies for olm user ${olm.userId} in org ${orgId}: ${policyCheck?.error}`,
-                { orgId: client.orgId, clientId: client.clientId }
-            );
-            sendOlmError(OlmErrorCodes.ORG_ACCESS_POLICY_DENIED, olm.olmId);
-            return;
-        }
-
         if (policyCheck.policies?.passwordAge?.compliant === false) {
             logger.warn(
                 `[handleOlmRegisterMessage] Olm user ${olm.userId} has non-compliant password age for org ${orgId}`,
@@ -237,7 +229,7 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
                 olm.olmId
             );
             return;
-        } else if (!policyCheck.allowed) {
+        } else if (!policyCheck.allowed || policyCheck.error) {
             logger.warn(
                 `[handleOlmRegisterMessage] Olm user ${olm.userId} does not pass access policies for org ${orgId}: ${policyCheck.error}`,
                 { orgId: client.orgId, clientId: client.clientId }
@@ -348,7 +340,7 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
     // this prevents us from accepting a register from an olm that has not hole punched yet.
     // the olm will pump the register so we can keep checking
     // TODO: I still think there is a better way to do this rather than locking it out here but ???
-    if (now - (client.lastHolePunch || 0) > 5 && sitesCount > 0) {
+    if (now - (client.lastHolePunch || 0) > 12 && sitesCount > 0) {
         logger.warn(
             `[handleOlmRegisterMessage] Client last hole punch is too old and we have sites to send; skipping this register. The client is failing to hole punch and identify its network address with the server. Can the client reach the server on UDP port ${config.getRawConfig().gerbil.clients_start_port}?`,
             { orgId: client.orgId, clientId: client.clientId }
@@ -385,6 +377,8 @@ export const handleOlmRegisterMessage: MessageHandler = async (context) => {
     }
 
     // NOTE: its important that the client here is the old client and the public key is the new key
+    await waitForClientRebuildIdle(olm.clientId);
+
     const siteConfigurations = await buildSiteConfigurationForOlmClient(
         client,
         publicKey,

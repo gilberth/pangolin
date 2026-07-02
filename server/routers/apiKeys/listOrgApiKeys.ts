@@ -11,7 +11,7 @@ import { eq, and } from "drizzle-orm";
 import { OpenAPITags, registry } from "@server/openApi";
 import { createApiResponseSchema } from "@server/lib/openapi/createApiResponseSchema";
 
-const querySchema = z.object({
+const querySchema = z.strictObject({
     limit: z
         .string()
         .optional()

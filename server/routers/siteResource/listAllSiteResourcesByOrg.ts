@@ -26,7 +26,7 @@ const listAllSiteResourcesByOrgParamsSchema = z.strictObject({
     orgId: z.string()
 });
 
-const listAllSiteResourcesByOrgQuerySchema = z.object({
+const listAllSiteResourcesByOrgQuerySchema = z.strictObject({
     pageSize: z.coerce
         .number<string>() // for prettier formatting
         .int()

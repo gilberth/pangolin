@@ -66,7 +66,17 @@ export function MultiSelectTagInput<T extends TagValue>({
                                     )}
                                     onClick={(e) => e.stopPropagation()}
                                 >
-                                    <span>{option.text}</span>
+                                    {option.color && (
+                                        <span
+                                            className="size-2 rounded-full flex-none ml-1"
+                                            style={{
+                                                backgroundColor: option.color
+                                            }}
+                                        />
+                                    )}
+                                    <span className="max-w-40 text-ellipsis overflow-hidden">
+                                        {option.text}
+                                    </span>
                                     {isLocked ? (
                                         <span className="p-0.5 flex-none">
                                             <LockIcon className="size-3" />

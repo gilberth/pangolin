@@ -76,6 +76,15 @@ export async function setResourcePolicyHeaderAuth(
         const { resourcePolicyId } = parsedParams.data;
         const { headerAuth } = parsedBody.data;
 
+        const headerAuthHash =
+            headerAuth !== null
+                ? await hashPassword(
+                      Buffer.from(
+                          `${headerAuth.user}:${headerAuth.password}`
+                      ).toString("base64")
+                  )
+                : null;
+
         await db.transaction(async (trx) => {
             await trx
                 .delete(resourcePolicyHeaderAuth)
@@ -86,13 +95,7 @@ export async function setResourcePolicyHeaderAuth(
                     )
                 );
 
-            if (headerAuth !== null) {
-                const headerAuthHash = await hashPassword(
-                    Buffer.from(
-                        `${headerAuth.user}:${headerAuth.password}`
-                    ).toString("base64")
-                );
-
+            if (headerAuth !== null && headerAuthHash !== null) {
                 await trx.insert(resourcePolicyHeaderAuth).values({
                     resourcePolicyId,
                     headerAuthHash,
