@@ -20,6 +20,8 @@ export type MultiSitesSelectorProps = {
     onSelectionChange: (sites: Selectedsite[]) => void;
     filterTypes?: string[];
     scope?: "org" | "launcher";
+    onClear?: () => void;
+    showClear?: boolean;
 };
 
 export function formatMultiSitesSelectorLabel(
@@ -42,7 +44,9 @@ export function MultiSitesSelector({
     selectedSites,
     onSelectionChange,
     filterTypes,
-    scope = "org"
+    scope = "org",
+    onClear,
+    showClear = false
 }: MultiSitesSelectorProps) {
     const t = useTranslations();
     const [siteSearchQuery, setSiteSearchQuery] = useState("");
@@ -60,7 +64,7 @@ export function MultiSitesSelector({
         ...launcherQueries.sites({
             orgId,
             query: debouncedQuery,
-            perPage: 500
+            perPage: 20
         }),
         enabled: scope === "launcher"
     });
@@ -107,6 +111,14 @@ export function MultiSitesSelector({
             <CommandList>
                 <CommandEmpty>{t("siteNotFound")}</CommandEmpty>
                 <CommandGroup>
+                    {showClear && onClear && (
+                        <CommandItem
+                            onSelect={onClear}
+                            className="text-muted-foreground"
+                        >
+                            {t("accessFilterClear")}
+                        </CommandItem>
+                    )}
                     {sitesShown.map((site) => (
                         <CommandItem
                             key={site.siteId}

@@ -7,6 +7,7 @@ import { SettingsContainer } from "@app/components/Settings";
 import { useEnvContext } from "@app/hooks/useEnvContext";
 import { createApiClient } from "@app/lib/api";
 import { formatSiteResourceDestinationDisplay } from "@app/lib/formatSiteResourceAccess";
+import { getPrivateResourceSettingsHref } from "@app/lib/launcherResourceAdminHref";
 import type { ListAllSiteResourcesByOrgResponse } from "@server/routers/siteResource";
 import type { ListResourcesResponse } from "@server/routers/resource";
 import type ResponseT from "@server/types/Response";
@@ -432,19 +433,13 @@ export default function SiteResourcesOverview({
         editHref: `/${orgId}/settings/resources/public/${r.niceId}`
     }));
 
-    const privateRows = privateList.map((row) => {
-        const qs = new URLSearchParams({
-            siteId: String(siteId),
-            query: row.niceId
-        });
-        return {
-            key: row.siteResourceId,
-            meta: <PrivateResourceMeta row={row} />,
-            name: row.name,
-            access: <PrivateAccessMethod row={row} />,
-            editHref: `/${orgId}/settings/resources/private?${qs.toString()}`
-        };
-    });
+    const privateRows = privateList.map((row) => ({
+        key: row.siteResourceId,
+        meta: <PrivateResourceMeta row={row} />,
+        name: row.name,
+        access: <PrivateAccessMethod row={row} />,
+        editHref: getPrivateResourceSettingsHref(orgId, row.niceId)
+    }));
 
     if (showEmptyPlaceholder) {
         return (

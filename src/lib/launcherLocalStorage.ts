@@ -10,7 +10,7 @@ function lastViewKey(orgId: string) {
 function groupOpenKey(
     orgId: string,
     viewId: LauncherActiveViewId,
-    groupBy: "site" | "label"
+    groupBy: "site" | "label" | "none"
 ) {
     return `${GROUP_OPEN_PREFIX}${orgId}:${viewId}:${groupBy}`;
 }
@@ -64,7 +64,7 @@ export function writeLauncherLastView(
 export function readLauncherGroupOpenState(
     orgId: string,
     viewId: LauncherActiveViewId,
-    groupBy: "site" | "label"
+    groupBy: "site" | "label" | "none"
 ): Record<string, boolean> {
     return readJson<Record<string, boolean>>(
         groupOpenKey(orgId, viewId, groupBy),
@@ -75,7 +75,7 @@ export function readLauncherGroupOpenState(
 export function readLauncherGroupOpen(
     orgId: string,
     viewId: LauncherActiveViewId,
-    groupBy: "site" | "label",
+    groupBy: "site" | "label" | "none",
     groupKey: string,
     defaultOpen: boolean
 ): boolean {
@@ -86,7 +86,7 @@ export function readLauncherGroupOpen(
 export function writeLauncherGroupOpen(
     orgId: string,
     viewId: LauncherActiveViewId,
-    groupBy: "site" | "label",
+    groupBy: "site" | "label" | "none",
     groupKey: string,
     isOpen: boolean
 ) {

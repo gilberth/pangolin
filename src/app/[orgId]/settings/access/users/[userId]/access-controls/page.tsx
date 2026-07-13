@@ -111,7 +111,7 @@ export default function AccessControlsPage() {
         if (values.roles.length === 0) {
             toast({
                 variant: "destructive",
-                title: t("accessRoleErrorAdd"),
+                title: t("accessRoleRequired"),
                 description: t("accessRoleSelectPlease")
             });
             return;
@@ -173,15 +173,13 @@ export default function AccessControlsPage() {
         if (values.roles.length === 0) {
             toast({
                 variant: "destructive",
-                title: t("accessRoleErrorAdd"),
+                title: t("accessRoleRequired"),
                 description: t("accessRoleSelectPlease")
             });
             return;
         }
 
-        const willHaveAdminRole = values.roles.some(
-            (r) => r.isAdmin === true
-        );
+        const willHaveAdminRole = values.roles.some((r) => r.isAdmin === true);
 
         const isRemovingOwnAdmin =
             sessionUser.userId === user.userId &&
@@ -226,7 +224,9 @@ export default function AccessControlsPage() {
                     <SettingsSectionForm>
                         <Form {...form}>
                             <form
-                                onSubmit={(e) => void handleAccessControlsSubmit(e)}
+                                onSubmit={(e) =>
+                                    void handleAccessControlsSubmit(e)
+                                }
                                 className="space-y-4"
                                 id="access-controls-form"
                             >

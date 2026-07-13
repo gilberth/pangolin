@@ -54,7 +54,7 @@ const updateSiteResourceSchema = z
         ssl: z.boolean().optional(),
         scheme: z.enum(["http", "https"]).nullish(),
         destinationPort: z.int().positive().nullish(),
-        destination: z.string().min(1).optional(),
+        destination: z.string().min(1).nullish(),
         enabled: z.boolean().optional(),
         alias: z
             .string()
@@ -68,9 +68,9 @@ const updateSiteResourceSchema = z
                     "Fully qualified domain name with optional wildcards, e.g., example.internal, *.example.internal, or host-0?.example.internal",
                 example: "service.example.internal"
             }),
-        userIds: z.array(z.string()),
-        roleIds: z.array(z.int()),
-        clientIds: z.array(z.int()),
+        userIds: z.array(z.string()).optional(),
+        roleIds: z.array(z.int()).optional(),
+        clientIds: z.array(z.int()).optional(),
         tcpPortRangeString: portRangeStringSchema,
         udpPortRangeString: portRangeStringSchema,
         disableIcmp: z.boolean().optional(),
@@ -157,7 +157,8 @@ const updateSiteResourceSchema = z
                 return true;
             }
             return (
-                data.destination !== undefined && data.destination.trim() !== ""
+                data.destination !== undefined &&
+                data.destination?.trim() !== ""
             );
         },
         {
@@ -167,6 +168,10 @@ const updateSiteResourceSchema = z
     )
     .refine(
         (data) => {
+            // if neither is provided, the existing site associations are left unchanged
+            if (data.siteIds === undefined && data.siteId === undefined) {
+                return true;
+            }
             return (
                 (data.siteIds !== undefined && data.siteIds.length > 0) ||
                 data.siteId !== undefined
@@ -263,7 +268,7 @@ export async function updateSiteResource(
         const { siteResourceId } = parsedParams.data;
         const {
             name,
-            siteIds: siteIdsInput = [], // because it can change
+            siteIds: siteIdsInput,
             siteId,
             niceId,
             mode,
@@ -287,9 +292,14 @@ export async function updateSiteResource(
         } = parsedBody.data;
 
         // Backward compatibility: merge deprecated siteId into siteIds array
-        const siteIds = [...siteIdsInput];
-        if (siteId !== undefined && !siteIds.includes(siteId)) {
-            siteIds.push(siteId);
+        const siteIdsProvided =
+            siteIdsInput !== undefined || siteId !== undefined;
+        let siteIds: number[] | undefined;
+        if (siteIdsProvided) {
+            siteIds = [...(siteIdsInput ?? [])];
+            if (siteId !== undefined && !siteIds.includes(siteId)) {
+                siteIds.push(siteId);
+            }
         }
 
         // Check if site resource exists
@@ -356,20 +366,22 @@ export async function updateSiteResource(
         }
 
         // Verify the site exists and belongs to the org
-        const sitesToAssign = await db
-            .select()
-            .from(sites)
-            .where(
-                and(
-                    inArray(sites.siteId, siteIds),
-                    eq(sites.orgId, existingSiteResource.orgId)
-                )
-            );
+        if (siteIds !== undefined) {
+            const sitesToAssign = await db
+                .select()
+                .from(sites)
+                .where(
+                    and(
+                        inArray(sites.siteId, siteIds),
+                        eq(sites.orgId, existingSiteResource.orgId)
+                    )
+                );
 
-        if (sitesToAssign.length !== siteIds.length) {
-            return next(
-                createHttpError(HttpCode.NOT_FOUND, "Some site not found")
-            );
+            if (sitesToAssign.length !== siteIds.length) {
+                return next(
+                    createHttpError(HttpCode.NOT_FOUND, "Some site not found")
+                );
+            }
         }
 
         // Only check if destination is an IP address
@@ -463,7 +475,8 @@ export async function updateSiteResource(
         }
 
         let updatedSiteResource: SiteResource | undefined;
-        let updatedSiteIds: number[] = [];
+        // defaults to the existing sites; only overwritten below if siteIds/siteId was provided
+        let updatedSiteIds: number[] = [...existingSiteIds];
         await db.transaction(async (trx) => {
             // Update the site resource
             const sshPamSet =
@@ -522,81 +535,100 @@ export async function updateSiteResource(
 
             //////////////////// update the associations ////////////////////
 
-            // delete the site - site resources associations
-            await trx
-                .delete(siteNetworks)
-                .where(
-                    eq(siteNetworks.networkId, updatedSiteResource.networkId!)
-                );
-
-            for (const siteId of siteIds) {
-                await trx.insert(siteNetworks).values({
-                    siteId: siteId,
-                    networkId: updatedSiteResource.networkId!
-                });
-                updatedSiteIds.push(siteId);
-            }
-
-            await trx
-                .delete(clientSiteResources)
-                .where(eq(clientSiteResources.siteResourceId, siteResourceId));
-
-            if (clientIds.length > 0) {
-                await trx.insert(clientSiteResources).values(
-                    clientIds.map((clientId) => ({
-                        clientId,
-                        siteResourceId
-                    }))
-                );
-            }
-
-            await trx
-                .delete(userSiteResources)
-                .where(eq(userSiteResources.siteResourceId, siteResourceId));
-
-            if (userIds.length > 0) {
-                await trx.insert(userSiteResources).values(
-                    userIds.map((userId) => ({
-                        userId,
-                        siteResourceId
-                    }))
-                );
-            }
-
-            // Get all admin role IDs for this org to exclude from deletion
-            const adminRoles = await trx
-                .select()
-                .from(roles)
-                .where(
-                    and(
-                        eq(roles.isAdmin, true),
-                        eq(roles.orgId, updatedSiteResource.orgId)
-                    )
-                );
-            const adminRoleIds = adminRoles.map((role) => role.roleId);
-
-            if (adminRoleIds.length > 0) {
-                await trx.delete(roleSiteResources).where(
-                    and(
-                        eq(roleSiteResources.siteResourceId, siteResourceId),
-                        ne(roleSiteResources.roleId, adminRoleIds[0]) // delete all but the admin role
-                    )
-                );
-            } else {
+            if (siteIds !== undefined) {
+                // delete the site - site resources associations
                 await trx
-                    .delete(roleSiteResources)
+                    .delete(siteNetworks)
                     .where(
-                        eq(roleSiteResources.siteResourceId, siteResourceId)
+                        eq(
+                            siteNetworks.networkId,
+                            updatedSiteResource.networkId!
+                        )
                     );
+
+                updatedSiteIds = [];
+                for (const siteId of siteIds) {
+                    await trx.insert(siteNetworks).values({
+                        siteId: siteId,
+                        networkId: updatedSiteResource.networkId!
+                    });
+                    updatedSiteIds.push(siteId);
+                }
             }
 
-            if (roleIds.length > 0) {
-                await trx.insert(roleSiteResources).values(
-                    roleIds.map((roleId) => ({
-                        roleId,
-                        siteResourceId
-                    }))
-                );
+            if (clientIds !== undefined) {
+                await trx
+                    .delete(clientSiteResources)
+                    .where(
+                        eq(clientSiteResources.siteResourceId, siteResourceId)
+                    );
+
+                if (clientIds.length > 0) {
+                    await trx.insert(clientSiteResources).values(
+                        clientIds.map((clientId) => ({
+                            clientId,
+                            siteResourceId
+                        }))
+                    );
+                }
+            }
+
+            if (userIds !== undefined) {
+                await trx
+                    .delete(userSiteResources)
+                    .where(
+                        eq(userSiteResources.siteResourceId, siteResourceId)
+                    );
+
+                if (userIds.length > 0) {
+                    await trx.insert(userSiteResources).values(
+                        userIds.map((userId) => ({
+                            userId,
+                            siteResourceId
+                        }))
+                    );
+                }
+            }
+
+            if (roleIds !== undefined) {
+                // Get all admin role IDs for this org to exclude from deletion
+                const adminRoles = await trx
+                    .select()
+                    .from(roles)
+                    .where(
+                        and(
+                            eq(roles.isAdmin, true),
+                            eq(roles.orgId, updatedSiteResource.orgId)
+                        )
+                    );
+                const adminRoleIds = adminRoles.map((role) => role.roleId);
+
+                if (adminRoleIds.length > 0) {
+                    await trx.delete(roleSiteResources).where(
+                        and(
+                            eq(
+                                roleSiteResources.siteResourceId,
+                                siteResourceId
+                            ),
+                            ne(roleSiteResources.roleId, adminRoleIds[0]) // delete all but the admin role
+                        )
+                    );
+                } else {
+                    await trx
+                        .delete(roleSiteResources)
+                        .where(
+                            eq(roleSiteResources.siteResourceId, siteResourceId)
+                        );
+                }
+
+                if (roleIds.length > 0) {
+                    await trx.insert(roleSiteResources).values(
+                        roleIds.map((roleId) => ({
+                            roleId,
+                            siteResourceId
+                        }))
+                    );
+                }
             }
 
             logger.info(`Updated site resource ${siteResourceId}`);

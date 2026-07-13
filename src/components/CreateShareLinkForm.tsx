@@ -90,7 +90,7 @@ export default function CreateShareLinkForm({
     const t = useTranslations();
 
     const { data: allResources = [] } = useQuery(
-        orgQueries.resources({ orgId: org?.org.orgId ?? "" })
+        orgQueries.proxyResources({ orgId: org?.org.orgId ?? "" })
     );
 
     const [selectedResource, setSelectedResource] =

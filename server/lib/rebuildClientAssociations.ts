@@ -45,6 +45,7 @@ import {
 } from "@server/routers/client/targets";
 import { lockManager } from "#dynamic/lib/lock";
 import { rebuildQueue } from "#dynamic/lib/rebuildQueue";
+import { withRetry, isTransientError } from "@server/lib/dbRetry";
 import {
     checkOrgRebuildRateLimit,
     decrementOrgRebuildCount,
@@ -285,10 +286,20 @@ export async function rebuildClientAssociationsFromSiteResource(
 ) {
     await incrementOrgRebuildCount(siteResource.orgId);
     try {
-        return await lockManager.withLock(
-            `rebuild-client-associations:site-resource:${siteResource.siteResourceId}`,
-            () => rebuildClientAssociationsFromSiteResourceImpl(siteResource),
-            REBUILD_ASSOCIATIONS_LOCK_TTL_MS
+        // The whole locked rebuild is idempotent (it diffs full expected vs.
+        // actual state each time), so on a transient DB error it's safe to
+        // retry the entire thing rather than just the failed query.
+        return await withRetry(
+            () =>
+                lockManager.withLock(
+                    `rebuild-client-associations:site-resource:${siteResource.siteResourceId}`,
+                    () =>
+                        rebuildClientAssociationsFromSiteResourceImpl(
+                            siteResource
+                        ),
+                    REBUILD_ASSOCIATIONS_LOCK_TTL_MS
+                ),
+            `rebuildClientAssociationsFromSiteResource:${siteResource.siteResourceId}`
         );
     } catch (err: any) {
         if (
@@ -297,6 +308,17 @@ export async function rebuildClientAssociationsFromSiteResource(
         ) {
             logger.warn(
                 `rebuildClientAssociations: could not acquire lock for site resource ${siteResource.siteResourceId}, queuing for deferred processing`
+            );
+            await rebuildQueue.enqueue({
+                type: "site-resource",
+                id: siteResource.siteResourceId
+            });
+            return { mergedAllClients: [] };
+        }
+        if (isTransientError(err)) {
+            logger.warn(
+                `rebuildClientAssociations: transient DB error rebuilding site resource ${siteResource.siteResourceId} persisted after retries, queuing for deferred processing:`,
+                err
             );
             await rebuildQueue.enqueue({
                 type: "site-resource",
@@ -463,6 +485,7 @@ async function rebuildClientAssociationsFromSiteResourceImpl(
         await trx
             .insert(clientSiteResourcesAssociationsCache)
             .values(clientSiteResourcesToInsert)
+            .onConflictDoNothing()
             .returning();
         logger.debug(
             `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteResourceId=${siteResource.siteResourceId} inserted clientSiteResource associations`
@@ -510,121 +533,148 @@ async function rebuildClientAssociationsFromSiteResourceImpl(
     for (const site of sitesToProcess) {
         const siteId = site.siteId;
 
-        logger.debug(
-            `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] processing siteId=${siteId} for siteResourceId=${siteResource.siteResourceId}`
-        );
+        try {
+            logger.debug(
+                `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] processing siteId=${siteId} for siteResourceId=${siteResource.siteResourceId}`
+            );
 
-        const existingClientSites = await trx
-            .select({
-                clientId: clientSitesAssociationsCache.clientId
-            })
-            .from(clientSitesAssociationsCache)
-            .where(eq(clientSitesAssociationsCache.siteId, siteId));
+            const existingClientSites = await trx
+                .select({
+                    clientId: clientSitesAssociationsCache.clientId
+                })
+                .from(clientSitesAssociationsCache)
+                .where(eq(clientSitesAssociationsCache.siteId, siteId));
 
-        const existingClientSiteIds = existingClientSites.map(
-            (row) => row.clientId
-        );
+            const existingClientSiteIds = existingClientSites.map(
+                (row) => row.clientId
+            );
 
-        logger.debug(
-            `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} existingClientSiteIds=[${existingClientSiteIds.join(", ")}]`
-        );
+            logger.debug(
+                `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} existingClientSiteIds=[${existingClientSiteIds.join(", ")}]`
+            );
 
-        // Get full client details for existing clients (needed for sending delete messages)
-        const existingClients =
-            existingClientSiteIds.length > 0
-                ? await trx
-                      .select({
-                          clientId: clients.clientId,
-                          pubKey: clients.pubKey,
-                          subnet: clients.subnet
-                      })
-                      .from(clients)
-                      .where(inArray(clients.clientId, existingClientSiteIds))
+            // Get full client details for existing clients (needed for sending delete messages)
+            const existingClients =
+                existingClientSiteIds.length > 0
+                    ? await trx
+                          .select({
+                              clientId: clients.clientId,
+                              pubKey: clients.pubKey,
+                              subnet: clients.subnet
+                          })
+                          .from(clients)
+                          .where(
+                              inArray(clients.clientId, existingClientSiteIds)
+                          )
+                    : [];
+
+            const otherResourceClientIds =
+                clientsFromOtherResourcesBySite.get(siteId) ??
+                new Set<number>();
+
+            logger.debug(
+                `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} otherResourceClientIds=[${[...otherResourceClientIds].join(", ")}] mergedAllClientIds=[${mergedAllClientIds.join(", ")}]`
+            );
+
+            // Expected clients from this resource are site-scoped: if this site is
+            // no longer attached to the resource, the expected set is empty.
+            const expectedClientIdsForSite = currentSiteIdSet.has(siteId)
+                ? mergedAllClientIds
                 : [];
 
-        const otherResourceClientIds =
-            clientsFromOtherResourcesBySite.get(siteId) ?? new Set<number>();
-
-        logger.debug(
-            `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} otherResourceClientIds=[${[...otherResourceClientIds].join(", ")}] mergedAllClientIds=[${mergedAllClientIds.join(", ")}]`
-        );
-
-        // Expected clients from this resource are site-scoped: if this site is
-        // no longer attached to the resource, the expected set is empty.
-        const expectedClientIdsForSite = currentSiteIdSet.has(siteId)
-            ? mergedAllClientIds
-            : [];
-
-        const clientSitesToAdd = expectedClientIdsForSite.filter(
-            (clientId) =>
-                !existingClientSiteIds.includes(clientId) &&
-                !otherResourceClientIds.has(clientId) // dont add if already connected via another site resource
-        );
-
-        const clientSitesToInsert = clientSitesToAdd.map((clientId) => ({
-            clientId,
-            siteId
-        }));
-
-        logger.debug(
-            `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} clientSites toAdd=[${clientSitesToAdd.join(", ")}]`
-        );
-
-        if (clientSitesToInsert.length > 0) {
-            logger.debug(
-                `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} inserting ${clientSitesToInsert.length} clientSite association(s)`
+            // Note: we deliberately do NOT exclude clients covered by another
+            // site resource here (unlike clientSitesToRemove below). Doing so
+            // previously caused a permanent gap: if resource A saw resource B's
+            // cache row and skipped adding (assuming B would maintain it), and
+            // B's own rebuild made the same assumption about A, the site-level
+            // row could end up never inserted by anyone even though both
+            // resources' client associations were otherwise correct.
+            // onConflictDoNothing makes a redundant insert harmless, so there's
+            // no correctness reason to skip here.
+            const clientSitesToAdd = expectedClientIdsForSite.filter(
+                (clientId) => !existingClientSiteIds.includes(clientId)
             );
-            await trx
-                .insert(clientSitesAssociationsCache)
-                .values(clientSitesToInsert)
-                .returning();
-            logger.debug(
-                `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} inserted clientSite associations`
-            );
-        } else {
-            logger.debug(
-                `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} no clientSite associations to insert`
-            );
-        }
 
-        // Now remove any client-site associations that should no longer exist
-        const clientSitesToRemove = existingClientSiteIds.filter(
-            (clientId) =>
-                !expectedClientIdsForSite.includes(clientId) &&
-                !otherResourceClientIds.has(clientId) // dont remove if there is still another connection for another site resource
-        );
+            const clientSitesToInsert = clientSitesToAdd.map((clientId) => ({
+                clientId,
+                siteId
+            }));
 
-        logger.debug(
-            `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} clientSites toRemove=[${clientSitesToRemove.join(", ")}]`
-        );
-
-        if (clientSitesToRemove.length > 0) {
             logger.debug(
-                `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} deleting ${clientSitesToRemove.length} clientSite association(s)`
+                `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} clientSites toAdd=[${clientSitesToAdd.join(", ")}]`
             );
-            await trx
-                .delete(clientSitesAssociationsCache)
-                .where(
-                    and(
-                        eq(clientSitesAssociationsCache.siteId, siteId),
-                        inArray(
-                            clientSitesAssociationsCache.clientId,
-                            clientSitesToRemove
-                        )
-                    )
+
+            if (clientSitesToInsert.length > 0) {
+                logger.debug(
+                    `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} inserting ${clientSitesToInsert.length} clientSite association(s)`
                 );
-        }
+                await trx
+                    .insert(clientSitesAssociationsCache)
+                    .values(clientSitesToInsert)
+                    .onConflictDoNothing()
+                    .returning();
+                logger.debug(
+                    `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} inserted clientSite associations`
+                );
+            } else {
+                logger.debug(
+                    `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} no clientSite associations to insert`
+                );
+            }
 
-        // Now handle the messages to add/remove peers on both the newt and olm sides
-        await handleMessagesForSiteClients(
-            site,
-            siteId,
-            mergedAllClients,
-            existingClients,
-            clientSitesToAdd,
-            clientSitesToRemove,
-            trx
-        );
+            // Now remove any client-site associations that should no longer exist
+            const clientSitesToRemove = existingClientSiteIds.filter(
+                (clientId) =>
+                    !expectedClientIdsForSite.includes(clientId) &&
+                    !otherResourceClientIds.has(clientId) // dont remove if there is still another connection for another site resource
+            );
+
+            logger.debug(
+                `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} clientSites toRemove=[${clientSitesToRemove.join(", ")}]`
+            );
+
+            if (clientSitesToRemove.length > 0) {
+                logger.debug(
+                    `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} deleting ${clientSitesToRemove.length} clientSite association(s)`
+                );
+                await trx
+                    .delete(clientSitesAssociationsCache)
+                    .where(
+                        and(
+                            eq(clientSitesAssociationsCache.siteId, siteId),
+                            inArray(
+                                clientSitesAssociationsCache.clientId,
+                                clientSitesToRemove
+                            )
+                        )
+                    );
+            }
+
+            // Now handle the messages to add/remove peers on both the newt and olm sides
+            await handleMessagesForSiteClients(
+                site,
+                siteId,
+                mergedAllClients,
+                existingClients,
+                clientSitesToAdd,
+                clientSitesToRemove,
+                trx
+            );
+        } catch (err) {
+            // Don't let a failure on one site abort processing of every
+            // other site queued after it in this run. Since we're not
+            // re-throwing, the outer wrapper's retry/requeue logic never
+            // sees this failure, so explicitly queue this resource for a
+            // follow-up pass to reconcile whatever this site didn't get to.
+            logger.error(
+                `rebuildClientAssociations: [rebuildClientAssociationsFromSiteResource] siteId=${siteId} failed while processing site for siteResourceId=${siteResource.siteResourceId}, continuing with remaining sites and queuing a follow-up pass:`,
+                err
+            );
+            await rebuildQueue.enqueue({
+                type: "site-resource",
+                id: siteResource.siteResourceId
+            });
+        }
     }
 
     // Handle subnet proxy target updates for the resource associations
@@ -657,7 +707,7 @@ async function handleMessagesForSiteClients(
     trx: Transaction | typeof db = db
 ): Promise<void> {
     if (!site.exitNodeId) {
-        logger.warn(
+        logger.debug(
             `Exit node ID not on site ${site.siteId} so there is no reason to update clients because it must be offline`
         );
         return;
@@ -671,14 +721,14 @@ async function handleMessagesForSiteClients(
         .limit(1);
 
     if (!exitNode) {
-        logger.warn(
+        logger.debug(
             `Exit node not found for site ${site.siteId} so there is no reason to update clients because it must be offline`
         );
         return;
     }
 
     if (!site.publicKey) {
-        logger.warn(
+        logger.debug(
             `Site publicKey not set for site ${site.siteId} so cannot add peers to clients`
         );
         return;
@@ -692,7 +742,7 @@ async function handleMessagesForSiteClients(
         .where(eq(newts.siteId, siteId))
         .limit(1);
     if (!newt) {
-        logger.warn(
+        logger.debug(
             `Newt not found for site ${siteId} so cannot add peers to clients`
         );
         return;
@@ -917,7 +967,7 @@ export async function updateClientSiteDestinations(
 
     for (const site of sitesData) {
         if (!site.sites.subnet) {
-            logger.warn(`Site ${site.sites.siteId} has no subnet, skipping`);
+            logger.debug(`Site ${site.sites.siteId} has no subnet, skipping`);
             continue;
         }
 
@@ -1656,10 +1706,17 @@ export async function rebuildClientAssociationsFromClient(
     await incrementOrgRebuildCount(client.orgId);
     try {
         const trx = primaryDb;
-        return await lockManager.withLock(
-            `rebuild-client-associations:client:${client.clientId}`,
-            () => rebuildClientAssociationsFromClientImpl(client, trx),
-            REBUILD_ASSOCIATIONS_LOCK_TTL_MS
+        // The whole locked rebuild is idempotent (it diffs full expected vs.
+        // actual state each time), so on a transient DB error it's safe to
+        // retry the entire thing rather than just the failed query.
+        return await withRetry(
+            () =>
+                lockManager.withLock(
+                    `rebuild-client-associations:client:${client.clientId}`,
+                    () => rebuildClientAssociationsFromClientImpl(client, trx),
+                    REBUILD_ASSOCIATIONS_LOCK_TTL_MS
+                ),
+            `rebuildClientAssociationsFromClient:${client.clientId}`
         );
     } catch (err: any) {
         if (
@@ -1668,6 +1725,17 @@ export async function rebuildClientAssociationsFromClient(
         ) {
             logger.warn(
                 `rebuildClientAssociations: could not acquire lock for client ${client.clientId}, queuing for deferred processing`
+            );
+            await rebuildQueue.enqueue({
+                type: "client",
+                id: client.clientId
+            });
+            return;
+        }
+        if (isTransientError(err)) {
+            logger.warn(
+                `rebuildClientAssociations: transient DB error rebuilding client ${client.clientId} persisted after retries, queuing for deferred processing:`,
+                err
             );
             await rebuildQueue.enqueue({
                 type: "client",
@@ -1826,12 +1894,15 @@ async function rebuildClientAssociationsFromClientImpl(
 
     // Insert new associations
     if (resourcesToAdd.length > 0) {
-        await trx.insert(clientSiteResourcesAssociationsCache).values(
-            resourcesToAdd.map((siteResourceId) => ({
-                clientId: client.clientId,
-                siteResourceId
-            }))
-        );
+        await trx
+            .insert(clientSiteResourcesAssociationsCache)
+            .values(
+                resourcesToAdd.map((siteResourceId) => ({
+                    clientId: client.clientId,
+                    siteResourceId
+                }))
+            )
+            .onConflictDoNothing();
     }
 
     // Remove old associations
@@ -1869,12 +1940,15 @@ async function rebuildClientAssociationsFromClientImpl(
 
     // Insert new site associations
     if (sitesToAdd.length > 0) {
-        await trx.insert(clientSitesAssociationsCache).values(
-            sitesToAdd.map((siteId) => ({
-                clientId: client.clientId,
-                siteId
-            }))
-        );
+        await trx
+            .insert(clientSitesAssociationsCache)
+            .values(
+                sitesToAdd.map((siteId) => ({
+                    clientId: client.clientId,
+                    siteId
+                }))
+            )
+            .onConflictDoNothing();
     }
 
     // Remove old site associations

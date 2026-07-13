@@ -1,27 +1,27 @@
 "use client";
 
-import React, { useState } from "react";
-import { SidebarNav } from "@app/components/SidebarNav";
-import { OrgSelector } from "@app/components/OrgSelector";
-import { cn } from "@app/lib/cn";
-import { ListUserOrgsResponse } from "@server/routers/org";
-import { Button } from "@app/components/ui/button";
-import { Menu, Server, Settings, SquareMousePointer } from "lucide-react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { useUserContext } from "@app/hooks/useUserContext";
-import { useTranslations } from "next-intl";
-import ProfileIcon from "@app/components/ProfileIcon";
-import ThemeSwitcher from "@app/components/ThemeSwitcher";
 import type { SidebarNavSection } from "@app/app/navigation";
+import { CommandPaletteTrigger } from "@app/components/command-palette/CommandPaletteTrigger";
+import { OrgSelector } from "@app/components/OrgSelector";
+import ProfileIcon from "@app/components/ProfileIcon";
+import { SidebarNav } from "@app/components/SidebarNav";
+import ThemeSwitcher from "@app/components/ThemeSwitcher";
+import { Button } from "@app/components/ui/button";
 import {
     Sheet,
     SheetContent,
-    SheetTrigger,
+    SheetDescription,
     SheetTitle,
-    SheetDescription
+    SheetTrigger
 } from "@app/components/ui/sheet";
-import { Abel } from "next/font/google";
+import { useUserContext } from "@app/hooks/useUserContext";
+import { cn } from "@app/lib/cn";
+import { ListUserOrgsResponse } from "@server/routers/org";
+import { Menu, Server, Settings, LayoutGrid } from "lucide-react";
+import { useTranslations } from "next-intl";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { useState } from "react";
 
 interface LayoutMobileMenuProps {
     orgId?: string;
@@ -151,11 +151,11 @@ export function LayoutMobileMenu({
                                                                     }
                                                                 >
                                                                     <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center text-muted-foreground mr-3">
-                                                                        <SquareMousePointer className="h-4 w-4" />
+                                                                        <LayoutGrid className="h-4 w-4" />
                                                                     </span>
                                                                     <span className="flex-1">
                                                                         {t(
-                                                                            "resourceLauncherTitle"
+                                                                            "resourceSidebarLauncherTitle"
                                                                         )}
                                                                     </span>
                                                                 </Link>
@@ -207,6 +207,11 @@ export function LayoutMobileMenu({
                 {showTopBar && (
                     <div className="ml-auto flex items-center justify-end">
                         <div className="flex items-center space-x-2">
+                            <CommandPaletteTrigger
+                                variant="mobile"
+                                orgId={orgId}
+                                orgs={orgs}
+                            />
                             <ThemeSwitcher />
                             <ProfileIcon />
                         </div>

@@ -41,7 +41,7 @@ import {
 import { AxiosResponse } from "axios";
 import { useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -137,10 +137,20 @@ function ProxyResourceHttpForm({
     });
 
     const [, formAction, saveLoading] = useActionState(onSubmit, null);
+    const [headersValid, setHeadersValid] = useState(true);
 
     async function onSubmit() {
         const isValid = await form.trigger();
         if (!isValid) return;
+
+        if (!headersValid) {
+            toast({
+                variant: "destructive",
+                title: t("settingsErrorUpdate"),
+                description: t("headersValidationError")
+            });
+            return;
+        }
 
         const data = form.getValues();
 
@@ -318,6 +328,9 @@ function ProxyResourceHttpForm({
                                                         onChange={
                                                             field.onChange
                                                         }
+                                                        onValidityChange={
+                                                            setHeadersValid
+                                                        }
                                                         rows={4}
                                                     />
                                                 </FormControl>
@@ -341,7 +354,7 @@ function ProxyResourceHttpForm({
                 <Button
                     type="submit"
                     loading={saveLoading}
-                    disabled={saveLoading}
+                    disabled={saveLoading || !headersValid}
                     form="http-settings-form"
                 >
                     {t("saveSettings")}

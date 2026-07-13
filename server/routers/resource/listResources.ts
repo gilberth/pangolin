@@ -484,11 +484,6 @@ export async function listResources(
             );
         }
 
-        const isLabelFeatureEnabled = await isLicensedOrSubscribed(
-            orgId,
-            tierMatrix.labels
-        );
-
         let accessibleResources: Array<{ resourceId: number }>;
         if (req.user) {
             accessibleResources = await db
@@ -616,8 +611,8 @@ export async function listResources(
                         and(
                             inArray(resources.mode, browserGatewayModes),
                             or(
-                                eq(effectiveSso, true),
-                                eq(effectiveWhitelist, true),
+                                effectiveSso,
+                                effectiveWhitelist,
                                 not(isNull(effectiveHeaderAuthId)),
                                 not(isNull(effectivePincodeId)),
                                 not(isNull(effectivePasswordId))
@@ -629,8 +624,8 @@ export async function listResources(
                     conditions.push(
                         and(
                             inArray(resources.mode, browserGatewayModes),
-                            not(eq(effectiveSso, true)),
-                            not(eq(effectiveWhitelist, true)),
+                            not(effectiveSso),
+                            not(effectiveWhitelist),
                             isNull(effectiveHeaderAuthId),
                             isNull(effectivePincodeId),
                             isNull(effectivePasswordId)
@@ -676,7 +671,7 @@ export async function listResources(
             );
         }
 
-        if (isLabelFeatureEnabled && labelFilter && labelFilter.length > 0) {
+        if (labelFilter && labelFilter.length > 0) {
             conditions.push(
                 inArray(
                     resources.resourceId,
@@ -697,24 +692,19 @@ export async function listResources(
             const queryList = [
                 like(sql`LOWER(${resources.name})`, q),
                 like(sql`LOWER(${resources.niceId})`, q),
-                like(sql`LOWER(${resources.fullDomain})`, q)
+                like(sql`LOWER(${resources.fullDomain})`, q),
+                inArray(
+                    resources.resourceId,
+                    db
+                        .select({ id: resourceLabels.resourceId })
+                        .from(resourceLabels)
+                        .innerJoin(
+                            labels,
+                            eq(labels.labelId, resourceLabels.labelId)
+                        )
+                        .where(like(sql`LOWER(${labels.name})`, q))
+                )
             ];
-
-            if (isLabelFeatureEnabled) {
-                queryList.push(
-                    inArray(
-                        resources.resourceId,
-                        db
-                            .select({ id: resourceLabels.resourceId })
-                            .from(resourceLabels)
-                            .innerJoin(
-                                labels,
-                                eq(labels.labelId, resourceLabels.labelId)
-                            )
-                            .where(like(sql`LOWER(${labels.name})`, q))
-                    )
-                );
-            }
 
             conditions.push(or(...queryList));
         }
@@ -747,27 +737,23 @@ export async function listResources(
             resourceId: number;
         }> = [];
 
-        if (isLabelFeatureEnabled) {
-            labelsForResources =
-                resourceIdList.length === 0
-                    ? []
-                    : await db
-                          .select({
-                              labelId: labels.labelId,
-                              name: labels.name,
-                              color: labels.color,
-                              resourceId: resourceLabels.resourceId
-                          })
-                          .from(labels)
-                          .innerJoin(
-                              resourceLabels,
-                              eq(resourceLabels.labelId, labels.labelId)
-                          )
-                          .where(
-                              inArray(resourceLabels.resourceId, resourceIdList)
-                          )
-                          .orderBy(asc(resourceLabels.resourceLabelId));
-        }
+        labelsForResources =
+            resourceIdList.length === 0
+                ? []
+                : await db
+                      .select({
+                          labelId: labels.labelId,
+                          name: labels.name,
+                          color: labels.color,
+                          resourceId: resourceLabels.resourceId
+                      })
+                      .from(labels)
+                      .innerJoin(
+                          resourceLabels,
+                          eq(resourceLabels.labelId, labels.labelId)
+                      )
+                      .where(inArray(resourceLabels.resourceId, resourceIdList))
+                      .orderBy(asc(resourceLabels.resourceLabelId));
 
         const allResourceTargets =
             resourceIdList.length === 0

@@ -23,9 +23,8 @@ export function LauncherRefreshButton({
             className="shrink-0"
         >
             <RefreshCw
-                className={`mr-0 sm:mr-2 h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}
+                className={`size-4 ${isRefreshing ? "animate-spin" : ""}`}
             />
-            <span className="hidden sm:inline">{t("refresh")}</span>
         </Button>
     );
 }

@@ -2,7 +2,7 @@ import { APP_PATH } from "@server/lib/consts";
 import Database from "better-sqlite3";
 import path from "path";
 
-const version = "1.19.5";
+const version = "1.20.0";
 
 export default async function migration() {
     console.log(`Running setup script ${version}...`);
@@ -91,6 +91,64 @@ export default async function migration() {
             db.prepare(`DROP TABLE 'resourceSessions';`).run();
             db.prepare(
                 `ALTER TABLE 'resourceSessions_new' RENAME TO 'resourceSessions';`
+            ).run();
+
+            db.prepare(
+                `
+            CREATE TABLE 'remoteExitNodePreferenceLabels' (
+                'remoteExitNodePreferenceLabelId' integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+                'remoteExitNodeId' text NOT NULL,
+                'labelId' integer NOT NULL,
+                FOREIGN KEY ('remoteExitNodeId') REFERENCES 'remoteExitNode'('id') ON UPDATE no action ON DELETE cascade,
+                FOREIGN KEY ('labelId') REFERENCES 'labels'('labelId') ON UPDATE no action ON DELETE cascade
+            );
+                `
+            ).run();
+
+            db.prepare(
+                `
+            CREATE UNIQUE INDEX 'remote_exit_node_preference_label_uniq' ON 'remoteExitNodePreferenceLabels' ('remoteExitNodeId','labelId');
+                `
+            ).run();
+
+            db.prepare(
+                `
+            CREATE TABLE 'remoteExitNodeResources' (
+                'remoteExitNodeResourceId' integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+                'remoteExitNodeId' text NOT NULL,
+                'destination' text NOT NULL,
+                FOREIGN KEY ('remoteExitNodeId') REFERENCES 'remoteExitNode'('id') ON UPDATE no action ON DELETE cascade
+            );
+                `
+            ).run();
+
+            db.prepare(
+                `
+            CREATE TABLE 'launcherViews' (
+                'viewId' integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+                'orgId' text NOT NULL,
+                'userId' text,
+                'name' text NOT NULL,
+                'config' text NOT NULL,
+                'isDefault' integer DEFAULT false NOT NULL,
+                'createdAt' text NOT NULL,
+                'updatedAt' text NOT NULL,
+                FOREIGN KEY ('orgId') REFERENCES 'orgs'('orgId') ON UPDATE no action ON DELETE cascade,
+                FOREIGN KEY ('userId') REFERENCES 'user'('id') ON UPDATE no action ON DELETE cascade
+            );
+                `
+            ).run();
+
+            db.prepare(
+                `
+            ALTER TABLE 'domains' ADD 'customCertResolver' text;
+                `
+            ).run();
+
+            db.prepare(
+                `
+            ALTER TABLE 'domains' ADD 'lastCheckedAt' integer;
+                `
             ).run();
         })();
 

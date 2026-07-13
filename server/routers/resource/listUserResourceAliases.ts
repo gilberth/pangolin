@@ -248,11 +248,6 @@ export async function listUserResourceAliases(
             });
         }
 
-        const isLabelFeatureEnabled = await isLicensedOrSubscribed(
-            orgId,
-            tierMatrix.labels
-        );
-
         const whereConditions = [
             eq(siteResources.orgId, orgId),
             eq(siteResources.enabled, true),
@@ -262,7 +257,7 @@ export async function listUserResourceAliases(
             inArray(siteResources.siteResourceId, accessibleSiteResourceIds)
         ];
 
-        if (isLabelFeatureEnabled && labelFilter && labelFilter.length > 0) {
+        if (labelFilter && labelFilter.length > 0) {
             whereConditions.push(
                 inArray(
                     siteResources.siteResourceId,
@@ -310,7 +305,7 @@ export async function listUserResourceAliases(
                 siteResourceId: number;
             }> = [];
 
-            if (isLabelFeatureEnabled && siteResourceIdList.length > 0) {
+            if (siteResourceIdList.length > 0) {
                 labelsForSiteResources = await db
                     .select({
                         name: labels.name,

@@ -1099,6 +1099,7 @@
     "actionGenerateAccessToken": "生成訪問令牌",
     "actionDeleteAccessToken": "刪除訪問令牌",
     "actionListAccessTokens": "訪問令牌",
+    "actionCreateResourceSessionToken": "建立資源工作階段權杖",
     "actionCreateResourceRule": "創建資源規則",
     "actionDeleteResourceRule": "刪除資源規則",
     "actionListResourceRules": "列出資源規則",

@@ -1,16 +1,3 @@
-/*
- * This file is part of a proprietary work.
- *
- * Copyright (c) 2025-2026 Fossorial, Inc.
- * All rights reserved.
- *
- * This file is licensed under the Fossorial Commercial License.
- * You may not use this file except in compliance with the License.
- * Unauthorized use, copying, modification, or distribution is strictly prohibited.
- *
- * This file is not licensed under the AGPLv3.
- */
-
 import {
     clients,
     clientLabels,
@@ -37,14 +24,14 @@ const paramsSchema = z.strictObject({
     labelId: z.string().transform(Number).pipe(z.int().positive())
 });
 
-const detachLabelBodySchema = z.strictObject({
+const attachLabelBodySchema = z.strictObject({
     siteId: z.number().int().optional(),
     resourceId: z.number().int().optional(),
     siteResourceId: z.number().int().optional(),
     clientId: z.number().int().optional()
 });
 
-export async function detachLabelFromItem(
+export async function attachLabelToItem(
     req: Request,
     res: Response,
     next: NextFunction
@@ -62,7 +49,7 @@ export async function detachLabelFromItem(
 
         const { orgId, labelId } = parsedParams.data;
 
-        const parsedBody = detachLabelBodySchema.safeParse(req.body);
+        const parsedBody = attachLabelBodySchema.safeParse(req.body);
         if (!parsedBody.success) {
             return next(
                 createHttpError(
@@ -113,14 +100,14 @@ export async function detachLabelFromItem(
                 );
             }
 
+            // idempotent, calling this endpoint multiple times should attach the label only once
             await db
-                .delete(siteLabels)
-                .where(
-                    and(
-                        eq(siteLabels.labelId, labelId),
-                        eq(siteLabels.siteId, siteId)
-                    )
-                );
+                .insert(siteLabels)
+                .values({
+                    labelId,
+                    siteId
+                })
+                .onConflictDoNothing();
         }
 
         if (resourceId) {
@@ -141,14 +128,14 @@ export async function detachLabelFromItem(
                 );
             }
 
+            // idempotent, calling this endpoint multiple times should attach the label only once
             await db
-                .delete(resourceLabels)
-                .where(
-                    and(
-                        eq(resourceLabels.labelId, labelId),
-                        eq(resourceLabels.resourceId, resourceId)
-                    )
-                );
+                .insert(resourceLabels)
+                .values({
+                    labelId,
+                    resourceId
+                })
+                .onConflictDoNothing();
         }
 
         if (siteResourceId) {
@@ -169,14 +156,14 @@ export async function detachLabelFromItem(
                 );
             }
 
+            // idempotent, calling this endpoint multiple times should attach the label only once
             await db
-                .delete(siteResourceLabels)
-                .where(
-                    and(
-                        eq(siteResourceLabels.labelId, labelId),
-                        eq(siteResourceLabels.siteResourceId, siteResourceId)
-                    )
-                );
+                .insert(siteResourceLabels)
+                .values({
+                    labelId,
+                    siteResourceId
+                })
+                .onConflictDoNothing();
         }
 
         if (clientId) {
@@ -198,21 +185,21 @@ export async function detachLabelFromItem(
                 );
             }
 
+            // idempotent, calling this endpoint multiple times should attach the label only once
             await db
-                .delete(clientLabels)
-                .where(
-                    and(
-                        eq(clientLabels.labelId, labelId),
-                        eq(clientLabels.clientId, clientId)
-                    )
-                );
+                .insert(clientLabels)
+                .values({
+                    labelId,
+                    clientId
+                })
+                .onConflictDoNothing();
         }
 
         return response(res, {
             data: {},
             success: true,
             error: false,
-            message: "Label detached successfully",
+            message: "Label attached successfully",
             status: HttpCode.OK
         });
     } catch (error) {

@@ -4,22 +4,10 @@ import HttpCode from "@server/types/HttpCode";
 import { and, eq, isNull, or } from "drizzle-orm";
 import { NextFunction, Request, Response } from "express";
 import createHttpError from "http-errors";
-import { launcherViewConfigSchema, type LauncherViewRecord } from "./types";
-
-function mapViewRow(
-    row: typeof launcherViews.$inferSelect
-): LauncherViewRecord {
-    return {
-        viewId: row.viewId,
-        orgId: row.orgId,
-        userId: row.userId,
-        name: row.name,
-        config: launcherViewConfigSchema.parse(JSON.parse(row.config)),
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-        isOrgWide: row.userId == null
-    };
-}
+import {
+    extractDefaultViewOverrides,
+    listVisibleLauncherViews
+} from "./launcherDefaultView";
 
 export async function listLauncherViews(
     req: Request,
@@ -51,7 +39,8 @@ export async function listLauncherViews(
 
         return response(res, {
             data: {
-                views: rows.map(mapViewRow)
+                views: listVisibleLauncherViews(rows),
+                defaultViewOverrides: extractDefaultViewOverrides(rows)
             },
             success: true,
             error: false,

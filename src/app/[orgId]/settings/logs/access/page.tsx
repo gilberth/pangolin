@@ -15,6 +15,7 @@ import { ColumnFilterButton } from "@app/components/ColumnFilterButton";
 import SettingsSectionTitle from "@app/components/SettingsSectionTitle";
 import { build } from "@server/build";
 import { getSevenDaysAgo } from "@app/lib/getSevenDaysAgo";
+import { getPrivateResourceSettingsHref } from "@app/lib/launcherResourceAdminHref";
 import axios from "axios";
 import { useStoredPageSize } from "@app/hooks/useStoredPageSize";
 import { PaidFeaturesAlert } from "@app/components/PaidFeaturesAlert";
@@ -343,7 +344,10 @@ export default function GeneralPage() {
                     <Link
                         href={
                             row.original.siteResourceId != null
-                                ? `/${row.original.orgId}/settings/resources/private?query=${row.original.resourceNiceId}`
+                                ? getPrivateResourceSettingsHref(
+                                      row.original.orgId,
+                                      row.original.resourceNiceId
+                                  )
                                 : `/${row.original.orgId}/settings/resources/public/${row.original.resourceNiceId}`
                         }
                     >

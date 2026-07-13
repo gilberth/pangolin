@@ -166,11 +166,13 @@ export default async function ResourceAuthPage(props: {
 
     // If user is not compliant with org policies, show policy requirements
     if (orgPolicyCheck && !orgPolicyCheck.allowed && orgPolicyCheck.policies) {
+        const resourceAuthPageUrl = `/auth/resource/${authInfo.resourceGuid}${redirectUrl !== authInfo.url ? `?redirect=${encodeURIComponent(redirectUrl)}` : ""}`;
         return (
             <div className="w-full max-w-md">
                 <OrgPolicyRequired
                     orgId={authInfo.orgId}
                     policies={orgPolicyCheck.policies}
+                    redirectAfterAuth={resourceAuthPageUrl}
                 />
             </div>
         );

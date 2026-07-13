@@ -99,7 +99,7 @@ export async function applyJSONBlueprint(
                 source: "API"
             });
         } catch (error) {
-            logger.error(`Failed to update database from config: ${error}`);
+            logger.debug(`Failed to update database from config: ${error}`);
             return next(
                 createHttpError(
                     HttpCode.BAD_REQUEST,

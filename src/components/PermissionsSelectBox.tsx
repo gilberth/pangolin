@@ -77,7 +77,8 @@ function getActionsCategories(root: boolean) {
             [t("actionDeleteSiteResource")]: "deleteSiteResource",
             [t("actionGetSiteResource")]: "getSiteResource",
             [t("actionListSiteResources")]: "listSiteResources",
-            [t("actionUpdateSiteResource")]: "updateSiteResource"
+            [t("actionUpdateSiteResource")]: "updateSiteResource",
+            [t("actionCreateResourceSessionToken")]: "createResourceSessionToken"
         },
 
         Target: {
@@ -109,6 +110,20 @@ function getActionsCategories(root: boolean) {
             [t("actionDeleteResourceRule")]: "deleteResourceRule",
             [t("actionListResourceRules")]: "listResourceRules",
             [t("actionUpdateResourceRule")]: "updateResourceRule"
+        },
+
+        "Resource Policy": {
+            [t("actionGetResourcePolicy")]: "getResourcePolicy",
+            [t("actionUpdateResourcePolicy")]: "updateResourcePolicy",
+            [t("actionSetResourcePolicyUsers")]: "setResourcePolicyUsers",
+            [t("actionSetResourcePolicyRoles")]: "setResourcePolicyRoles",
+            [t("actionSetResourcePolicyPassword")]: "setResourcePolicyPassword",
+            [t("actionSetResourcePolicyPincode")]: "setResourcePolicyPincode",
+            [t("actionSetResourcePolicyHeaderAuth")]:
+                "setResourcePolicyHeaderAuth",
+            [t("actionSetResourcePolicyWhitelist")]:
+                "setResourcePolicyWhitelist",
+            [t("actionSetResourcePolicyRules")]: "setResourcePolicyRules"
         },
 
         Client: {

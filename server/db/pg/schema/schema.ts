@@ -232,6 +232,7 @@ export const launcherViews = pgTable("launcherViews", {
     }),
     name: varchar("name").notNull(),
     config: text("config").notNull(),
+    isDefault: boolean("isDefault").notNull().default(false),
     createdAt: varchar("createdAt").notNull(),
     updatedAt: varchar("updatedAt").notNull()
 });
@@ -998,7 +999,17 @@ export const resourceRules = pgTable("resourceRules", {
     enabled: boolean("enabled").notNull().default(true),
     priority: integer("priority").notNull(),
     action: varchar("action").notNull(), // ACCEPT, DROP, PASS
-    match: varchar("match").notNull(), // CIDR, PATH, IP
+    match: varchar("match")
+        .$type<
+            | "CIDR"
+            | "PATH"
+            | "IP"
+            | "COUNTRY"
+            | "COUNTRY_IS_NOT"
+            | "ASN"
+            | "REGION"
+        >()
+        .notNull(), // CIDR, PATH, IP
     value: varchar("value").notNull()
 });
 
@@ -1013,7 +1024,15 @@ export const resourcePolicyRules = pgTable("resourcePolicyRules", {
     priority: integer("priority").notNull(),
     action: varchar("action").$type<"ACCEPT" | "DROP" | "PASS">().notNull(),
     match: varchar("match")
-        .$type<"CIDR" | "PATH" | "IP" | "COUNTRY" | "ASN" | "REGION">()
+        .$type<
+            | "CIDR"
+            | "PATH"
+            | "IP"
+            | "COUNTRY"
+            | "COUNTRY_IS_NOT"
+            | "ASN"
+            | "REGION"
+        >()
         .notNull(),
     value: varchar("value").notNull()
 });
@@ -1593,3 +1612,4 @@ export type LauncherView = InferSelectModel<typeof launcherViews>;
 export type ResourcePolicy = InferSelectModel<typeof resourcePolicies>;
 export type RolePolicy = InferSelectModel<typeof rolePolicies>;
 export type UserPolicy = InferSelectModel<typeof userPolicies>;
+export type ResourcePolicyRule = InferSelectModel<typeof resourcePolicyRules>;

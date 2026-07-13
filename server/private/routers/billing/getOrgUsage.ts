@@ -104,6 +104,18 @@ export async function getOrgUsage(
             orgId,
             LimitId.ORGANIZATIONS
         );
+        const publicResources = await usageService.getUsage(
+            orgId,
+            LimitId.PUBLIC_RESOURCES
+        );
+        const privateResources = await usageService.getUsage(
+            orgId,
+            LimitId.PRIVATE_RESOURCES
+        );
+        const machineClients = await usageService.getUsage(
+            orgId,
+            LimitId.MACHINE_CLIENTS
+        );
         // const egressData = await usageService.getUsage(
         //     orgId,
         //     FeatureId.EGRESS_DATA_MB
@@ -126,6 +138,15 @@ export async function getOrgUsage(
         }
         if (organizations) {
             usageData.push(organizations);
+        }
+        if (publicResources) {
+            usageData.push(publicResources);
+        }
+        if (privateResources) {
+            usageData.push(privateResources);
+        }
+        if (machineClients) {
+            usageData.push(machineClients);
         }
 
         const orgLimits = await db

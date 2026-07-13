@@ -74,6 +74,7 @@ export const RESOURCE_RULE_MATCH_TYPES = [
     "IP",
     "PATH",
     "COUNTRY",
+    "COUNTRY_IS_NOT",
     "ASN",
     "REGION"
 ] as const;
@@ -96,6 +97,7 @@ export function getResourceRuleValueValidationError(
         case "REGION":
             return isValidRegionId(value) ? null : "Invalid region ID provided";
         case "COUNTRY":
+        case "COUNTRY_IS_NOT":
             return COUNTRIES.some((country) => country.code === value)
                 ? null
                 : "Invalid country code provided";

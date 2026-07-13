@@ -71,6 +71,7 @@ export enum ActionsEnum {
     setResourceWhitelist = "setResourceWhitelist",
     getResourceWhitelist = "getResourceWhitelist",
     generateAccessToken = "generateAccessToken",
+    createResourceSessionToken = "createResourceSessionToken",
     deleteAcessToken = "deleteAcessToken",
     listAccessTokens = "listAccessTokens",
     createResourceRule = "createResourceRule",

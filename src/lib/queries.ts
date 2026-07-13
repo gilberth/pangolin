@@ -7,7 +7,10 @@ import type {
     QueryConnectionAuditLogResponse,
     QueryRequestAuditLogResponse
 } from "@server/routers/auditLogs/types";
-import type { ListClientsResponse } from "@server/routers/client";
+import type {
+    ListClientsResponse,
+    ListUserDevicesResponse
+} from "@server/routers/client";
 import type {
     GetDNSRecordsResponse,
     ListDomainsResponse
@@ -25,6 +28,7 @@ import type {
 import type { ListRolesResponse } from "@server/routers/role";
 import type { ListSitesResponse } from "@server/routers/site";
 import type {
+    ListAllSiteResourcesByOrgResponse,
     ListSiteResourceClientsResponse,
     ListSiteResourceRolesResponse,
     ListSiteResourceUsersResponse
@@ -38,7 +42,7 @@ import {
     queryOptions
 } from "@tanstack/react-query";
 import type { AxiosResponse } from "axios";
-import z from "zod";
+import z, { meta } from "zod";
 import { remote } from "./api";
 import { durationToMs } from "./durationToMs";
 import type { ListOrgLabelsResponse } from "@server/routers/labels/types";
@@ -50,11 +54,16 @@ import type {
     ListLauncherGroupsResponse,
     ListLauncherLabelsResponse,
     ListLauncherResourcesResponse,
+    ListLauncherScaleResponse,
     ListLauncherSitesResponse,
     ListLauncherViewsResponse,
     LauncherListQuery,
+    LauncherResource,
     LauncherViewConfig
 } from "@server/routers/launcher/types";
+import type { GetResourceResponse } from "@server/routers/resource/getResource";
+import type { GetResourceAuthInfoResponse } from "@server/routers/resource/getResourceAuthInfo";
+import type { GetSiteResourceResponse } from "@server/routers/siteResource/getSiteResource";
 import type { LauncherQueryFilters } from "@app/lib/launcherSearchParams";
 import { buildLauncherSearchParams } from "@app/lib/launcherSearchParams";
 
@@ -178,6 +187,38 @@ export const orgQueries = {
                 >(`/org/${orgId}/clients?${sp.toString()}`, { signal });
 
                 return res.data.data.clients;
+            }
+        }),
+    userDevices: ({
+        orgId,
+        query,
+        perPage = 10_000
+    }: {
+        orgId: string;
+        query?: string;
+        perPage?: number;
+    }) =>
+        queryOptions({
+            queryKey: [
+                "ORG",
+                orgId,
+                "USER_DEVICES",
+                { query, perPage }
+            ] as const,
+            queryFn: async ({ signal, meta }) => {
+                const sp = new URLSearchParams({
+                    pageSize: perPage.toString()
+                });
+
+                if (query?.trim()) {
+                    sp.set("query", query);
+                }
+
+                const res = await meta!.api.get<
+                    AxiosResponse<ListUserDevicesResponse>
+                >(`/org/${orgId}/user-devices?${sp.toString()}`, { signal });
+
+                return res.data.data.devices;
             }
         }),
     users: ({
@@ -324,7 +365,7 @@ export const orgQueries = {
             }
         }),
 
-    resources: ({
+    proxyResources: ({
         orgId,
         query,
         perPage = 10_000
@@ -334,7 +375,12 @@ export const orgQueries = {
         perPage?: number;
     }) =>
         queryOptions({
-            queryKey: ["ORG", orgId, "RESOURCES", { query, perPage }] as const,
+            queryKey: [
+                "ORG",
+                orgId,
+                "PROXY_RESOURCES",
+                { query, perPage }
+            ] as const,
             queryFn: async ({ signal, meta }) => {
                 const sp = new URLSearchParams({
                     pageSize: perPage.toString()
@@ -349,6 +395,39 @@ export const orgQueries = {
                 >(`/org/${orgId}/resources?${sp.toString()}`, { signal });
 
                 return res.data.data.resources;
+            }
+        }),
+
+    privateResources: ({
+        orgId,
+        query,
+        perPage = 10_000
+    }: {
+        orgId: string;
+        query?: string;
+        perPage?: number;
+    }) =>
+        queryOptions({
+            queryKey: [
+                "ORG",
+                orgId,
+                "PRIVATE_RESOURCES",
+                { query, perPage }
+            ] as const,
+            queryFn: async ({ signal, meta }) => {
+                const sp = new URLSearchParams({
+                    pageSize: perPage.toString()
+                });
+
+                if (query?.trim()) {
+                    sp.set("query", query);
+                }
+
+                const res = await meta!.api.get<
+                    AxiosResponse<ListAllSiteResourcesByOrgResponse>
+                >(`/org/${orgId}/site-resources?${sp.toString()}`, { signal });
+
+                return res.data.data.siteResources;
             }
         }),
 
@@ -1189,13 +1268,13 @@ export const launcherQueries = {
                 const res = await meta!.api.get<
                     AxiosResponse<ListLauncherViewsResponse>
                 >(`/org/${orgId}/launcher/views`, { signal });
-                return res.data.data.views;
+                return res.data.data;
             }
         }),
     sites: ({
         orgId,
         query,
-        perPage = 500
+        perPage = 20
     }: {
         orgId: string;
         query?: string;
@@ -1227,7 +1306,7 @@ export const launcherQueries = {
     labels: ({
         orgId,
         query,
-        perPage = 500
+        perPage = 20
     }: {
         orgId: string;
         query?: string;
@@ -1297,6 +1376,63 @@ export const launcherQueries = {
                 const { page, pageSize, total } = lastPage.pagination;
                 const nextPage = page + 1;
                 return page * pageSize < total ? nextPage : undefined;
+            }
+        }),
+    scale: (orgId: string, filters: LauncherQueryFilters) =>
+        queryOptions({
+            queryKey: ["ORG", orgId, "LAUNCHER", "SCALE", filters] as const,
+            queryFn: async ({ signal, meta }) => {
+                const sp = buildLauncherSearchParams(filters, 1);
+                sp.delete("page");
+                sp.delete("pageSize");
+                sp.delete("groupKey");
+                const res = await meta!.api.get<
+                    AxiosResponse<ListLauncherScaleResponse>
+                >(`/org/${orgId}/launcher/scale?${sp.toString()}`, { signal });
+                return res.data.data.scale;
+            }
+        }),
+    resourceDetail: (orgId: string, resource: LauncherResource | null) =>
+        queryOptions({
+            queryKey: [
+                "ORG",
+                orgId,
+                "LAUNCHER",
+                "RESOURCE_DETAIL",
+                resource?.launcherResourceKey ?? null
+            ] as const,
+            enabled: resource != null,
+            queryFn: async ({ signal, meta }) => {
+                if (!resource) {
+                    throw new Error("Resource is required");
+                }
+
+                if (resource.resourceType === "public") {
+                    const res = await meta!.api.get<
+                        AxiosResponse<GetResourceResponse>
+                    >(`/org/${orgId}/resource/${resource.niceId}`, { signal });
+                    const resourceData = res.data.data;
+                    const authRes = await meta!.api.get<
+                        AxiosResponse<GetResourceAuthInfoResponse>
+                    >(`/resource/${resourceData.resourceGuid}/auth`, {
+                        signal
+                    });
+                    return {
+                        resourceType: "public" as const,
+                        data: resourceData,
+                        authInfo: authRes.data.data
+                    };
+                }
+
+                const siteResourceId =
+                    resource.siteResourceId ?? resource.resourceId;
+                const res = await meta!.api.get<
+                    AxiosResponse<GetSiteResourceResponse>
+                >(`/org/${orgId}/site-resource/${siteResourceId}`, { signal });
+                return {
+                    resourceType: "site" as const,
+                    data: res.data.data
+                };
             }
         })
 };

@@ -14,12 +14,16 @@
 import { redis } from "#private/lib/redis";
 import { lockManager } from "#private/lib/lock";
 import logger from "@server/logger";
+import { isTransientError } from "@server/lib/dbRetry";
 
 export type RebuildJobType = "site-resource" | "client";
 
 export interface RebuildJob {
     type: RebuildJobType;
     id: number;
+    // Number of times this job has already been re-queued after a transient
+    // failure. Absent/0 means it has not failed yet.
+    attempt?: number;
 }
 
 export interface RebuildJobHandlers {
@@ -42,6 +46,11 @@ const BATCH_SIZE = 5;
 const PROCESSOR_LOCK_TTL_MS = 120000 * BATCH_SIZE + 30000; // ~630 s
 
 const POLL_INTERVAL_MS = 500;
+
+// A job that fails with a transient DB error gets re-queued with backoff
+// instead of being dropped, up to this many times.
+const MAX_JOB_ATTEMPTS = 5;
+const JOB_RETRY_BASE_DELAY_MS = 1000;
 
 class RedisRebuildQueue {
     private processingStarted = false;
@@ -180,10 +189,33 @@ class RedisRebuildQueue {
                                 `Rebuild queue: completed ${job.type}:${job.id}`
                             );
                         } catch (err) {
-                            logger.error(
-                                `Rebuild queue: job ${job.type}:${job.id} threw an error:`,
-                                err
-                            );
+                            const attempt = (job.attempt ?? 0) + 1;
+                            if (
+                                isTransientError(err) &&
+                                attempt <= MAX_JOB_ATTEMPTS
+                            ) {
+                                const delay =
+                                    JOB_RETRY_BASE_DELAY_MS *
+                                    Math.pow(2, attempt - 1);
+                                logger.warn(
+                                    `Rebuild queue: job ${job.type}:${job.id} hit a transient error (attempt ${attempt}/${MAX_JOB_ATTEMPTS}), re-queuing in ${delay}ms:`,
+                                    err
+                                );
+                                setTimeout(() => {
+                                    this.enqueue({ ...job, attempt }).catch(
+                                        (enqueueErr) =>
+                                            logger.error(
+                                                `Rebuild queue: failed to re-queue ${job.type}:${job.id} after transient error:`,
+                                                enqueueErr
+                                            )
+                                    );
+                                }, delay);
+                            } else {
+                                logger.error(
+                                    `Rebuild queue: job ${job.type}:${job.id} threw an error:`,
+                                    err
+                                );
+                            }
                         }
                     }
                 },

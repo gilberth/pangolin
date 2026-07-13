@@ -14,7 +14,7 @@
 import { redis } from "#private/lib/redis";
 import logger from "@server/logger";
 
-export const ORG_REBUILD_CONCURRENCY_LIMIT = 5;
+export const ORG_REBUILD_CONCURRENCY_LIMIT = 10;
 
 // Safety-net TTL: slightly longer than the rebuild lock TTL (120 s). If a
 // server process dies while holding a rebuild, this ensures the counter key

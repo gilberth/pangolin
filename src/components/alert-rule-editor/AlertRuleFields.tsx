@@ -348,7 +348,7 @@ function ResourceMultiSelect({
     const [debounced] = useDebounce(q, 150);
 
     const { data: resources = [] } = useQuery(
-        orgQueries.resources({ orgId, query: debounced, perPage: 10 })
+        orgQueries.proxyResources({ orgId, query: debounced, perPage: 10 })
     );
 
     const shown = useMemo(() => {

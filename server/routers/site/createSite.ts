@@ -268,7 +268,11 @@ export async function createSite(
 
         let newSite: Site | undefined;
         try {
-            if (subnet && exitNodeId) {
+            if (type === "wireguard" && subnet && exitNodeId) {
+                // Only wireguard sites actually persist the provided subnet/exitNodeId.
+                // Newt sites have their subnet/exit node chosen (under a lock) when the
+                // newt connects, so validating them here is both unnecessary and racy,
+                // since pickSiteDefaults does not lock the subnet it suggests.
                 //make sure the subnet is in the range of the exit node if provided
                 const [exitNode] = await db
                     .select()

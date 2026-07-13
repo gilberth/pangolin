@@ -79,7 +79,8 @@ export async function createLauncherView(
                 ),
                 createdAt: created.createdAt,
                 updatedAt: created.updatedAt,
-                isOrgWide: created.userId == null
+                isOrgWide: created.userId == null,
+                isDefault: created.isDefault
             },
             success: true,
             error: false,

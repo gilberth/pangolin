@@ -15,22 +15,27 @@ import {
     SelectValue
 } from "@app/components/ui/select";
 import { Switch } from "@app/components/ui/switch";
-import type { LauncherViewConfig } from "@server/routers/launcher/types";
+import type {
+    LauncherScaleCapabilities,
+    LauncherViewConfig
+} from "@server/routers/launcher/types";
 import { useTranslations } from "next-intl";
 import { Settings } from "lucide-react";
 
 type LauncherSettingsMenuProps = {
     config: LauncherViewConfig;
-    isDefaultView: boolean;
+    capabilities: LauncherScaleCapabilities;
+    isCompactMode: boolean;
+    selectedGroupBy: LauncherViewConfig["groupBy"];
     onConfigChange: (patch: Partial<LauncherViewConfig>) => void;
-    onDeleteView: () => void;
 };
 
 export function LauncherSettingsMenu({
     config,
-    isDefaultView,
-    onConfigChange,
-    onDeleteView
+    capabilities,
+    isCompactMode,
+    selectedGroupBy,
+    onConfigChange
 }: LauncherSettingsMenuProps) {
     const t = useTranslations();
 
@@ -51,7 +56,7 @@ export function LauncherSettingsMenu({
                             {t("resourceLauncherGroupBy")}
                         </p>
                         <Select
-                            value={config.groupBy}
+                            value={selectedGroupBy}
                             onValueChange={(value) =>
                                 onConfigChange({
                                     groupBy:
@@ -63,14 +68,46 @@ export function LauncherSettingsMenu({
                                 <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                                <SelectItem value="site">
+                                <SelectItem value="none">
+                                    {t("resourceLauncherGroupByNone")}
+                                </SelectItem>
+                                <SelectItem
+                                    value="site"
+                                    disabled={
+                                        !capabilities.allowSiteGrouping ||
+                                        (isCompactMode &&
+                                            config.siteIds.length === 0)
+                                    }
+                                >
                                     {t("resourceLauncherGroupBySite")}
                                 </SelectItem>
-                                <SelectItem value="label">
+                                <SelectItem
+                                    value="label"
+                                    disabled={
+                                        !capabilities.allowLabelGrouping ||
+                                        (isCompactMode &&
+                                            config.labelIds.length === 0)
+                                    }
+                                >
                                     {t("resourceLauncherGroupByLabel")}
                                 </SelectItem>
                             </SelectContent>
                         </Select>
+                        {isCompactMode ? (
+                            <p className="text-xs text-muted-foreground">
+                                {t("resourceLauncherCompactGroupingHint")}
+                            </p>
+                        ) : null}
+                        {!isCompactMode && !capabilities.allowSiteGrouping ? (
+                            <p className="text-xs text-muted-foreground">
+                                {t("resourceLauncherSiteGroupingDisabled")}
+                            </p>
+                        ) : null}
+                        {!isCompactMode && !capabilities.allowLabelGrouping ? (
+                            <p className="text-xs text-muted-foreground">
+                                {t("resourceLauncherLabelGroupingDisabled")}
+                            </p>
+                        ) : null}
                     </div>
 
                     <div className="space-y-2">
@@ -116,16 +153,6 @@ export function LauncherSettingsMenu({
                             />
                         </div>
                     </div>
-
-                    {!isDefaultView ? (
-                        <Button
-                            variant="destructive"
-                            className="w-full rounded-xl"
-                            onClick={onDeleteView}
-                        >
-                            {t("resourceLauncherDeleteView")}
-                        </Button>
-                    ) : null}
                 </div>
             </PopoverContent>
         </Popover>

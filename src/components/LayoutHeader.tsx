@@ -12,6 +12,7 @@ import { ListUserOrgsResponse } from "@server/routers/org";
 import { LauncherOrgSelector } from "@app/components/resource-launcher/LauncherOrgSelector";
 import { Button } from "@app/components/ui/button";
 import { useTranslations } from "next-intl";
+import { CommandPaletteTrigger } from "@app/components/command-palette/CommandPaletteTrigger";
 
 type LayoutHeaderProps = {
     showTopBar: boolean;
@@ -105,6 +106,10 @@ export function LayoutHeader({
                         {showTopBar && (
                             <div className="flex items-center space-x-2">
                                 <ThemeSwitcher />
+                                <CommandPaletteTrigger
+                                    orgId={orgId}
+                                    orgs={orgs}
+                                />
                                 <ProfileIcon />
                             </div>
                         )}

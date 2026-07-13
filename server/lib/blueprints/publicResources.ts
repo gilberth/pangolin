@@ -1,56 +1,54 @@
+import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
+import { createCertificate } from "#dynamic/routers/certificates/createCertificate";
+import { hashPassword } from "@server/auth/password";
+import { generateId } from "@server/auth/sessions/app";
+import { build } from "@server/build";
 import {
-    domains,
     domainNamespaces,
+    domains,
     orgDomains,
     Resource,
     resourceHeaderAuth,
     resourceHeaderAuthExtendedCompatibility,
+    resourcePassword,
     resourcePincode,
+    resourcePolicies,
+    resourcePolicyHeaderAuth,
+    resourcePolicyPassword,
+    resourcePolicyPincode,
+    resourcePolicyRules,
+    resourcePolicyWhiteList,
     resourceRules,
+    resources,
     resourceWhitelist,
     roleActions,
+    rolePolicies,
     roleResources,
     roles,
+    sites,
     Target,
     TargetHealthCheck,
     targetHealthCheck,
+    targets,
     Transaction,
     userOrgs,
+    userPolicies,
     userResources,
     users,
-    resourcePolicies,
-    resourcePolicyPassword,
-    resourcePolicyPincode,
-    resourcePolicyHeaderAuth,
-    resourcePolicyRules,
-    resourcePolicyWhiteList,
-    rolePolicies,
-    userPolicies
+    type ResourceRule
 } from "@server/db";
-import { resources, targets, sites } from "@server/db";
-import { eq, and, asc, or, ne, count, isNotNull } from "drizzle-orm";
-import {
-    Config,
-    ConfigSchema,
-    isTargetsOnlyResource,
-    TargetData
-} from "./types";
-import logger from "@server/logger";
-import { createCertificate } from "#dynamic/routers/certificates/createCertificate";
-import { pickPort } from "@server/routers/target/helpers";
-import { resourcePassword } from "@server/db";
 import { getUniqueResourcePolicyName } from "@server/db/names";
-import { hashPassword } from "@server/auth/password";
-import { isValidCIDR, isValidIP, isValidUrlGlobPattern } from "../validators";
 import { isValidRegionId } from "@server/db/regions";
-import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
 import { fireHealthCheckUnknownAlert } from "@server/lib/alerts";
-import { tierMatrix } from "../billing/tierMatrix";
-import { defaultRoleAllowedActions } from "@server/routers/role/createRole";
-import { build } from "@server/build";
-import { encrypt } from "@server/lib/crypto";
-import { generateId } from "@server/auth/sessions/app";
 import serverConfig from "@server/lib/config";
+import { encrypt } from "@server/lib/crypto";
+import logger from "@server/logger";
+import { defaultRoleAllowedActions } from "@server/routers/role/createRole";
+import { pickPort } from "@server/routers/target/helpers";
+import { and, asc, eq, isNotNull, ne, or } from "drizzle-orm";
+import { tierMatrix } from "../billing/tierMatrix";
+import { isValidCIDR, isValidIP, isValidUrlGlobPattern } from "../validators";
+import { Config, isTargetsOnlyResource, TargetData } from "./types";
 import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
 import next from "next";
@@ -909,7 +907,7 @@ export async function updatePublicResources(
                                 .update(resourceRules)
                                 .set({
                                     action: getRuleAction(rule.action),
-                                    match: rule.match.toUpperCase(),
+                                    match: rule.match.toUpperCase() as ResourceRule["match"],
                                     value: getRuleValue(
                                         rule.match.toUpperCase(),
                                         rule.value
@@ -928,7 +926,7 @@ export async function updatePublicResources(
                         await trx.insert(resourceRules).values({
                             resourceId: existingResource.resourceId,
                             action: getRuleAction(rule.action),
-                            match: rule.match.toUpperCase(),
+                            match: rule.match.toUpperCase() as ResourceRule["match"],
                             value: getRuleValue(
                                 rule.match.toUpperCase(),
                                 rule.value
@@ -1011,7 +1009,7 @@ export async function updatePublicResources(
         } else {
             // create a brand new resource
 
-            if (build == "saas") {
+            if (build === "saas") {
                 const usage = await usageService.getUsage(
                     orgId,
                     LimitId.PUBLIC_RESOURCES
@@ -1292,7 +1290,7 @@ export async function updatePublicResources(
                     await trx.insert(resourceRules).values({
                         resourceId: newResource.resourceId,
                         action: getRuleAction(rule.action),
-                        match: rule.match.toUpperCase(),
+                        match: rule.match.toUpperCase() as ResourceRule["match"],
                         value: getRuleValue(
                             rule.match.toUpperCase(),
                             rule.value
@@ -1355,7 +1353,7 @@ function getRuleAction(input: string) {
 
 function getRuleValue(match: string, value: string) {
     // if the match is a country, uppercase the value
-    if (match == "COUNTRY") {
+    if (match === "COUNTRY" || match === "COUNTRY_IS_NOT") {
         return value.toUpperCase();
     }
     return value;

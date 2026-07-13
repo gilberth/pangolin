@@ -27,6 +27,12 @@ export async function getFeatureDisplayName(
             return "Remote Exit Nodes";
         case LimitId.ORGANIZATIONS:
             return "Organizations";
+        case LimitId.PUBLIC_RESOURCES:
+            return "Public Resources";
+        case LimitId.PRIVATE_RESOURCES:
+            return "Private Resources";
+        case LimitId.MACHINE_CLIENTS:
+            return "Machine Clients";
         case LimitId.TIER1:
             return "Home Lab";
         default:

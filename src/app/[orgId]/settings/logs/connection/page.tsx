@@ -11,6 +11,7 @@ import { useStoredPageSize } from "@app/hooks/useStoredPageSize";
 import { toast } from "@app/hooks/useToast";
 import { createApiClient } from "@app/lib/api";
 import { getSevenDaysAgo } from "@app/lib/getSevenDaysAgo";
+import { getPrivateResourceSettingsHref } from "@app/lib/launcherResourceAdminHref";
 import { logQueries } from "@app/lib/queries";
 import { build } from "@server/build";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
@@ -323,7 +324,10 @@ export default function ConnectionLogsPage() {
                 if (row.original.resourceName && row.original.resourceNiceId) {
                     return (
                         <Link
-                            href={`/${row.original.orgId}/settings/resources/private/?query=${row.original.resourceNiceId}`}
+                            href={getPrivateResourceSettingsHref(
+                                row.original.orgId,
+                                row.original.resourceNiceId
+                            )}
                         >
                             <Button variant="outline" size="sm">
                                 {row.original.resourceName}

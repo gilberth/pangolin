@@ -1,7 +1,9 @@
 import type { LauncherActiveViewId } from "@app/lib/launcherLocalStorage";
 import {
     defaultLauncherViewConfig,
+    getEffectiveDefaultLauncherConfig,
     parseIdListParam,
+    type LauncherDefaultViewOverrides,
     type LauncherViewConfig,
     type LauncherViewRecord
 } from "@server/routers/launcher/types";
@@ -64,10 +66,13 @@ export function isLauncherConfigEqual(
 
 export function getLauncherUrlBaseConfig(
     viewId: LauncherActiveViewId,
-    views: LauncherViewRecord[]
+    views: LauncherViewRecord[],
+    defaultViewOverrides?: LauncherDefaultViewOverrides
 ): LauncherViewConfig {
     if (viewId === "default") {
-        return defaultLauncherViewConfig;
+        return defaultViewOverrides
+            ? getEffectiveDefaultLauncherConfig(defaultViewOverrides)
+            : defaultLauncherViewConfig;
     }
 
     const savedView = views.find((view) => view.viewId === viewId);
@@ -113,7 +118,7 @@ function parseConfigOverrides(
     }
 
     const groupBy = searchParams.get("groupBy");
-    if (groupBy === "site" || groupBy === "label") {
+    if (groupBy === "site" || groupBy === "label" || groupBy === "none") {
         overrides.groupBy = groupBy;
     }
 
@@ -172,7 +177,8 @@ function isValidActiveViewId(
 export function resolveLauncherStateFromUrl(
     searchParams: URLSearchParams,
     views: LauncherViewRecord[],
-    fallbackViewId: LauncherActiveViewId | null
+    fallbackViewId: LauncherActiveViewId | null,
+    defaultViewOverrides?: LauncherDefaultViewOverrides
 ): ResolvedLauncherState {
     const parsed = parseLauncherUrlState(searchParams);
 
@@ -188,18 +194,26 @@ export function resolveLauncherStateFromUrl(
             : "default";
     }
 
-    const savedConfig = getLauncherUrlBaseConfig(activeViewId, views);
+    const savedConfig = getLauncherUrlBaseConfig(
+        activeViewId,
+        views,
+        defaultViewOverrides
+    );
 
     let config: LauncherViewConfig;
     if (hasLauncherConfigParams(searchParams)) {
         config = resolveLauncherConfig(
-            defaultLauncherViewConfig,
+            getEffectiveDefaultLauncherConfig(
+                defaultViewOverrides ?? { personal: null, orgWide: null }
+            ),
             parsed.configOverrides
         );
     } else if (activeViewId !== "default") {
         config = savedConfig;
     } else {
-        config = defaultLauncherViewConfig;
+        config = getEffectiveDefaultLauncherConfig(
+            defaultViewOverrides ?? { personal: null, orgWide: null }
+        );
     }
 
     return {

@@ -777,8 +777,8 @@ export default function Page() {
         <>
             <div className="flex justify-between">
                 <HeaderTitle
-                    title={t("resourceCreate")}
-                    description={t("resourceCreateDescription")}
+                    title={t("resourcePublicCreate")}
+                    description={t("resourcePublicCreateDescription")}
                 />
                 <Button
                     variant="outline"

@@ -11,7 +11,7 @@ import {
 import { launcherQueries, orgQueries } from "@app/lib/queries";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useDebounce } from "use-debounce";
 import { Checkbox } from "./ui/checkbox";
 
@@ -25,6 +25,7 @@ type LabelsFilterSelectorProps = {
     orgId: string;
     isSelected: (label: LabelFilterOption) => boolean;
     onToggle: (label: LabelFilterOption) => void;
+    selectedLabels?: LabelFilterOption[];
     onClear?: () => void;
     showClear?: boolean;
     scope?: "org" | "launcher";
@@ -34,6 +35,7 @@ export function LabelsFilterSelector({
     orgId,
     isSelected,
     onToggle,
+    selectedLabels = [],
     onClear,
     showClear = false,
     scope = "org"
@@ -54,7 +56,7 @@ export function LabelsFilterSelector({
         ...launcherQueries.labels({
             orgId,
             query: debouncedQuery,
-            perPage: 500
+            perPage: 20
         }),
         enabled: scope === "launcher"
     });
@@ -62,6 +64,18 @@ export function LabelsFilterSelector({
         scope === "launcher"
             ? (launcherLabelsQuery.data ?? [])
             : (orgLabelsQuery.data ?? []);
+
+    const labelsShown = useMemo(() => {
+        const base = [...labels];
+        if (debouncedQuery.trim().length === 0 && selectedLabels.length > 0) {
+            const selectedNotInBase = selectedLabels.filter(
+                (selected) =>
+                    !base.some((label) => label.labelId === selected.labelId)
+            );
+            return [...selectedNotInBase, ...base];
+        }
+        return base;
+    }, [debouncedQuery, labels, selectedLabels]);
 
     return (
         <Command shouldFilter={false}>
@@ -81,7 +95,7 @@ export function LabelsFilterSelector({
                             {t("accessFilterClear")}
                         </CommandItem>
                     )}
-                    {labels.map((label) => (
+                    {labelsShown.map((label) => (
                         <CommandItem
                             key={label.labelId}
                             value={label.name}

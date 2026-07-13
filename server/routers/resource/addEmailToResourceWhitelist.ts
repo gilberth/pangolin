@@ -1,7 +1,12 @@
 import { Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { db } from "@server/db";
-import { resources, resourceWhitelist } from "@server/db";
+import {
+    resources,
+    resourceWhitelist,
+    resourcePolicies,
+    resourcePolicyWhiteList
+} from "@server/db";
 import response from "@server/lib/response";
 import HttpCode from "@server/types/HttpCode";
 import createHttpError from "http-errors";
@@ -103,39 +108,98 @@ export async function addEmailToResourceWhitelist(
             );
         }
 
-        if (!resource.emailWhitelistEnabled) {
-            return next(
-                createHttpError(
-                    HttpCode.BAD_REQUEST,
-                    "Email whitelist is not enabled for this resource"
-                )
-            );
+        // A shared policy takes precedence over the resource's inline
+        // (default) policy, which takes precedence over the resource's own
+        // direct whitelist fields. This mirrors the precedence used at
+        // request time in authWithWhitelist.ts / getResourceAuthInfo.ts.
+        const policyId =
+            resource.resourcePolicyId ?? resource.defaultResourcePolicyId;
+
+        if (policyId !== null) {
+            const [policy] = await db
+                .select()
+                .from(resourcePolicies)
+                .where(eq(resourcePolicies.resourcePolicyId, policyId));
+
+            if (!policy) {
+                return next(
+                    createHttpError(
+                        HttpCode.NOT_FOUND,
+                        "Resource policy not found"
+                    )
+                );
+            }
+
+            if (!policy.emailWhitelistEnabled) {
+                return next(
+                    createHttpError(
+                        HttpCode.BAD_REQUEST,
+                        "Email whitelist is not enabled for this resource"
+                    )
+                );
+            }
+
+            const existingEntry = await db
+                .select()
+                .from(resourcePolicyWhiteList)
+                .where(
+                    and(
+                        eq(
+                            resourcePolicyWhiteList.resourcePolicyId,
+                            policyId
+                        ),
+                        eq(resourcePolicyWhiteList.email, email)
+                    )
+                );
+
+            if (existingEntry.length > 0) {
+                return next(
+                    createHttpError(
+                        HttpCode.CONFLICT,
+                        "Email already exists in whitelist"
+                    )
+                );
+            }
+
+            await db.insert(resourcePolicyWhiteList).values({
+                email,
+                resourcePolicyId: policyId
+            });
+        } else {
+            if (!resource.emailWhitelistEnabled) {
+                return next(
+                    createHttpError(
+                        HttpCode.BAD_REQUEST,
+                        "Email whitelist is not enabled for this resource"
+                    )
+                );
+            }
+
+            // Check if email already exists in whitelist
+            const existingEntry = await db
+                .select()
+                .from(resourceWhitelist)
+                .where(
+                    and(
+                        eq(resourceWhitelist.resourceId, resourceId),
+                        eq(resourceWhitelist.email, email)
+                    )
+                );
+
+            if (existingEntry.length > 0) {
+                return next(
+                    createHttpError(
+                        HttpCode.CONFLICT,
+                        "Email already exists in whitelist"
+                    )
+                );
+            }
+
+            await db.insert(resourceWhitelist).values({
+                email,
+                resourceId
+            });
         }
-
-        // Check if email already exists in whitelist
-        const existingEntry = await db
-            .select()
-            .from(resourceWhitelist)
-            .where(
-                and(
-                    eq(resourceWhitelist.resourceId, resourceId),
-                    eq(resourceWhitelist.email, email)
-                )
-            );
-
-        if (existingEntry.length > 0) {
-            return next(
-                createHttpError(
-                    HttpCode.CONFLICT,
-                    "Email already exists in whitelist"
-                )
-            );
-        }
-
-        await db.insert(resourceWhitelist).values({
-            email,
-            resourceId
-        });
 
         return response(res, {
             data: {},

@@ -588,9 +588,12 @@ export default function UserDevicesTable({
                         if (agent in latestPlatformVersions) {
                             const agentVersion = latestPlatformVersions[agent];
 
-                            updateAvailable = semver.lt(
-                                originalRow.olmVersion,
-                                agentVersion.latestVersion
+                            updateAvailable = Boolean(
+                                semver.valid(originalRow.olmVersion) &&
+                                semver.lt(
+                                    originalRow.olmVersion,
+                                    agentVersion.latestVersion
+                                )
                             );
                         }
                     }

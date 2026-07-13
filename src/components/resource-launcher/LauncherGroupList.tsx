@@ -69,16 +69,20 @@ export function LauncherGroupList({
     const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isFetching } =
         useInfiniteQuery({
             ...launcherQueries.groups(orgId, groupFilters),
-            initialData: {
-                pages: [
-                    {
-                        groups: initialGroups,
-                        pagination: groupsPagination
-                    }
-                ],
-                pageParams: [1]
-            },
-            refetchOnMount: false
+            ...(initialGroups.length > 0
+                ? {
+                      initialData: {
+                          pages: [
+                              {
+                                  groups: initialGroups,
+                                  pagination: groupsPagination
+                              }
+                          ],
+                          pageParams: [1]
+                      },
+                      refetchOnMount: false as const
+                  }
+                : {})
         });
 
     const groups = data?.pages.flatMap((page) => page.groups) ?? [];

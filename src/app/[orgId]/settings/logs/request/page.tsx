@@ -9,6 +9,7 @@ import { toast } from "@app/hooks/useToast";
 import { createApiClient } from "@app/lib/api";
 import { useTranslations } from "next-intl";
 import { getSevenDaysAgo } from "@app/lib/getSevenDaysAgo";
+import { getPrivateResourceSettingsHref } from "@app/lib/launcherResourceAdminHref";
 import { logQueries } from "@app/lib/queries";
 import { ColumnDef } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
@@ -395,7 +396,10 @@ export default function GeneralPage() {
                     <Link
                         href={
                             row.original.reason == 108 // for now the client will only have reason 108 so we know where to go
-                                ? `/${row.original.orgId}/settings/resources/private?query=${row.original.resourceNiceId}`
+                                ? getPrivateResourceSettingsHref(
+                                      row.original.orgId,
+                                      row.original.resourceNiceId
+                                  )
                                 : `/${row.original.orgId}/settings/resources/public/${row.original.resourceNiceId}`
                         }
                         onClick={(e) => e.stopPropagation()}

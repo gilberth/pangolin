@@ -23,7 +23,6 @@ export enum TierFeature {
     StandaloneHealthChecks = "standaloneHealthChecks",
     AlertingRules = "alertingRules",
     WildcardSubdomain = "wildcardSubdomain",
-    Labels = "labels",
     NewtAutoUpdate = "newtAutoUpdate",
     ResourcePolicies = "resourcePolicies",
     AdvancedPublicResources = "advancedPublicResources",
@@ -31,7 +30,6 @@ export enum TierFeature {
 }
 
 export const tierMatrix: Record<TierFeature, Tier[]> = {
-    [TierFeature.Labels]: ["tier1", "tier2", "tier3", "enterprise"],
     [TierFeature.OrgOidc]: ["tier1", "tier2", "tier3", "enterprise"],
     [TierFeature.LoginPageDomain]: ["tier1", "tier2", "tier3", "enterprise"],
     [TierFeature.DeviceApprovals]: ["tier1", "tier3", "enterprise"],

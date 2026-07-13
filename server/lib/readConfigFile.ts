@@ -184,7 +184,8 @@ export const configSchema = z
                             .number()
                             .positive()
                             .optional()
-                            .default(5000)
+                            .default(5000),
+                        jit_mode: z.boolean().default(true)
                     })
                     .optional()
                     .prefault({})

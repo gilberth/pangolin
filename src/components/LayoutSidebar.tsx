@@ -21,9 +21,9 @@ import { ListUserOrgsResponse } from "@server/routers/org";
 import {
     ArrowRight,
     ExternalLink,
+    LayoutGrid,
     PanelRightOpen,
-    Server,
-    SquareMousePointer
+    Server
 } from "lucide-react";
 import { useTranslations } from "next-intl";
 import dynamic from "next/dynamic";
@@ -175,34 +175,48 @@ export function LayoutSidebar({
                                     isSidebarCollapsed ? "mb-4" : "mb-1"
                                 )}
                             >
-                                <Link
-                                    href={`/${orgId}`}
-                                    className={cn(
-                                        "flex items-center transition-colors text-muted-foreground hover:text-foreground text-sm w-full hover:bg-sidebar-accent dark:hover:bg-sidebar-accent/50 rounded-md",
-                                        isSidebarCollapsed
-                                            ? "px-2 py-2 justify-center"
-                                            : "px-3 py-1.5"
-                                    )}
-                                    title={
-                                        isSidebarCollapsed
-                                            ? t("resourceLauncherTitle")
-                                            : undefined
-                                    }
-                                >
-                                    <span
+                                {isSidebarCollapsed ? (
+                                    <TooltipProvider>
+                                        <Tooltip>
+                                            <TooltipTrigger asChild>
+                                                <Link
+                                                    href={`/${orgId}`}
+                                                    className={cn(
+                                                        "flex items-center transition-colors text-muted-foreground hover:text-foreground text-sm w-full hover:bg-sidebar-accent dark:hover:bg-sidebar-accent/50 rounded-md px-2 py-2 justify-center"
+                                                    )}
+                                                >
+                                                    <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center text-muted-foreground">
+                                                        <LayoutGrid className="h-4 w-4" />
+                                                    </span>
+                                                </Link>
+                                            </TooltipTrigger>
+                                            <TooltipContent
+                                                side="right"
+                                                sideOffset={8}
+                                            >
+                                                <p>
+                                                    {t(
+                                                        "resourceSidebarLauncherTitle"
+                                                    )}
+                                                </p>
+                                            </TooltipContent>
+                                        </Tooltip>
+                                    </TooltipProvider>
+                                ) : (
+                                    <Link
+                                        href={`/${orgId}`}
                                         className={cn(
-                                            "flex-shrink-0 w-5 h-5 flex items-center justify-center text-muted-foreground",
-                                            !isSidebarCollapsed && "mr-3"
+                                            "flex items-center transition-colors text-muted-foreground hover:text-foreground text-sm w-full hover:bg-sidebar-accent dark:hover:bg-sidebar-accent/50 rounded-md px-3 py-1.5"
                                         )}
                                     >
-                                        <SquareMousePointer className="h-4 w-4" />
-                                    </span>
-                                    {!isSidebarCollapsed && (
-                                        <span className="flex-1">
-                                            {t("resourceLauncherTitle")}
+                                        <span className="flex-shrink-0 mr-3 w-5 h-5 flex items-center justify-center text-muted-foreground">
+                                            <LayoutGrid className="h-4 w-4" />
                                         </span>
-                                    )}
-                                </Link>
+                                        <span className="flex-1">
+                                            {t("resourceSidebarLauncherTitle")}
+                                        </span>
+                                    </Link>
+                                )}
                             </div>
                         )}
                     {!isAdminPage && user.serverAdmin && (
@@ -212,36 +226,44 @@ export function LayoutSidebar({
                                 isSidebarCollapsed ? "mb-4" : "mb-1"
                             )}
                         >
-                            <Link
-                                href="/admin"
-                                className={cn(
-                                    "flex items-center transition-colors text-muted-foreground hover:text-foreground text-sm w-full hover:bg-sidebar-accent dark:hover:bg-sidebar-accent/50 rounded-md",
-                                    isSidebarCollapsed
-                                        ? "px-2 py-2 justify-center"
-                                        : "px-3 py-1.5"
-                                )}
-                                title={
-                                    isSidebarCollapsed
-                                        ? t("serverAdmin")
-                                        : undefined
-                                }
-                            >
-                                <span
+                            {isSidebarCollapsed ? (
+                                <TooltipProvider>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <Link
+                                                href="/admin"
+                                                className={cn(
+                                                    "flex items-center transition-colors text-muted-foreground hover:text-foreground text-sm w-full hover:bg-sidebar-accent dark:hover:bg-sidebar-accent/50 rounded-md px-2 py-2 justify-center"
+                                                )}
+                                            >
+                                                <span className="flex-shrink-0 w-5 h-5 flex items-center justify-center text-muted-foreground">
+                                                    <Server className="h-4 w-4" />
+                                                </span>
+                                            </Link>
+                                        </TooltipTrigger>
+                                        <TooltipContent
+                                            side="right"
+                                            sideOffset={8}
+                                        >
+                                            <p>{t("serverAdmin")}</p>
+                                        </TooltipContent>
+                                    </Tooltip>
+                                </TooltipProvider>
+                            ) : (
+                                <Link
+                                    href="/admin"
                                     className={cn(
-                                        "flex-shrink-0 w-5 h-5 flex items-center justify-center text-muted-foreground",
-                                        !isSidebarCollapsed && "mr-3"
+                                        "flex items-center transition-colors text-muted-foreground hover:text-foreground text-sm w-full hover:bg-sidebar-accent dark:hover:bg-sidebar-accent/50 rounded-md px-3 py-1.5"
                                     )}
                                 >
-                                    <Server className="h-4 w-4" />
-                                </span>
-                                {!isSidebarCollapsed && (
-                                    <>
-                                        <span className="flex-1">
-                                            {t("serverAdmin")}
-                                        </span>
-                                    </>
-                                )}
-                            </Link>
+                                    <span className="flex-shrink-0 mr-3 w-5 h-5 flex items-center justify-center text-muted-foreground">
+                                        <Server className="h-4 w-4" />
+                                    </span>
+                                    <span className="flex-1">
+                                        {t("serverAdmin")}
+                                    </span>
+                                </Link>
+                            )}
                         </div>
                     )}
                     <SidebarNav

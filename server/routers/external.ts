@@ -54,6 +54,7 @@ import { build } from "@server/build";
 import { createStore } from "#dynamic/lib/rateLimitStore";
 import { logActionAudit } from "#dynamic/middlewares";
 import { checkRoundTripMessage } from "./ws";
+import * as labels from "@server/routers/labels";
 
 // Root routes
 export const unauthenticated = Router();
@@ -328,6 +329,14 @@ authenticated.get(
 );
 
 authenticated.get(
+    "/org/:orgId/site-resource/:siteResourceId",
+    verifyOrgAccess,
+    verifySiteResourceAccess,
+    verifyUserHasAction(ActionsEnum.getSiteResource),
+    siteResource.getSiteResource
+);
+
+authenticated.get(
     "/site-resource/:siteResourceId",
     verifySiteResourceAccess,
     verifyUserHasAction(ActionsEnum.getSiteResource),
@@ -471,6 +480,12 @@ authenticated.get(
 );
 
 authenticated.get(
+    "/org/:orgId/launcher/scale",
+    verifyOrgAccess,
+    launcher.listLauncherScale
+);
+
+authenticated.get(
     "/org/:orgId/launcher/resources",
     verifyOrgAccess,
     launcher.listLauncherResources
@@ -495,6 +510,12 @@ authenticated.get(
 );
 
 authenticated.post(
+    "/org/:orgId/launcher/invalidate-cache",
+    verifyOrgAccess,
+    launcher.invalidateLauncherCache
+);
+
+authenticated.post(
     "/org/:orgId/launcher/views",
     verifyOrgAccess,
     launcher.createLauncherView
@@ -504,6 +525,18 @@ authenticated.put(
     "/org/:orgId/launcher/views/:viewId",
     verifyOrgAccess,
     launcher.updateLauncherView
+);
+
+authenticated.put(
+    "/org/:orgId/launcher/default-view",
+    verifyOrgAccess,
+    launcher.upsertLauncherDefaultView
+);
+
+authenticated.delete(
+    "/org/:orgId/launcher/default-view",
+    verifyOrgAccess,
+    launcher.deleteLauncherDefaultView
 );
 
 authenticated.delete(
@@ -1302,6 +1335,48 @@ authenticated.get(
 );
 
 authenticated.get("/ws/round-trip-message/:messageId", checkRoundTripMessage);
+
+authenticated.get(
+    "/org/:orgId/labels",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.listOrgLabels),
+    labels.listOrgLabels
+);
+
+authenticated.post(
+    "/org/:orgId/labels",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.createOrgLabel),
+    labels.createOrgLabel
+);
+
+authenticated.patch(
+    "/org/:orgId/label/:labelId",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.updateOrgLabel),
+    labels.updateOrgLabel
+);
+
+authenticated.delete(
+    "/org/:orgId/label/:labelId",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.deleteOrgLabel),
+    labels.deleteOrgLabel
+);
+
+authenticated.put(
+    "/org/:orgId/label/:labelId/attach",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.attachLabelToItem),
+    labels.attachLabelToItem
+);
+
+authenticated.put(
+    "/org/:orgId/label/:labelId/detach",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.detachLabelFromItem),
+    labels.detachLabelFromItem
+);
 
 // Auth routes
 export const authRouter = Router();

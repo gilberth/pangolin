@@ -1695,6 +1695,7 @@ hybridRouter.get(
             ) {
                 for (const rule of rules) {
                     if (rule.match == "COUNTRY") {
+                        // @ts-expect-error this is for backward compatibility
                         rule.match = "GEOIP";
                     }
                 }

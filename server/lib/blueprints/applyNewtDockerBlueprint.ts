@@ -116,7 +116,7 @@ export async function applyNewtDockerBlueprint(
             source: "NEWT"
         });
     } catch (error) {
-        logger.error(`Failed to update database from config: ${error}`);
+        logger.debug(`Failed to update database from config: ${error}`);
         await sendToClient(newtId, {
             type: "newt/blueprint/results",
             data: {

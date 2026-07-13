@@ -39,7 +39,7 @@ export function ResourceSelector({
     const [debouncedSearchQuery] = useDebounce(resourceSearchQuery, 150);
 
     const { data: resources = [] } = useQuery(
-        orgQueries.resources({
+        orgQueries.proxyResources({
             orgId: orgId,
             query: debouncedSearchQuery,
             perPage: 10

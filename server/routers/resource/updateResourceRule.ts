@@ -27,6 +27,7 @@ const resourceRuleMatchSchema = z.enum([
     "IP",
     "PATH",
     "COUNTRY",
+    "COUNTRY_IS_NOT",
     "ASN",
     "REGION"
 ]);
@@ -144,6 +145,7 @@ export async function updateResourceRule(
             | "IP"
             | "PATH"
             | "COUNTRY"
+            | "COUNTRY_IS_NOT"
             | "ASN"
             | "REGION";
 

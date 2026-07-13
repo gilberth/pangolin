@@ -68,11 +68,14 @@ type LauncherSaveViewMenuProps = {
     isAdmin: boolean;
     isOrgWideView: boolean;
     hasUnsavedChanges: boolean;
+    canResetSystemDefault: boolean;
     onSaveToCurrent: () => void;
     onSaveAsNew: () => void;
     onSaveForEveryone: () => void;
     onMakePersonal: () => void;
     onResetView: () => void;
+    onResetSystemDefault: () => void;
+    onDeleteView: () => void;
 };
 
 export function LauncherSaveViewMenu({
@@ -80,13 +83,17 @@ export function LauncherSaveViewMenu({
     isAdmin,
     isOrgWideView,
     hasUnsavedChanges,
+    canResetSystemDefault,
     onSaveToCurrent,
     onSaveAsNew,
     onSaveForEveryone,
     onMakePersonal,
-    onResetView
+    onResetView,
+    onResetSystemDefault,
+    onDeleteView
 }: LauncherSaveViewMenuProps) {
     const t = useTranslations();
+    const canDeleteView = !isDefaultView && (isAdmin || !isOrgWideView);
 
     return (
         <DropdownMenu>
@@ -108,7 +115,26 @@ export function LauncherSaveViewMenu({
                         <DropdownMenuSeparator />
                     </>
                 ) : null}
-                {!isDefaultView && (isAdmin || !isOrgWideView) ? (
+                {isDefaultView && canResetSystemDefault ? (
+                    <>
+                        <DropdownMenuItem onSelect={onResetSystemDefault}>
+                            {t("resourceLauncherResetSystemDefault")}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                    </>
+                ) : null}
+                {isDefaultView && hasUnsavedChanges ? (
+                    <>
+                        <DropdownMenuItem onSelect={onSaveToCurrent}>
+                            {t("resourceLauncherSaveDefaultPersonal")}
+                        </DropdownMenuItem>
+                        {isAdmin ? (
+                            <DropdownMenuItem onSelect={onSaveForEveryone}>
+                                {t("resourceLauncherSaveForEveryone")}
+                            </DropdownMenuItem>
+                        ) : null}
+                    </>
+                ) : !isDefaultView && (isAdmin || !isOrgWideView) ? (
                     <DropdownMenuItem onSelect={onSaveToCurrent}>
                         {t("resourceLauncherSaveToCurrentView")}
                     </DropdownMenuItem>
@@ -125,6 +151,17 @@ export function LauncherSaveViewMenu({
                     <DropdownMenuItem onSelect={onMakePersonal}>
                         {t("resourceLauncherMakePersonal")}
                     </DropdownMenuItem>
+                ) : null}
+                {canDeleteView ? (
+                    <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                            onSelect={onDeleteView}
+                            className="text-destructive focus:text-destructive"
+                        >
+                            {t("resourceLauncherDeleteView")}
+                        </DropdownMenuItem>
+                    </>
                 ) : null}
             </DropdownMenuContent>
         </DropdownMenu>

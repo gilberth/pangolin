@@ -46,6 +46,15 @@ export async function deleteLauncherView(
             );
         }
 
+        if (existing.isDefault) {
+            return next(
+                createHttpError(
+                    HttpCode.BAD_REQUEST,
+                    "The default view cannot be deleted from here"
+                )
+            );
+        }
+
         const isPersonalView = existing.userId === userId;
         const isOrgWideView = existing.userId == null;
         const canManageOrgWide = await checkUserActionPermission(

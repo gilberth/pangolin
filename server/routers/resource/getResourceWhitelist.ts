@@ -96,13 +96,17 @@ export async function getResourceWhitelist(
             );
         }
 
-        const isInlinePolicy =
-            resource.resourcePolicyId === null &&
-            resource.defaultResourcePolicyId !== null;
+        // A shared policy takes precedence over the resource's inline
+        // (default) policy, which takes precedence over the resource's own
+        // direct whitelist fields. This mirrors the precedence used at
+        // request time in authWithWhitelist.ts / getResourceAuthInfo.ts.
+        const policyId =
+            resource.resourcePolicyId ?? resource.defaultResourcePolicyId;
 
-        const whitelist = isInlinePolicy
-            ? await queryPolicyWhitelist(resource.defaultResourcePolicyId!)
-            : await queryWhitelist(resourceId);
+        const whitelist =
+            policyId !== null
+                ? await queryPolicyWhitelist(policyId)
+                : await queryWhitelist(resourceId);
 
         return response<GetResourceWhitelistResponse>(res, {
             data: {

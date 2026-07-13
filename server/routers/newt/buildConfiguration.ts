@@ -52,13 +52,13 @@ export async function buildClientConfigurationForNewtClient(
             clientsRes
                 .filter((client) => {
                     if (!client.clients.pubKey) {
-                        logger.warn(
+                        logger.debug(
                             `Client ${client.clients.clientId} has no public key, skipping`
                         );
                         return false;
                     }
                     if (!client.clients.subnet) {
-                        logger.warn(
+                        logger.debug(
                             `Client ${client.clients.clientId} has no subnet, skipping`
                         );
                         return false;

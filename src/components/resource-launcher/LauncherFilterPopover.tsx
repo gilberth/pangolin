@@ -10,6 +10,7 @@ import {
     type SelectedLabel
 } from "@app/components/labels-selector";
 import { LabelsFilterSelector } from "@app/components/LabelsFilterSelector";
+import { Badge } from "@app/components/ui/badge";
 import { Button } from "@app/components/ui/button";
 import {
     Popover,
@@ -46,14 +47,14 @@ export function LauncherFilterPopover({
     const { data: labels = [] } = useQuery(
         launcherQueries.labels({
             orgId,
-            perPage: 500
+            perPage: 20
         })
     );
 
     const { data: sites = [] } = useQuery(
         launcherQueries.sites({
             orgId,
-            perPage: 500
+            perPage: 20
         })
     );
 
@@ -96,14 +97,32 @@ export function LauncherFilterPopover({
         [labels, selectedLabels]
     );
 
+    const activeFilterCount = selectedSites.length + selectedLabels.length;
+
     return (
         <Popover modal={false}>
             <PopoverTrigger asChild>
-                <Button variant="outline" size="icon" className="shrink-0">
+                <Button
+                    variant="outline"
+                    size="icon"
+                    className="relative shrink-0"
+                >
                     <Funnel className="size-4" />
                     <span className="sr-only">
-                        {t("resourceLauncherFilter")}
+                        {activeFilterCount > 0
+                            ? t("resourceLauncherFilterWithCount", {
+                                  count: activeFilterCount
+                              })
+                            : t("resourceLauncherFilter")}
                     </span>
+                    {activeFilterCount > 0 && (
+                        <Badge
+                            variant="secondary"
+                            className="absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center px-1.5 text-xs"
+                        >
+                            {activeFilterCount > 99 ? "99+" : activeFilterCount}
+                        </Badge>
+                    )}
                 </Button>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-72">
@@ -139,6 +158,10 @@ export function LauncherFilterPopover({
                                     selectedSites={resolvedSelectedSites}
                                     onSelectionChange={onSitesChange}
                                     scope="launcher"
+                                    showClear={selectedSites.length > 0}
+                                    onClear={() => {
+                                        onSitesChange([]);
+                                    }}
                                 />
                             </PopoverContent>
                         </Popover>
@@ -172,6 +195,7 @@ export function LauncherFilterPopover({
                                 <LabelsFilterSelector
                                     orgId={orgId}
                                     scope="launcher"
+                                    selectedLabels={resolvedSelectedLabels}
                                     isSelected={(label) =>
                                         selectedLabelIds.has(label.labelId)
                                     }

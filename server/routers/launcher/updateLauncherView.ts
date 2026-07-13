@@ -66,6 +66,15 @@ export async function updateLauncherView(
             );
         }
 
+        if (existing.isDefault) {
+            return next(
+                createHttpError(
+                    HttpCode.BAD_REQUEST,
+                    "Use the default view save endpoint for this view"
+                )
+            );
+        }
+
         const isPersonalView = existing.userId === userId;
         const isOrgWideView = existing.userId == null;
         const canManageOrgWide = await checkUserActionPermission(
@@ -135,7 +144,8 @@ export async function updateLauncherView(
                 ),
                 createdAt: updated.createdAt,
                 updatedAt: updated.updatedAt,
-                isOrgWide: updated.userId == null
+                isOrgWide: updated.userId == null,
+                isDefault: updated.isDefault
             },
             success: true,
             error: false,

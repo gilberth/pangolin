@@ -55,7 +55,7 @@ const createSiteResourceSchema = z
         siteIds: z.array(z.int()).optional(),
         siteId: z.number().int().positive().optional(), // DEPRECATED: for backward compatibility, we will convert this to siteIds array if provided
         destinationPort: z.int().positive().optional(),
-        destination: z.string().min(1).optional(),
+        destination: z.string().min(1).nullish(),
         enabled: z.boolean().default(true),
         alias: z
             .string()
@@ -161,7 +161,8 @@ const createSiteResourceSchema = z
                 return true;
             }
             return (
-                data.destination !== undefined && data.destination.trim() !== ""
+                data.destination !== undefined &&
+                data.destination?.trim() !== ""
             );
         },
         {

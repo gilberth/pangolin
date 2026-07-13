@@ -736,11 +736,14 @@ export async function verifyResourceSession(
             }
         }
 
-        // If headerAuthExtendedCompatibility is activated but no clientHeaderAuth provided, force client to challenge
+        // If headerAuthExtendedCompatibility is activated but no clientHeaderAuth provided, force client to challenge.
+        // Skip the challenge when SSO is also enabled so browsers get the SSO redirect instead of a native Basic
+        // Auth dialog; clients that proactively send Authorization: Basic are still accepted above.
         if (
             headerAuthExtendedCompatibility &&
             headerAuthExtendedCompatibility.extendedCompatibilityIsActivated &&
-            !clientHeaderAuth
+            !clientHeaderAuth &&
+            !sso
         ) {
             return headerAuthChallenged(res, redirectPath, resource.orgId);
         }
@@ -1054,7 +1057,10 @@ async function checkRules(
             isPathAllowed(rule.value, path)
         ) {
             return rule.action as any;
-        } else if (clientIp && rule.match == "COUNTRY") {
+        } else if (
+            clientIp &&
+            (rule.match === "COUNTRY" || rule.match === "COUNTRY_IS_NOT")
+        ) {
             // COUNTRY=ALL should not affect local/private/CGNAT addresses.
             if (
                 rule.value.toUpperCase() === "ALL" &&
@@ -1063,7 +1069,10 @@ async function checkRules(
                 continue;
             }
 
-            if (await isIpInGeoIP(ipCC, rule.value)) {
+            const inCountry = await isIpInGeoIP(ipCC, rule.value);
+            const matched = rule.match === "COUNTRY" ? inCountry : !inCountry;
+
+            if (matched) {
                 return rule.action as any;
             }
         } else if (clientIp && rule.match == "ASN") {

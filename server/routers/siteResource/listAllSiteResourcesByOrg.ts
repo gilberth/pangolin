@@ -286,11 +286,6 @@ export async function listAllSiteResourcesByOrg(
             labels: labelFilter
         } = parsedQuery.data;
 
-        const isLabelFeatureEnabled = await isLicensedOrSubscribed(
-            orgId,
-            tierMatrix.labels
-        );
-
         const conditions = [and(eq(siteResources.orgId, orgId))];
 
         if (siteId != null) {
@@ -320,7 +315,7 @@ export async function listAllSiteResourcesByOrg(
             conditions.push(eq(siteResources.mode, mode));
         }
 
-        if (isLabelFeatureEnabled && labelFilter && labelFilter.length > 0) {
+        if (labelFilter && labelFilter.length > 0) {
             conditions.push(
                 inArray(
                     siteResources.siteResourceId,
@@ -344,24 +339,19 @@ export async function listAllSiteResourcesByOrg(
                 like(sql`LOWER(${siteResources.destination})`, q),
                 like(sql`LOWER(${siteResources.alias})`, q),
                 like(sql`LOWER(${siteResources.aliasAddress})`, q),
-                like(sql`LOWER(${sites.name})`, q)
+                like(sql`LOWER(${sites.name})`, q),
+                inArray(
+                    siteResources.siteResourceId,
+                    db
+                        .select({ id: siteResourceLabels.siteResourceId })
+                        .from(siteResourceLabels)
+                        .innerJoin(
+                            labels,
+                            eq(labels.labelId, siteResourceLabels.labelId)
+                        )
+                        .where(like(sql`LOWER(${labels.name})`, q))
+                )
             ];
-
-            if (isLabelFeatureEnabled) {
-                queryList.push(
-                    inArray(
-                        siteResources.siteResourceId,
-                        db
-                            .select({ id: siteResourceLabels.siteResourceId })
-                            .from(siteResourceLabels)
-                            .innerJoin(
-                                labels,
-                                eq(labels.labelId, siteResourceLabels.labelId)
-                            )
-                            .where(like(sql`LOWER(${labels.name})`, q))
-                    )
-                );
-            }
 
             conditions.push(or(...queryList));
         }
@@ -403,7 +393,7 @@ export async function listAllSiteResourcesByOrg(
             siteResourceId: number;
         }> = [];
 
-        if (isLabelFeatureEnabled && siteResourceIdList.length > 0) {
+        if (siteResourceIdList.length > 0) {
             labelsForSiteResources = await db
                 .select({
                     labelId: labels.labelId,

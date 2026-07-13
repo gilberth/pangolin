@@ -151,7 +151,6 @@ export default function PublicResourcesTable({
         useState<ResourceRow | null>();
 
     const { isPaidUser } = usePaidStatus();
-    const isLabelFeatureEnabled = isPaidUser(tierMatrix.labels);
 
     const [isRefreshing, startTransition] = useTransition();
     const [isNavigatingToAddPage, startNavigation] = useTransition();
@@ -553,6 +552,24 @@ export default function PublicResourcesTable({
                 )
             },
             {
+                id: "labels",
+                accessorKey: "labels",
+                header: () => (
+                    <LabelColumnFilterButton
+                        orgId={orgId}
+                        selectedValues={searchParams.getAll("labels")}
+                        onSelectedValuesChange={(value) =>
+                            handleFilterChange("labels", value)
+                        }
+                        label={t("labels")}
+                        className="p-3"
+                    />
+                ),
+                cell: ({ row }: { row: { original: ResourceRow } }) => (
+                    <ResourceLabelCell resource={row.original} orgId={orgId} />
+                )
+            },
+            {
                 id: "actions",
                 enableHiding: false,
                 header: () => <span className="p-3"></span>,
@@ -607,29 +624,8 @@ export default function PublicResourcesTable({
             }
         ];
 
-        if (isLabelFeatureEnabled) {
-            cols.splice(cols.length - 1, 0, {
-                id: "labels",
-                accessorKey: "labels",
-                header: () => (
-                    <LabelColumnFilterButton
-                        orgId={orgId}
-                        selectedValues={searchParams.getAll("labels")}
-                        onSelectedValuesChange={(value) =>
-                            handleFilterChange("labels", value)
-                        }
-                        label={t("labels")}
-                        className="p-3"
-                    />
-                ),
-                cell: ({ row }: { row: { original: ResourceRow } }) => (
-                    <ResourceLabelCell resource={row.original} orgId={orgId} />
-                )
-            });
-        }
-
         return cols;
-    }, [isLabelFeatureEnabled, orgId, t, searchParams]);
+    }, [orgId, t, searchParams]);
 
     function handleFilterChange(
         column: string,

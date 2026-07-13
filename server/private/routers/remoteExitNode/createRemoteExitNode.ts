@@ -114,8 +114,6 @@ export async function createRemoteExitNode(
         }
 
         const secretHash = await hashPassword(secret);
-        // const address = await getNextAvailableSubnet();
-        const address = "100.89.140.1/24"; // FOR NOW LETS HARDCODE THESE ADDRESSES
 
         const [existingRemoteExitNode] = await db
             .select()
@@ -191,89 +189,106 @@ export async function createRemoteExitNode(
             );
         }
 
-        await db.transaction(async (trx) => {
-            if (!existingExitNode) {
-                const [res] = await trx
-                    .insert(exitNodes)
-                    .values({
-                        name: remoteExitNodeId,
-                        address,
-                        endpoint: "",
-                        publicKey: "",
-                        listenPort: 0,
-                        online: false,
-                        type: "remoteExitNode"
-                    })
-                    .returning();
-                existingExitNode = res;
-            }
+        // If this remote exit node isn't already backing an exit node in
+        // another org, we're about to create a brand new one. Reserve a
+        // subnet for it up front so the allocation lock is held across the
+        // whole insert - this guarantees exit node subnets never overlap,
+        // even under concurrent creation, which matters for HA setups.
+        let releaseSubnetLock: (() => Promise<void>) | null = null;
+        let newExitNodeAddress: string | null = null;
+        if (!existingExitNode) {
+            const { value, release } = await getNextAvailableSubnet();
+            newExitNodeAddress = value;
+            releaseSubnetLock = release;
+        }
 
-            if (!existingRemoteExitNode) {
-                await trx.insert(remoteExitNodes).values({
-                    remoteExitNodeId: remoteExitNodeId,
-                    secretHash,
-                    dateCreated: moment().toISOString(),
-                    exitNodeId: existingExitNode.exitNodeId
-                });
-            } else {
-                // update the existing remote exit node
-                await trx
-                    .update(remoteExitNodes)
-                    .set({
-                        exitNodeId: existingExitNode.exitNodeId
-                    })
-                    .where(
-                        eq(
-                            remoteExitNodes.remoteExitNodeId,
-                            existingRemoteExitNode.remoteExitNodeId
-                        )
-                    );
-            }
-
-            if (!existingExitNodeOrg) {
-                await trx.insert(exitNodeOrgs).values({
-                    exitNodeId: existingExitNode.exitNodeId,
-                    orgId: orgId
-                });
-            }
-
-            // calculate if the node is in any other of the orgs before we count it as an add to the billing org
-            if (org.billingOrgId) {
-                const otherBillingOrgs = await trx
-                    .select()
-                    .from(orgs)
-                    .where(
-                        and(
-                            eq(orgs.billingOrgId, org.billingOrgId),
-                            ne(orgs.orgId, orgId)
-                        )
-                    );
-
-                const billingOrgIds = otherBillingOrgs.map((o) => o.orgId);
-
-                const orgsInBillingDomainThatTheNodeIsStillIn = await trx
-                    .select()
-                    .from(exitNodeOrgs)
-                    .where(
-                        and(
-                            eq(
-                                exitNodeOrgs.exitNodeId,
-                                existingExitNode.exitNodeId
-                            ),
-                            inArray(exitNodeOrgs.orgId, billingOrgIds)
-                        )
-                    );
-
-                if (orgsInBillingDomainThatTheNodeIsStillIn.length === 0) {
-                    await usageService.add(
-                        orgId,
-                        LimitId.REMOTE_EXIT_NODES,
-                        1,
-                        trx
-                    );
+        try {
+            await db.transaction(async (trx) => {
+                if (!existingExitNode) {
+                    const [res] = await trx
+                        .insert(exitNodes)
+                        .values({
+                            name: remoteExitNodeId,
+                            address: newExitNodeAddress!,
+                            endpoint: "",
+                            publicKey: "",
+                            listenPort: 0,
+                            online: false,
+                            type: "remoteExitNode"
+                        })
+                        .returning();
+                    existingExitNode = res;
                 }
-            }
-        });
+
+                if (!existingRemoteExitNode) {
+                    await trx.insert(remoteExitNodes).values({
+                        remoteExitNodeId: remoteExitNodeId,
+                        secretHash,
+                        dateCreated: moment().toISOString(),
+                        exitNodeId: existingExitNode.exitNodeId
+                    });
+                } else {
+                    // update the existing remote exit node
+                    await trx
+                        .update(remoteExitNodes)
+                        .set({
+                            exitNodeId: existingExitNode.exitNodeId
+                        })
+                        .where(
+                            eq(
+                                remoteExitNodes.remoteExitNodeId,
+                                existingRemoteExitNode.remoteExitNodeId
+                            )
+                        );
+                }
+
+                if (!existingExitNodeOrg) {
+                    await trx.insert(exitNodeOrgs).values({
+                        exitNodeId: existingExitNode.exitNodeId,
+                        orgId: orgId
+                    });
+                }
+
+                // calculate if the node is in any other of the orgs before we count it as an add to the billing org
+                if (org.billingOrgId) {
+                    const otherBillingOrgs = await trx
+                        .select()
+                        .from(orgs)
+                        .where(
+                            and(
+                                eq(orgs.billingOrgId, org.billingOrgId),
+                                ne(orgs.orgId, orgId)
+                            )
+                        );
+
+                    const billingOrgIds = otherBillingOrgs.map((o) => o.orgId);
+
+                    const orgsInBillingDomainThatTheNodeIsStillIn = await trx
+                        .select()
+                        .from(exitNodeOrgs)
+                        .where(
+                            and(
+                                eq(
+                                    exitNodeOrgs.exitNodeId,
+                                    existingExitNode.exitNodeId
+                                ),
+                                inArray(exitNodeOrgs.orgId, billingOrgIds)
+                            )
+                        );
+
+                    if (orgsInBillingDomainThatTheNodeIsStillIn.length === 0) {
+                        await usageService.add(
+                            orgId,
+                            LimitId.REMOTE_EXIT_NODES,
+                            1,
+                            trx
+                        );
+                    }
+                }
+            });
+        } finally {
+            await releaseSubnetLock?.();
+        }
 
         const token = generateSessionToken();
         await createRemoteExitNodeSession(token, remoteExitNodeId);

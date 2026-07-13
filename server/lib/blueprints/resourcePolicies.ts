@@ -347,12 +347,13 @@ function getRuleAction(input: string): "ACCEPT" | "DROP" | "PASS" {
 
 function getRuleMatch(
     input: string
-): "CIDR" | "IP" | "PATH" | "COUNTRY" | "ASN" | "REGION" {
+): "CIDR" | "IP" | "PATH" | "COUNTRY" | "COUNTRY_IS_NOT" | "ASN" | "REGION" {
     return input.toUpperCase() as
         | "CIDR"
         | "IP"
         | "PATH"
         | "COUNTRY"
+        | "COUNTRY_IS_NOT"
         | "ASN"
         | "REGION";
 }
