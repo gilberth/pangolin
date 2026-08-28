@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import ProfileIcon from "@app/components/ProfileIcon";
 import ThemeSwitcher from "@app/components/ThemeSwitcher";
 import { useTheme } from "next-themes";
@@ -13,6 +14,8 @@ import { LauncherOrgSelector } from "@app/components/resource-launcher/LauncherO
 import { Button } from "@app/components/ui/button";
 import { useTranslations } from "next-intl";
 import { CommandPaletteTrigger } from "@app/components/command-palette/CommandPaletteTrigger";
+import type { SidebarNavItem } from "@app/components/SidebarNav";
+import { cn } from "@app/lib/cn";
 
 type LayoutHeaderProps = {
     showTopBar: boolean;
@@ -20,6 +23,7 @@ type LayoutHeaderProps = {
     orgId?: string;
     orgs?: ListUserOrgsResponse["orgs"];
     showViewAsAdmin?: boolean;
+    launcherNavItems?: SidebarNavItem[];
 };
 
 export function LayoutHeader({
@@ -27,13 +31,15 @@ export function LayoutHeader({
     launcherMode = false,
     orgId,
     orgs,
-    showViewAsAdmin = false
+    showViewAsAdmin = false,
+    launcherNavItems = []
 }: LayoutHeaderProps) {
     const { theme } = useTheme();
     const [path, setPath] = useState<string>("");
     const { env } = useEnvContext();
     const { isUnlocked } = useLicenseStatusContext();
     const t = useTranslations();
+    const pathname = usePathname();
 
     const logoWidth = isUnlocked()
         ? env.branding.logo?.navbar?.width || 98
@@ -85,6 +91,42 @@ export function LayoutHeader({
                                         orgId={orgId}
                                         orgs={orgs}
                                     />
+                                    {orgId
+                                        ? launcherNavItems
+                                              .filter((item) => item.href)
+                                              .map((item) => {
+                                                  const href =
+                                                      item.href!.replace(
+                                                          "{orgId}",
+                                                          orgId
+                                                      );
+                                                  const isActive =
+                                                      href === `/${orgId}`
+                                                          ? pathname === href
+                                                          : pathname === href ||
+                                                            pathname?.startsWith(
+                                                                `${href}/`
+                                                            );
+
+                                                  return (
+                                                      <Button
+                                                          key={href}
+                                                          variant="text"
+                                                          size="sm"
+                                                          className={cn(
+                                                              "p-0",
+                                                              isActive &&
+                                                                  "text-foreground font-medium underline-offset-4 underline"
+                                                          )}
+                                                          asChild
+                                                      >
+                                                          <Link href={href}>
+                                                              {t(item.title)}
+                                                          </Link>
+                                                      </Button>
+                                                  );
+                                              })
+                                        : null}
                                     {showViewAsAdmin && orgId ? (
                                         <Button
                                             variant="text"

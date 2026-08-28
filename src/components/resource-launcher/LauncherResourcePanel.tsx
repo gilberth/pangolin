@@ -1,5 +1,6 @@
 "use client";
 
+import { AiClientConfigSection } from "@app/components/ai-client-config/AiClientConfigSection";
 import CopyToClipboard from "@app/components/CopyToClipboard";
 import {
     InfoSection,
@@ -7,7 +8,9 @@ import {
     InfoSections,
     InfoSectionTitle
 } from "@app/components/InfoSection";
-import { SiteResourceInfoSections } from "@app/components/SiteResourceInfoBox";
+import { PrivateResourceInfoSections } from "@app/components/PrivateResourceInfoBox";
+import { LauncherInferenceApiKeysSection } from "@app/components/resource-launcher/LauncherInferenceApiKeysSection";
+import { LauncherInferenceModelsSection } from "@app/components/resource-launcher/LauncherInferenceModelsSection";
 import {
     SettingsSection,
     SettingsSectionBody,
@@ -25,6 +28,7 @@ import {
 } from "@app/components/SidePanel";
 import { Alert, AlertDescription, AlertTitle } from "@app/components/ui/alert";
 import { Button } from "@app/components/ui/button";
+import { useMyVirtualApiKeySecret } from "@app/hooks/useMyVirtualApiKeySecret";
 import {
     derivePublicAuthState,
     formatPublicResourceType
@@ -146,7 +150,8 @@ function HealthStatusDisplay({
     );
 }
 
-const PUBLIC_AUTH_BROWSER_MODES = ["http", "ssh", "rdp", "vnc"];
+const PUBLIC_AUTH_METHODS_MODES = ["http", "ssh", "rdp", "vnc"];
+const PUBLIC_AUTH_BADGE_MODES = [...PUBLIC_AUTH_METHODS_MODES, "inference"];
 
 function AuthMethodStatusDisplay({ enabled }: { enabled: boolean }) {
     const t = useTranslations();
@@ -227,20 +232,33 @@ function PublicResourceAuthMethods({
 }
 
 function PublicResourceDetails({
+    orgId,
     launcherResource,
     resource,
     authInfo
 }: {
+    orgId: string;
     launcherResource: LauncherResource;
     resource: GetResourceResponse;
     authInfo: GetResourceAuthInfoResponse;
 }) {
     const t = useTranslations();
-    const supportsAuth = PUBLIC_AUTH_BROWSER_MODES.includes(
-        resource.mode || ""
-    );
+    const mode = resource.mode || "";
+    const isInference = mode === "inference";
+    const showAuthBadge = PUBLIC_AUTH_BADGE_MODES.includes(mode);
+    const showAuthMethods = PUBLIC_AUTH_METHODS_MODES.includes(mode);
+    const showHealth = !isInference;
     const authState = derivePublicAuthState(resource.mode, authInfo);
-    const infoSectionCount = supportsAuth ? 4 : 3;
+    const infoSectionCount = 2 + (showAuthBadge ? 1 : 0) + (showHealth ? 1 : 0);
+
+    const { data: aiKeysData } = useQuery({
+        ...launcherQueries.myVirtualApiKeys(orgId, resource.resourceGuid),
+        enabled: isInference
+    });
+    const { getCopyText: getAiKeyCopyText } = useMyVirtualApiKeySecret(
+        orgId,
+        aiKeysData?.userKey.virtualApiKeyId ?? ""
+    );
 
     return (
         <div className="space-y-4">
@@ -275,7 +293,7 @@ function PublicResourceDetails({
                                 />
                             </InfoSectionContent>
                         </InfoSection>
-                        {supportsAuth ? (
+                        {showAuthBadge ? (
                             <InfoSection>
                                 <InfoSectionTitle>
                                     {t("authentication")}
@@ -295,30 +313,64 @@ function PublicResourceDetails({
                                 </InfoSectionContent>
                             </InfoSection>
                         ) : null}
-                        <InfoSection>
-                            <InfoSectionTitle>{t("health")}</InfoSectionTitle>
-                            <InfoSectionContent>
-                                <HealthStatusDisplay health={resource.health} />
-                            </InfoSectionContent>
-                        </InfoSection>
+                        {showHealth ? (
+                            <InfoSection>
+                                <InfoSectionTitle>
+                                    {t("health")}
+                                </InfoSectionTitle>
+                                <InfoSectionContent>
+                                    <HealthStatusDisplay
+                                        health={resource.health}
+                                    />
+                                </InfoSectionContent>
+                            </InfoSection>
+                        ) : null}
                     </InfoSections>
                 </SettingsSectionBody>
             </SettingsSection>
-            {supportsAuth ? (
+            {showAuthMethods ? (
                 <PublicResourceAuthMethods authInfo={authInfo} />
+            ) : null}
+            {isInference ? (
+                <>
+                    <LauncherInferenceModelsSection
+                        orgId={orgId}
+                        params={{
+                            resourceType: "public",
+                            resourceId: resource.resourceId
+                        }}
+                    />
+                    <LauncherInferenceApiKeysSection
+                        orgId={orgId}
+                        resourceGuid={resource.resourceGuid}
+                    />
+                    {aiKeysData ? (
+                        <AiClientConfigSection
+                            endpoint={launcherResource.accessUrl ?? ""}
+                            auth={{
+                                mode: "keyed",
+                                getKeyText: getAiKeyCopyText
+                            }}
+                            resourceNiceId={launcherResource.niceId}
+                        />
+                    ) : null}
+                </>
             ) : null}
         </div>
     );
 }
 
 function PrivateResourceDetails({
+    orgId,
     launcherResource,
     resource
 }: {
+    orgId: string;
     launcherResource: LauncherResource;
     resource: GetSiteResourceResponse;
 }) {
     const t = useTranslations();
+    const isInference = resource.mode === "inference";
 
     return (
         <div className="space-y-4">
@@ -353,7 +405,7 @@ function PrivateResourceDetails({
                     </SettingsSectionDescription>
                 </SettingsSectionHeader>
                 <SettingsSectionBody>
-                    <SiteResourceInfoSections
+                    <PrivateResourceInfoSections
                         siteResource={resource}
                         access={{
                             accessDisplay: launcherResource.accessDisplay,
@@ -365,6 +417,22 @@ function PrivateResourceDetails({
                     />
                 </SettingsSectionBody>
             </SettingsSection>
+            {isInference ? (
+                <>
+                    <LauncherInferenceModelsSection
+                        orgId={orgId}
+                        params={{
+                            resourceType: "site",
+                            siteResourceId: resource.siteResourceId
+                        }}
+                    />
+                    <AiClientConfigSection
+                        endpoint={launcherResource.accessUrl ?? ""}
+                        auth={{ mode: "keyless" }}
+                        resourceNiceId={launcherResource.niceId}
+                    />
+                </>
+            ) : null}
         </div>
     );
 }
@@ -405,6 +473,7 @@ function LauncherResourcePanelBody({
     if (detail.resourceType === "public") {
         return (
             <PublicResourceDetails
+                orgId={orgId}
                 launcherResource={resource}
                 resource={detail.data}
                 authInfo={detail.authInfo}
@@ -414,6 +483,7 @@ function LauncherResourcePanelBody({
 
     return (
         <PrivateResourceDetails
+            orgId={orgId}
             launcherResource={resource}
             resource={detail.data}
         />

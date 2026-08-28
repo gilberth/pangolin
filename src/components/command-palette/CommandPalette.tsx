@@ -475,7 +475,7 @@ function CommandPaletteProviderInner({
 
         function onKeyDown(event: KeyboardEvent) {
             if (
-                event.key.toLowerCase() !== "k" ||
+                event.key?.toLowerCase() !== "k" ||
                 !(event.metaKey || event.ctrlKey)
             ) {
                 return;

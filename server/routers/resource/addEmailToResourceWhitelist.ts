@@ -34,6 +34,39 @@ registry.registerPath({
     method: "post",
     path: "/resource/{resourceId}/whitelist/add",
     description: "Add a single email to the resource whitelist.",
+    tags: [OpenAPITags.PublicResourceLegacy],
+    request: {
+        params: addEmailToResourceWhitelistParamsSchema,
+        body: {
+            content: {
+                "application/json": {
+                    schema: addEmailToResourceWhitelistBodySchema
+                }
+            }
+        }
+    },
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
+});
+
+registry.registerPath({
+    method: "post",
+    path: "/public-resource/{resourceId}/whitelist/add",
+    description: "Add a single email to the resource whitelist.",
     tags: [OpenAPITags.PublicResource],
     request: {
         params: addEmailToResourceWhitelistParamsSchema,
@@ -144,10 +177,7 @@ export async function addEmailToResourceWhitelist(
                 .from(resourcePolicyWhiteList)
                 .where(
                     and(
-                        eq(
-                            resourcePolicyWhiteList.resourcePolicyId,
-                            policyId
-                        ),
+                        eq(resourcePolicyWhiteList.resourcePolicyId, policyId),
                         eq(resourcePolicyWhiteList.email, email)
                     )
                 );

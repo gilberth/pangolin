@@ -45,18 +45,19 @@ function userResourceAliasesCacheKey(
     page: number,
     pageSize: number,
     includeLabels: boolean,
-    labelFilter: string[]
+    labelFilter: string[],
+    status?: "pending" | "approved"
 ) {
     const labelsKey =
         labelFilter.length > 0 ? labelFilter.slice().sort().join(",") : "all";
-    return `userResourceAliases:${orgId}:${userId}:${page}:${pageSize}:${includeLabels ? "labels" : "plain"}:${labelsKey}`;
+    return `userResourceAliases:${orgId}:${userId}:${page}:${pageSize}:${includeLabels ? "labels" : "plain"}:${labelsKey}:${status ?? "all"}`;
 }
 
 const listUserResourceAliasesParamsSchema = z.strictObject({
     orgId: z.string()
 });
 
-const listUserResourceAliasesQuerySchema = z.strictObject({
+const listUserResourceAliasesQuerySchema = z.object({
     pageSize: z.coerce
         .number<string>()
         .int()
@@ -96,7 +97,16 @@ const listUserResourceAliasesQuerySchema = z.strictObject({
         type: "array",
         description:
             "Filter by resource labels. A resource matches when it has any of the given labels (OR)."
-    })
+    }),
+    status: z
+        .enum(["pending", "approved"])
+        .optional()
+        .catch(undefined)
+        .openapi({
+            type: "string",
+            enum: ["pending", "approved"],
+            description: "Filter by site resource status"
+        })
 });
 
 export type UserResourceAliasItem = {
@@ -130,7 +140,8 @@ export async function listUserResourceAliases(
             page,
             pageSize,
             includeLabels,
-            labels: labelFilter
+            labels: labelFilter,
+            status
         } = parsedQuery.data;
 
         const parsedParams = listUserResourceAliasesParamsSchema.safeParse(
@@ -172,7 +183,8 @@ export async function listUserResourceAliases(
             page,
             pageSize,
             includeLabels,
-            labelFilter ?? []
+            labelFilter ?? [],
+            status
         );
         const cachedData: ListUserResourceAliasesResponse | undefined =
             await cache.get(cacheKey);
@@ -256,6 +268,10 @@ export async function listUserResourceAliases(
             ne(siteResources.alias, ""),
             inArray(siteResources.siteResourceId, accessibleSiteResourceIds)
         ];
+
+        if (typeof status !== "undefined") {
+            whereConditions.push(eq(siteResources.status, status));
+        }
 
         if (labelFilter && labelFilter.length > 0) {
             whereConditions.push(

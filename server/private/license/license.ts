@@ -105,11 +105,18 @@ rQIDAQAB
     }
 
     public async forceRecheck() {
-        this.statusCache.flushAll();
-        this.licenseKeyCache.flushAll();
         this.phoneHomeFailureCount = 0;
 
-        return await this.check();
+        // Force a fresh check without discarding the last known good cache
+        // up front — check() only replaces the cache once it has a fresh
+        // result, so a failed recheck (e.g. a transient server error) won't
+        // leave listKeys()/status looking empty in the meantime.
+        this.doRecheck = true;
+        try {
+            return await this.check();
+        } finally {
+            this.doRecheck = false;
+        }
     }
 
     public async isUnlocked(): Promise<boolean> {
@@ -178,16 +185,25 @@ rQIDAQAB
             }
 
             let foundHostKey = false;
+            // Keys that fully decrypted, to phone home with. A row that
+            // fails to decrypt (e.g. stored under a different server
+            // secret) is marked invalid below but excluded here, so it
+            // can't take down validation for every other key in the batch.
+            const keys: { licenseKey: string; instanceId: string }[] = [];
             // Validate stored license keys
             for (const key of allKeysRes) {
                 try {
-                    // Decrypt the license key and token
+                    // Decrypt the license key, token, and instance ID
                     const decryptedKey = decrypt(
                         key.licenseKeyId,
                         this.serverSecret
                     );
                     const decryptedToken = decrypt(
                         key.token,
+                        this.serverSecret
+                    );
+                    const decryptedInstanceId = decrypt(
+                        key.instanceId,
                         this.serverSecret
                     );
 
@@ -211,6 +227,11 @@ rQIDAQAB
                     if (payload.type === "host") {
                         foundHostKey = true;
                     }
+
+                    keys.push({
+                        licenseKey: decryptedKey,
+                        instanceId: decryptedInstanceId
+                    });
                 } catch (e) {
                     logger.error(
                         `Error validating license key: ${key.licenseKeyId}`
@@ -230,37 +251,36 @@ rQIDAQAB
                 status.isHostLicensed = false;
             }
 
-            const keys = allKeysRes.map((key) => ({
-                licenseKey: decrypt(key.licenseKeyId, this.serverSecret),
-                instanceId: decrypt(key.instanceId, this.serverSecret)
-            }));
-
             let apiResponse: ValidateLicenseAPIResponse | undefined;
-            try {
-                // Phone home to validate license keys
-                apiResponse = await this.phoneHome(keys, false);
+            if (keys.length > 0) {
+                try {
+                    // Phone home to validate license keys
+                    apiResponse = await this.phoneHome(keys, false);
 
-                if (!apiResponse?.success) {
-                    throw new Error(apiResponse?.error);
-                }
-                // Reset failure count on success
-                this.phoneHomeFailureCount = 0;
-            } catch (e) {
-                this.phoneHomeFailureCount++;
-                if (this.phoneHomeFailureCount === 1) {
-                    // First failure: fail silently
-                    logger.error("Error communicating with license server:");
-                    logger.error(e);
-                    logger.error(
-                        `Allowing failure. Will retry one more time at next run interval.`
-                    );
-                    // return last known good status
-                    return this.statusCache.get(
-                        this.statusKey
-                    ) as LicenseStatus;
-                } else {
-                    // Subsequent failures: fail abruptly
-                    throw e;
+                    if (!apiResponse?.success) {
+                        throw new Error(apiResponse?.error);
+                    }
+                    // Reset failure count on success
+                    this.phoneHomeFailureCount = 0;
+                } catch (e) {
+                    this.phoneHomeFailureCount++;
+                    if (this.phoneHomeFailureCount === 1) {
+                        // First failure: fail silently
+                        logger.error(
+                            "Error communicating with license server:"
+                        );
+                        logger.error(e);
+                        logger.error(
+                            `Allowing failure. Will retry one more time at next run interval.`
+                        );
+                        // return last known good status
+                        return this.statusCache.get(
+                            this.statusKey
+                        ) as LicenseStatus;
+                    } else {
+                        // Subsequent failures: fail abruptly
+                        throw e;
+                    }
                 }
             }
 

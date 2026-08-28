@@ -80,7 +80,8 @@ export default async function SettingsLayout(props: SettingsLayoutProps) {
                 orgId={params.orgId}
                 orgs={orgs}
                 navItems={orgNavSections(env, {
-                    isPrimaryOrg: primaryOrg
+                    isPrimaryOrg: primaryOrg,
+                    isServerAdmin: user.serverAdmin
                 })}
                 commandNavItems={commandBarNavSections(env, {
                     isPrimaryOrg: primaryOrg

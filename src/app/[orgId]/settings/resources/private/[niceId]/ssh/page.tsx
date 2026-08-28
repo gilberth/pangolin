@@ -12,35 +12,30 @@ import {
     SettingsFormGrid
 } from "@app/components/Settings";
 import { SshServerSettingsFields } from "@app/components/SshServerSettingsFields";
-import { PaidFeaturesAlert } from "@app/components/PaidFeaturesAlert";
 import { Button } from "@app/components/ui/button";
 import { Form } from "@app/components/ui/form";
-import { usePaidStatus } from "@app/hooks/usePaidStatus";
 import {
     createSshFormSchema,
     inferSshPamMode
 } from "@app/lib/privateResourceForm";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { tierMatrix } from "@server/lib/billing/tierMatrix";
 import { useTranslations } from "next-intl";
 import { useActionState, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { PrivateResourceSshFields } from "../../PrivateResourceSshFields";
-import { buildSelectedSitesForResource } from "../../privateResourceUtils";
+import { PrivateResourceSshFields } from "@app/components/PrivateResourceSshFields";
+import type { Selectedsite } from "@app/components/site-selector";
+import { useSaveSiteResource } from "@app/hooks/useSaveSiteResource";
 import {
     asAnyControl,
     asAnySetValue,
     asAnyWatch
-} from "../../formControlUtils";
-import { useSaveSiteResource } from "../../useSaveSiteResource";
-import type { Selectedsite } from "@app/components/site-selector";
+} from "@app/lib/formControlUtils";
+import { buildSelectedSitesForResource } from "@app/lib/privateResourceUtils";
 
 export default function PrivateResourceSshPage() {
     const t = useTranslations();
     const { save, siteResource } = useSaveSiteResource();
-    const { isPaidUser } = usePaidStatus();
-    const sshSectionDisabled = !isPaidUser(tierMatrix.advancedPrivateResources);
     const isNative = siteResource.authDaemonMode === "native";
     const [sshServerMode] = useState<"standard" | "native">(
         isNative ? "native" : "standard"
@@ -150,7 +145,6 @@ export default function PrivateResourceSshPage() {
 
     return (
         <SettingsContainer>
-            <PaidFeaturesAlert tiers={tierMatrix.advancedPrivateResources} />
             <SettingsSection>
                 <SettingsSectionHeader>
                     <SettingsSectionTitle>
@@ -161,68 +155,56 @@ export default function PrivateResourceSshPage() {
                     </SettingsSectionDescription>
                 </SettingsSectionHeader>
 
-                <fieldset
-                    disabled={sshSectionDisabled}
-                    className={
-                        sshSectionDisabled
-                            ? "opacity-50 pointer-events-none"
-                            : ""
-                    }
-                >
-                    <Form {...form}>
-                        <SettingsSectionBody>
-                            <SettingsSectionForm variant="half">
-                                <SettingsFormGrid>
-                                    <SshServerSettingsFields
-                                        idPrefix="private-ssh-edit"
-                                        pamMode={pamMode}
-                                        standardDaemonLocation={
-                                            standardDaemonLocation
-                                        }
-                                        authDaemonPort={authDaemonPort}
-                                        onPamModeChange={handlePamModeChange}
-                                        onStandardDaemonLocationChange={
-                                            handleDaemonLocationChange
-                                        }
-                                        onAuthDaemonPortChange={(value) =>
-                                            form.setValue(
-                                                "authDaemonPort",
-                                                value,
-                                                { shouldValidate: true }
-                                            )
-                                        }
-                                        authDaemonPortError={
-                                            form.formState.errors.authDaemonPort
-                                                ?.message
-                                        }
-                                        sshServerMode={sshServerMode}
-                                        serverModeDisplay="badge"
-                                    />
-                                    <PrivateResourceSshFields
-                                        control={asAnyControl(form.control)}
-                                        setValue={asAnySetValue(form.setValue)}
-                                        watch={asAnyWatch(form.watch)}
-                                        orgId={siteResource.orgId}
-                                        selectedSites={selectedSites}
-                                        onSelectedSitesChange={setSelectedSites}
-                                        showSshSettings={false}
-                                        embedInParentGrid
-                                        showPaidFeaturesAlert={false}
-                                        isNativeSsh={isNative}
-                                    />
-                                </SettingsFormGrid>
-                            </SettingsSectionForm>
-                        </SettingsSectionBody>
+                <Form {...form}>
+                    <SettingsSectionBody>
+                        <SettingsSectionForm variant="half">
+                            <SettingsFormGrid>
+                                <SshServerSettingsFields
+                                    idPrefix="private-ssh-edit"
+                                    pamMode={pamMode}
+                                    standardDaemonLocation={
+                                        standardDaemonLocation
+                                    }
+                                    authDaemonPort={authDaemonPort}
+                                    onPamModeChange={handlePamModeChange}
+                                    onStandardDaemonLocationChange={
+                                        handleDaemonLocationChange
+                                    }
+                                    onAuthDaemonPortChange={(value) =>
+                                        form.setValue("authDaemonPort", value, {
+                                            shouldValidate: true
+                                        })
+                                    }
+                                    authDaemonPortError={
+                                        form.formState.errors.authDaemonPort
+                                            ?.message
+                                    }
+                                    sshServerMode={sshServerMode}
+                                    serverModeDisplay="badge"
+                                />
+                                <PrivateResourceSshFields
+                                    control={asAnyControl(form.control)}
+                                    setValue={asAnySetValue(form.setValue)}
+                                    watch={asAnyWatch(form.watch)}
+                                    orgId={siteResource.orgId}
+                                    selectedSites={selectedSites}
+                                    onSelectedSitesChange={setSelectedSites}
+                                    showSshSettings={false}
+                                    embedInParentGrid
+                                    isNativeSsh={isNative}
+                                />
+                            </SettingsFormGrid>
+                        </SettingsSectionForm>
+                    </SettingsSectionBody>
 
-                        <SettingsSectionFooter>
-                            <form action={formAction}>
-                                <Button type="submit" loading={saveLoading}>
-                                    {t("saveSettings")}
-                                </Button>
-                            </form>
-                        </SettingsSectionFooter>
-                    </Form>
-                </fieldset>
+                    <SettingsSectionFooter>
+                        <form action={formAction}>
+                            <Button type="submit" loading={saveLoading}>
+                                {t("saveSettings")}
+                            </Button>
+                        </form>
+                    </SettingsSectionFooter>
+                </Form>
             </SettingsSection>
         </SettingsContainer>
     );

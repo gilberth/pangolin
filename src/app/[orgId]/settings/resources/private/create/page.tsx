@@ -12,11 +12,10 @@ import {
 } from "@app/components/Settings";
 import HeaderTitle from "@app/components/SettingsSectionTitle";
 import {
-    OptionSelect,
-    type OptionSelectOption
-} from "@app/components/OptionSelect";
+    DescribedSelect,
+    type DescribedSelectOption
+} from "@app/components/DescribedSelect";
 import DomainPicker from "@app/components/DomainPicker";
-import { PaidFeaturesAlert } from "@app/components/PaidFeaturesAlert";
 import { Button } from "@app/components/ui/button";
 import {
     Form,
@@ -30,7 +29,6 @@ import {
 import { Input } from "@app/components/ui/input";
 import type { Selectedsite } from "@app/components/site-selector";
 import { useEnvContext } from "@app/hooks/useEnvContext";
-import { usePaidStatus } from "@app/hooks/usePaidStatus";
 import { toast } from "@app/hooks/useToast";
 import { createApiClient, formatAxiosError } from "@app/lib/api";
 import {
@@ -50,16 +48,24 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { PrivateResourceSitesField } from "../PrivateResourceSitesField";
-import { PrivateResourceHttpFields } from "../PrivateResourceHttpFields";
-import { PrivateResourceSshFields } from "../PrivateResourceSshFields";
-import { PrivateResourcePortRanges } from "../PrivateResourcePortRanges";
+import { PrivateResourceSitesField } from "@app/components/PrivateResourceSitesField";
+import { PrivateResourceHttpFields } from "@app/components/PrivateResourceHttpFields";
+import { PrivateResourceSshFields } from "@app/components/PrivateResourceSshFields";
+import { PrivateResourcePortRanges } from "@app/components/PrivateResourcePortRanges";
 import {
     PrivateResourceAliasField,
     PrivateResourceCidrDestinationField,
     PrivateResourceHostDestinationFields
-} from "../PrivateResourceDestinationFields";
-import { asAnyControl, asAnySetValue, asAnyWatch } from "../formControlUtils";
+} from "@app/components/PrivateResourceDestinationFields";
+import {
+    asAnyControl,
+    asAnySetValue,
+    asAnyWatch
+} from "@app/lib/formControlUtils";
+import {
+    AiProvidersSelector,
+    type SelectedAiProvider
+} from "@app/components/AiProvidersSelector";
 
 export default function CreatePrivateResourcePage() {
     const params = useParams();
@@ -69,12 +75,6 @@ export default function CreatePrivateResourcePage() {
     const { env } = useEnvContext();
     const api = createApiClient({ env });
     const orgId = params.orgId as string;
-    const disableEnterpriseFeatures = env.flags.disableEnterpriseFeatures;
-    const { isPaidUser } = usePaidStatus();
-    const httpSectionDisabled = !isPaidUser(
-        tierMatrix.advancedPrivateResources
-    );
-    const sshSectionDisabled = !isPaidUser(tierMatrix.advancedPrivateResources);
     const [isSubmitting, startTransition] = useTransition();
 
     const siteIdParam = searchParams.get("siteId");
@@ -84,6 +84,9 @@ export default function CreatePrivateResourcePage() {
             : null;
 
     const [selectedSites, setSelectedSites] = useState<Selectedsite[]>([]);
+    const [selectedProviders, setSelectedProviders] = useState<
+        SelectedAiProvider[]
+    >([]);
 
     const formSchema = useMemo(() => createCreateFormSchema(t), [t]);
     type FormValues = z.infer<typeof formSchema>;
@@ -108,7 +111,8 @@ export default function CreatePrivateResourcePage() {
             pamMode: "passthrough",
             tcpPortRangeString: "*",
             udpPortRangeString: "*",
-            disableIcmp: false
+            disableIcmp: false,
+            providerIds: []
         }
     });
 
@@ -135,27 +139,33 @@ export default function CreatePrivateResourcePage() {
     const authDaemonMode = form.watch("authDaemonMode");
     const isNativeSsh = mode === "ssh" && authDaemonMode === "native";
 
-    const modeOptions: OptionSelectOption<PrivateResourceMode>[] = [
-        { value: "host", label: t("createInternalResourceDialogModeHost") },
-        { value: "cidr", label: t("createInternalResourceDialogModeCidr") },
-        ...(!disableEnterpriseFeatures
-            ? [
-                  {
-                      value: "http" as const,
-                      label: t("createInternalResourceDialogModeHttp")
-                  },
-                  {
-                      value: "ssh" as const,
-                      label: t("createInternalResourceDialogModeSsh")
-                  }
-              ]
-            : [])
+    const modeOptions: DescribedSelectOption<PrivateResourceMode>[] = [
+        {
+            value: "host",
+            title: t("createInternalResourceDialogModeHost"),
+            description: t("privateResourceTypeHostDescription")
+        },
+        {
+            value: "cidr",
+            title: t("createInternalResourceDialogModeCidr"),
+            description: t("privateResourceTypeCidrDescription")
+        },
+        {
+            value: "http" as const,
+            title: t("createInternalResourceDialogModeHttp"),
+            description: t("privateResourceTypeHttpDescription")
+        },
+        {
+            value: "ssh" as const,
+            title: t("createInternalResourceDialogModeSsh"),
+            description: t("privateResourceTypeSshDescription")
+        },
+        {
+            value: "inference" as const,
+            title: t("createInternalResourceDialogModeInference"),
+            description: t("resourceTypeInferenceDescription")
+        }
     ];
-
-    const submitDisabled =
-        isSubmitting ||
-        (mode === "http" && httpSectionDisabled) ||
-        (mode === "ssh" && sshSectionDisabled);
 
     function onSubmit(values: FormValues) {
         startTransition(async () => {
@@ -188,7 +198,9 @@ export default function CreatePrivateResourcePage() {
                 }
 
                 router.push(
-                    `/${orgId}/settings/resources/private/${created.niceId}/${created.mode}`
+                    created.mode === "inference"
+                        ? `/${orgId}/settings/resources/private/${created.niceId}/general`
+                        : `/${orgId}/settings/resources/private/${created.niceId}/${created.mode}`
                 );
             } catch (error) {
                 toast({
@@ -245,6 +257,110 @@ export default function CreatePrivateResourcePage() {
                                     <SettingsFormCell span="half">
                                         <FormField
                                             control={form.control}
+                                            name="mode"
+                                            render={({ field }) => (
+                                                <FormItem>
+                                                    <FormLabel>
+                                                        {t("type")}
+                                                    </FormLabel>
+                                                    <FormControl>
+                                                        <DescribedSelect<PrivateResourceMode>
+                                                            options={
+                                                                modeOptions
+                                                            }
+                                                            value={field.value}
+                                                            onChange={(
+                                                                newMode
+                                                            ) => {
+                                                                field.onChange(
+                                                                    newMode
+                                                                );
+                                                                if (
+                                                                    newMode ===
+                                                                    "ssh"
+                                                                ) {
+                                                                    form.setValue(
+                                                                        "authDaemonMode",
+                                                                        "native"
+                                                                    );
+                                                                    form.setValue(
+                                                                        "standardDaemonLocation",
+                                                                        "site"
+                                                                    );
+                                                                    form.setValue(
+                                                                        "destination",
+                                                                        null
+                                                                    );
+                                                                    form.setValue(
+                                                                        "destinationPort",
+                                                                        null
+                                                                    );
+                                                                } else if (
+                                                                    newMode ===
+                                                                    "http"
+                                                                ) {
+                                                                    form.setValue(
+                                                                        "destinationPort",
+                                                                        443
+                                                                    );
+                                                                } else if (
+                                                                    newMode ===
+                                                                    "inference"
+                                                                ) {
+                                                                    form.setValue(
+                                                                        "siteIds",
+                                                                        []
+                                                                    );
+                                                                    setSelectedSites(
+                                                                        []
+                                                                    );
+                                                                    form.setValue(
+                                                                        "destination",
+                                                                        null
+                                                                    );
+                                                                    form.setValue(
+                                                                        "destinationPort",
+                                                                        null
+                                                                    );
+                                                                    form.setValue(
+                                                                        "providerIds",
+                                                                        []
+                                                                    );
+                                                                    setSelectedProviders(
+                                                                        []
+                                                                    );
+                                                                } else {
+                                                                    form.setValue(
+                                                                        "destinationPort",
+                                                                        null
+                                                                    );
+                                                                }
+                                                            }}
+                                                            searchPlaceholder={t(
+                                                                "resourceTypeSearch"
+                                                            )}
+                                                            emptyMessage={t(
+                                                                "resourceTypeNotFound"
+                                                            )}
+                                                            placeholder={t(
+                                                                "noneSelected"
+                                                            )}
+                                                        />
+                                                    </FormControl>
+                                                    <FormMessage />
+                                                    <FormDescription>
+                                                        {t(
+                                                            "privateResourceTypeDescription"
+                                                        )}
+                                                    </FormDescription>
+                                                </FormItem>
+                                            )}
+                                        />
+                                    </SettingsFormCell>
+
+                                    <SettingsFormCell span="half">
+                                        <FormField
+                                            control={form.control}
                                             name="name"
                                             render={({ field }) => (
                                                 <FormItem>
@@ -265,110 +381,63 @@ export default function CreatePrivateResourcePage() {
                                         />
                                     </SettingsFormCell>
 
-                                    <SettingsFormCell span="full">
-                                        <FormField
-                                            control={form.control}
-                                            name="mode"
-                                            render={({ field }) => (
-                                                <FormItem>
-                                                    <FormLabel>
-                                                        {t("type")}
-                                                    </FormLabel>
-                                                    <OptionSelect<PrivateResourceMode>
-                                                        options={modeOptions}
-                                                        value={field.value}
-                                                        onChange={(newMode) => {
-                                                            field.onChange(
-                                                                newMode
-                                                            );
-                                                            if (
-                                                                newMode ===
-                                                                "ssh"
-                                                            ) {
-                                                                form.setValue(
-                                                                    "authDaemonMode",
-                                                                    "native"
-                                                                );
-                                                                form.setValue(
-                                                                    "standardDaemonLocation",
-                                                                    "site"
-                                                                );
-                                                                form.setValue(
-                                                                    "destination",
-                                                                    null
-                                                                );
-                                                                form.setValue(
-                                                                    "destinationPort",
-                                                                    null
-                                                                );
-                                                            } else if (
-                                                                newMode ===
-                                                                "http"
-                                                            ) {
-                                                                form.setValue(
-                                                                    "destinationPort",
-                                                                    443
-                                                                );
-                                                            } else {
-                                                                form.setValue(
-                                                                    "destinationPort",
-                                                                    null
-                                                                );
-                                                            }
-                                                        }}
-                                                        cols={4}
-                                                    />
-                                                    <FormMessage />
-                                                </FormItem>
-                                            )}
-                                        />
-                                    </SettingsFormCell>
-
-                                    {mode === "http" && (
+                                    {(mode === "http" ||
+                                        mode === "inference") && (
                                         <SettingsFormCell span="full">
-                                            <FormItem>
-                                                <DomainPicker
-                                                    orgId={orgId}
-                                                    cols={2}
-                                                    hideFreeDomain
-                                                    onDomainChange={(res) => {
-                                                        if (!res) {
-                                                            form.setValue(
-                                                                "httpConfigSubdomain",
-                                                                null
-                                                            );
-                                                            form.setValue(
-                                                                "httpConfigDomainId",
-                                                                null
-                                                            );
-                                                            form.setValue(
-                                                                "httpConfigFullDomain",
-                                                                null
-                                                            );
-                                                            return;
-                                                        }
-                                                        form.setValue(
-                                                            "httpConfigSubdomain",
-                                                            res.subdomain ??
-                                                                null
-                                                        );
-                                                        form.setValue(
-                                                            "httpConfigDomainId",
-                                                            res.domainId
-                                                        );
-                                                        form.setValue(
-                                                            "httpConfigFullDomain",
-                                                            res.fullDomain
-                                                        );
-                                                    }}
-                                                />
-                                                <FormMessage />
-                                                <FormDescription>
-                                                    {t(
-                                                        "resourceDomainDescription"
-                                                    )}
-                                                </FormDescription>
-                                            </FormItem>
+                                            <FormField
+                                                control={form.control}
+                                                name="httpConfigDomainId"
+                                                render={() => (
+                                                    <FormItem>
+                                                        <DomainPicker
+                                                            orgId={orgId}
+                                                            cols={2}
+                                                            hideFreeDomain
+                                                            onDomainChange={(
+                                                                res
+                                                            ) => {
+                                                                if (!res) {
+                                                                    form.setValue(
+                                                                        "httpConfigSubdomain",
+                                                                        null
+                                                                    );
+                                                                    form.setValue(
+                                                                        "httpConfigDomainId",
+                                                                        null
+                                                                    );
+                                                                    form.setValue(
+                                                                        "httpConfigFullDomain",
+                                                                        null
+                                                                    );
+                                                                    return;
+                                                                }
+                                                                form.setValue(
+                                                                    "httpConfigSubdomain",
+                                                                    res.subdomain ??
+                                                                        null
+                                                                );
+                                                                form.setValue(
+                                                                    "httpConfigDomainId",
+                                                                    res.domainId,
+                                                                    {
+                                                                        shouldValidate: true
+                                                                    }
+                                                                );
+                                                                form.setValue(
+                                                                    "httpConfigFullDomain",
+                                                                    res.fullDomain
+                                                                );
+                                                            }}
+                                                        />
+                                                        <FormMessage />
+                                                        <FormDescription>
+                                                            {t(
+                                                                "resourceDomainDescription"
+                                                            )}
+                                                        </FormDescription>
+                                                    </FormItem>
+                                                )}
+                                            />
                                         </SettingsFormCell>
                                     )}
 
@@ -381,10 +450,6 @@ export default function CreatePrivateResourcePage() {
                                                 )}
                                                 watch={asAnyWatch(form.watch)}
                                                 labelPrefix="create"
-                                                disabled={
-                                                    mode === "ssh" &&
-                                                    sshSectionDisabled
-                                                }
                                             />
                                         </SettingsFormCell>
                                     )}
@@ -498,9 +563,6 @@ export default function CreatePrivateResourcePage() {
                     {/* HTTP configuration */}
                     {mode === "http" && (
                         <SettingsSection>
-                            <PaidFeaturesAlert
-                                tiers={tierMatrix.advancedPrivateResources}
-                            />
                             <SettingsSectionHeader>
                                 <SettingsSectionTitle>
                                     {t("httpSettings")}
@@ -511,101 +573,132 @@ export default function CreatePrivateResourcePage() {
                                     )}
                                 </SettingsSectionDescription>
                             </SettingsSectionHeader>
-                            <fieldset
-                                disabled={httpSectionDisabled}
-                                className={
-                                    httpSectionDisabled
-                                        ? "opacity-50 pointer-events-none"
-                                        : ""
-                                }
-                            >
-                                <SettingsSectionBody>
-                                    <SettingsSectionForm variant="half">
-                                        <SettingsFormGrid>
-                                            <SettingsFormCell span="half">
-                                                <PrivateResourceSitesField
-                                                    control={form.control}
-                                                    orgId={orgId}
-                                                    selectedSites={
-                                                        selectedSites
-                                                    }
-                                                    onSelectedSitesChange={
-                                                        setSelectedSites
-                                                    }
-                                                />
-                                            </SettingsFormCell>
-                                            <SettingsFormCell span="full">
-                                                <PrivateResourceHttpFields
-                                                    control={asAnyControl(
-                                                        form.control
-                                                    )}
-                                                    setValue={asAnySetValue(
-                                                        form.setValue
-                                                    )}
-                                                    orgId={orgId}
-                                                    watch={asAnyWatch(
-                                                        form.watch
-                                                    )}
-                                                    disabled={
-                                                        httpSectionDisabled
-                                                    }
-                                                    labelPrefix="create"
-                                                    hideDomainPicker
-                                                    hidePaidFeaturesAlert
-                                                />
-                                            </SettingsFormCell>
-                                        </SettingsFormGrid>
-                                    </SettingsSectionForm>
-                                </SettingsSectionBody>
-                            </fieldset>
+
+                            <SettingsSectionBody>
+                                <SettingsSectionForm variant="half">
+                                    <SettingsFormGrid>
+                                        <SettingsFormCell span="half">
+                                            <PrivateResourceSitesField
+                                                control={form.control}
+                                                orgId={orgId}
+                                                selectedSites={selectedSites}
+                                                onSelectedSitesChange={
+                                                    setSelectedSites
+                                                }
+                                            />
+                                        </SettingsFormCell>
+                                        <SettingsFormCell span="full">
+                                            <PrivateResourceHttpFields
+                                                control={asAnyControl(
+                                                    form.control
+                                                )}
+                                                setValue={asAnySetValue(
+                                                    form.setValue
+                                                )}
+                                                orgId={orgId}
+                                                watch={asAnyWatch(form.watch)}
+                                                labelPrefix="create"
+                                                hideDomainPicker
+                                            />
+                                        </SettingsFormCell>
+                                    </SettingsFormGrid>
+                                </SettingsSectionForm>
+                            </SettingsSectionBody>
                         </SettingsSection>
                     )}
 
                     {/* SSH server */}
                     {mode === "ssh" && (
                         <SettingsSection>
-                            <PaidFeaturesAlert
-                                tiers={tierMatrix.advancedPrivateResources}
-                            />
                             <SettingsSectionHeader>
                                 <SettingsSectionTitle>
-                                    {t("sshServer")}
+                                    {t("sshSettings")}
                                 </SettingsSectionTitle>
                                 <SettingsSectionDescription>
                                     {t("sshServerDescription")}
                                 </SettingsSectionDescription>
                             </SettingsSectionHeader>
-                            <fieldset
-                                disabled={sshSectionDisabled}
-                                className={
-                                    sshSectionDisabled
-                                        ? "opacity-50 pointer-events-none"
-                                        : ""
-                                }
-                            >
-                                <SettingsSectionBody>
-                                    <SettingsSectionForm variant="half">
-                                        <PrivateResourceSshFields
-                                            control={asAnyControl(form.control)}
-                                            setValue={asAnySetValue(
-                                                form.setValue
-                                            )}
-                                            watch={asAnyWatch(form.watch)}
-                                            orgId={orgId}
-                                            disabled={sshSectionDisabled}
-                                            selectedSites={selectedSites}
-                                            onSelectedSitesChange={
-                                                setSelectedSites
-                                            }
-                                            labelPrefix="create"
-                                            showSshSettings={true}
-                                            layout="wizard"
-                                            showPaidFeaturesAlert={false}
-                                            hideAlias
-                                        />
-                                    </SettingsSectionForm>
-                                </SettingsSectionBody>
-                            </fieldset>
+                            <SettingsSectionBody>
+                                <SettingsSectionForm variant="half">
+                                    <PrivateResourceSshFields
+                                        control={asAnyControl(form.control)}
+                                        setValue={asAnySetValue(form.setValue)}
+                                        watch={asAnyWatch(form.watch)}
+                                        orgId={orgId}
+                                        selectedSites={selectedSites}
+                                        onSelectedSitesChange={setSelectedSites}
+                                        labelPrefix="create"
+                                        showSshSettings={true}
+                                        layout="wizard"
+                                        hideAlias
+                                    />
+                                </SettingsSectionForm>
+                            </SettingsSectionBody>
+                        </SettingsSection>
+                    )}
+
+                    {mode === "inference" && (
+                        <SettingsSection>
+                            <SettingsSectionHeader>
+                                <SettingsSectionTitle>
+                                    {t("aiResourceProviders")}
+                                </SettingsSectionTitle>
+                                <SettingsSectionDescription>
+                                    {t("aiResourceProvidersDescription")}
+                                </SettingsSectionDescription>
+                            </SettingsSectionHeader>
+                            <SettingsSectionBody>
+                                <SettingsSectionForm variant="half">
+                                    <SettingsFormGrid>
+                                        <SettingsFormCell span="full">
+                                            <FormField
+                                                control={form.control}
+                                                name="providerIds"
+                                                render={() => (
+                                                    <FormItem>
+                                                        <FormLabel>
+                                                            {t(
+                                                                "aiResourceProviders"
+                                                            )}
+                                                        </FormLabel>
+                                                        <FormControl>
+                                                            <AiProvidersSelector
+                                                                orgId={orgId}
+                                                                selectedProviders={
+                                                                    selectedProviders
+                                                                }
+                                                                onSelectProviders={(
+                                                                    providers
+                                                                ) => {
+                                                                    setSelectedProviders(
+                                                                        providers
+                                                                    );
+                                                                    form.setValue(
+                                                                        "providerIds",
+                                                                        providers.map(
+                                                                            (
+                                                                                p
+                                                                            ) =>
+                                                                                parseInt(
+                                                                                    p.id,
+                                                                                    10
+                                                                                )
+                                                                        ),
+                                                                        {
+                                                                            shouldValidate: true
+                                                                        }
+                                                                    );
+                                                                }}
+                                                            />
+                                                        </FormControl>
+                                                        <FormMessage />
+                                                    </FormItem>
+                                                )}
+                                            />
+                                        </SettingsFormCell>
+                                    </SettingsFormGrid>
+                                </SettingsSectionForm>
+                            </SettingsSectionBody>
                         </SettingsSection>
                     )}
 
@@ -625,7 +718,7 @@ export default function CreatePrivateResourcePage() {
                         <Button
                             type="submit"
                             form="create-private-resource-form"
-                            disabled={submitDisabled}
+                            disabled={isSubmitting}
                             loading={isSubmitting}
                         >
                             {t("createInternalResourceDialogCreateResource")}

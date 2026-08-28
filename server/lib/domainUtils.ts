@@ -52,8 +52,7 @@ export async function validateAndConstructDomain(
             };
         }
 
-        // Check if organization has access to domain
-        if (domainRes.orgDomains && domainRes.orgDomains.orgId !== orgId) {
+        if (!domainRes.orgDomains) {
             return {
                 success: false,
                 error: `Organization does not have access to domain with ID ${domainId}`

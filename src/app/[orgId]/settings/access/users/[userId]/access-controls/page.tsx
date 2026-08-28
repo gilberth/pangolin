@@ -38,18 +38,6 @@ import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
-const accessControlsFormSchema = z.object({
-    username: z.string(),
-    autoProvisioned: z.boolean(),
-    roles: z.array(
-        z.object({
-            id: z.string(),
-            text: z.string(),
-            isAdmin: z.boolean().optional()
-        })
-    )
-});
-
 export default function AccessControlsPage() {
     const { orgUser: user, updateOrgUser } = userOrgUserContext();
     const { user: sessionUser } = useUserContext();
@@ -68,6 +56,20 @@ export default function AccessControlsPage() {
         ((build === "saas" && !isPaid) ||
             (build === "enterprise" && !isPaid) ||
             (build === "oss" && !isPaid));
+
+    const accessControlsFormSchema = z.object({
+        username: z.string(),
+        autoProvisioned: z.boolean(),
+        roles: z
+            .array(
+                z.object({
+                    id: z.string(),
+                    text: z.string(),
+                    isAdmin: z.boolean().optional()
+                })
+            )
+            .min(1, { message: t("accessRoleSelectPlease") })
+    });
 
     const form = useForm({
         resolver: zodResolver(accessControlsFormSchema),
@@ -107,15 +109,6 @@ export default function AccessControlsPage() {
 
     async function executeSave() {
         const values = form.getValues();
-
-        if (values.roles.length === 0) {
-            toast({
-                variant: "destructive",
-                title: t("accessRoleRequired"),
-                description: t("accessRoleSelectPlease")
-            });
-            return;
-        }
 
         setIsSaving(true);
         try {
@@ -169,15 +162,6 @@ export default function AccessControlsPage() {
         if (!isValid) return;
 
         const values = form.getValues();
-
-        if (values.roles.length === 0) {
-            toast({
-                variant: "destructive",
-                title: t("accessRoleRequired"),
-                description: t("accessRoleSelectPlease")
-            });
-            return;
-        }
 
         const willHaveAdminRole = values.roles.some((r) => r.isAdmin === true);
 

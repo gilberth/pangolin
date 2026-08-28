@@ -961,6 +961,7 @@ export function PolicyAccessRulesTable({
                         colSpan={columns.length}
                         message={t("rulesNoOne")}
                         action={emptyStateAction}
+                        compact
                     />
                 )}
             </TableBody>

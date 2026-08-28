@@ -1,7 +1,7 @@
 "use client";
 
 import ConfirmDeleteDialog from "@app/components/ConfirmDeleteDialog";
-import UptimeMiniBar from "@app/components/UptimeMiniBar";
+import { UptimeMiniBar } from "@app/components/UptimeMiniBar";
 
 import {
     Credenza,
@@ -52,12 +52,12 @@ import {
 } from "./ui/controlled-data-table";
 
 import { useOptimisticLabels } from "@app/hooks/useOptimisticLabels";
-import { usePaidStatus } from "@app/hooks/usePaidStatus";
+import { durationToMs } from "@app/lib/durationToMs";
+import { orgQueries, productUpdatesQueries } from "@app/lib/queries";
+import { useQuery } from "@tanstack/react-query";
+import semver from "semver";
 import { LabelColumnFilterButton } from "./LabelColumnFilterButton";
 import { LabelsTableCell } from "./LabelsTableCell";
-import { useQuery } from "@tanstack/react-query";
-import { productUpdatesQueries } from "@app/lib/queries";
-import semver from "semver";
 
 export type SiteRow = {
     id: number;
@@ -89,6 +89,8 @@ type SitesTableProps = {
     rowCount: number;
 };
 
+const SITE_STATUS_HISTORY_DAYS = 30;
+
 export default function SitesTable({
     sites,
     orgId,
@@ -112,7 +114,16 @@ export default function SitesTable({
     const [isRefreshing, startTransition] = useTransition();
     const [isNavigatingToAddPage, startNavigation] = useTransition();
 
-    const { isPaidUser } = usePaidStatus();
+    const siteIds = useMemo(() => sites.map((s) => s.id), [sites]);
+
+    const statusHistoryQuery = useQuery({
+        ...orgQueries.batchedSiteStatusHistory({
+            orgId,
+            siteIds,
+            days: SITE_STATUS_HISTORY_DAYS
+        }),
+        enabled: siteIds.length > 0
+    });
 
     const api = createApiClient(useEnvContext());
     const t = useTranslations();
@@ -296,7 +307,14 @@ export default function SitesTable({
                     if (originalRow.type == "local") {
                         return <span>-</span>;
                     }
-                    return <UptimeMiniBar siteId={originalRow.id} days={30} />;
+                    const data = statusHistoryQuery.data?.[row.original.id];
+                    return (
+                        <UptimeMiniBar
+                            isLoading={statusHistoryQuery.isLoading}
+                            data={data}
+                            days={SITE_STATUS_HISTORY_DAYS}
+                        />
+                    );
                 }
             },
             {
@@ -359,14 +377,11 @@ export default function SitesTable({
                 cell: ({ row }) => {
                     const originalRow = row.original;
 
-                    let updateAvailable = Boolean(
+                    const updateAvailable = Boolean(
                         latestNewtVersion &&
-                            originalRow.newtVersion &&
-                            semver.valid(originalRow.newtVersion) &&
-                            semver.lt(
-                                originalRow.newtVersion,
-                                latestNewtVersion
-                            )
+                        originalRow.newtVersion &&
+                        semver.valid(originalRow.newtVersion) &&
+                        semver.lt(originalRow.newtVersion, latestNewtVersion)
                     );
 
                     if (originalRow.type === "newt") {
@@ -623,7 +638,14 @@ export default function SitesTable({
         ];
 
         return cols;
-    }, [orgId, t, searchParams, latestNewtVersion]);
+    }, [
+        orgId,
+        t,
+        searchParams,
+        latestNewtVersion,
+        statusHistoryQuery.data,
+        statusHistoryQuery.isLoading
+    ]);
 
     function toggleSort(column: string) {
         const newSearch = getNextSortOrder(column, searchParams);

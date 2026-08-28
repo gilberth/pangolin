@@ -12,8 +12,8 @@ import { Shield, ArrowRight } from "lucide-react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import { createApiClient } from "@app/lib/api";
-import { useEnvContext } from "@app/hooks/useEnvContext";
+import { useState } from "react";
+import { logoutProxy } from "@app/actions/server";
 
 type OrgPolicyRequiredProps = {
     orgId: string;
@@ -40,21 +40,23 @@ export default function OrgPolicyRequired({
 }: OrgPolicyRequiredProps) {
     const t = useTranslations();
     const router = useRouter();
-
-    const api = createApiClient(useEnvContext());
+    const [loading, setLoading] = useState(false);
 
     const sessionExpired =
         policies?.maxSessionLength &&
         policies.maxSessionLength.compliant === false;
 
-    function reauthenticate() {
-        api.post("/auth/logout")
-            .catch(() => {})
-            .then(() => {
-                const destination = redirectAfterAuth ?? `/${orgId}`;
-                router.push(destination);
-                router.refresh();
-            });
+    async function reauthenticate() {
+        setLoading(true);
+        try {
+            await logoutProxy();
+        } catch (error) {
+            console.error("Error during logout:", error);
+        } finally {
+            const destination = redirectAfterAuth ?? `/${orgId}`;
+            router.push(destination);
+            router.refresh();
+        }
     }
 
     if (sessionExpired) {
@@ -76,6 +78,7 @@ export default function OrgPolicyRequired({
                         <Button
                             className="w-full"
                             onClick={reauthenticate}
+                            loading={loading}
                         >
                             {t("reauthenticate")}
                             <ArrowRight className="ml-2 h-4 w-4" />

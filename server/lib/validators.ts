@@ -171,9 +171,10 @@ export function isValidDomain(domain: string): boolean {
         if (!/^[a-zA-Z0-9-]+$/.test(label)) return false;
     }
 
-    // TLD should be at least 2 characters and contain only letters
+    // TLD should be at least 2 characters. Punycode TLDs can contain digits
+    // and hyphens, so validity is ultimately enforced by the TLD allowlist.
     const tld = labels[labels.length - 1];
-    if (tld.length < 2 || !/^[a-zA-Z]+$/.test(tld)) return false;
+    if (tld.length < 2) return false;
 
     // Check if TLD is in the list of valid TLDs
     if (!validTlds.includes(tld.toUpperCase())) return false;

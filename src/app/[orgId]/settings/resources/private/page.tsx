@@ -1,11 +1,13 @@
 import PrivateResourcesBanner from "@app/components/PrivateResourcesBanner";
-import type { InternalResourceRow } from "@app/components/PrivateResourcesTable";
+import type { PrivateResourceRow } from "@app/components/PrivateResourcesTable";
 import PrivateResourcesTable from "@app/components/PrivateResourcesTable";
 import SettingsSectionTitle from "@app/components/SettingsSectionTitle";
 import { internal } from "@app/lib/api";
 import { authCookieHeader } from "@app/lib/api/cookies";
 import { getCachedOrg } from "@app/lib/api/getCachedOrg";
 import OrgProvider from "@app/providers/OrgProvider";
+import { build } from "@server/build";
+import type { GetBatchedCertificateResponse } from "@server/routers/certificates/types";
 import type { ListAllSiteResourcesByOrgResponse } from "@server/routers/siteResource";
 import type { AxiosResponse } from "axios";
 import type { Metadata } from "next";
@@ -27,6 +29,7 @@ export default async function ClientResourcesPage(
     const params = await props.params;
     const t = await getTranslations();
     const searchParams = new URLSearchParams(await props.searchParams);
+    searchParams.set("status", "approved");
 
     let siteResources: ListAllSiteResourcesByOrgResponse["siteResources"] = [];
     let pagination: ListAllSiteResourcesByOrgResponse["pagination"] = {
@@ -58,7 +61,7 @@ export default async function ClientResourcesPage(
         redirect(`/${params.orgId}/settings/resources`);
     }
 
-    const internalResourceRows: InternalResourceRow[] = siteResources.map(
+    const internalResourceRows: PrivateResourceRow[] = siteResources.map(
         (siteResource) => {
             return {
                 id: siteResource.siteResourceId,
@@ -85,8 +88,8 @@ export default async function ClientResourcesPage(
                 siteNiceIds: siteResource.siteNiceIds,
                 niceId: siteResource.niceId,
                 enabled: siteResource.enabled,
-                tcpPortRangeString: siteResource.tcpPortRangeString || null,
-                udpPortRangeString: siteResource.udpPortRangeString || null,
+                tcpPortRangeString: siteResource.tcpPortRangeString ?? null,
+                udpPortRangeString: siteResource.udpPortRangeString ?? null,
                 disableIcmp: siteResource.disableIcmp || false,
                 authDaemonMode: siteResource.authDaemonMode ?? null,
                 authDaemonPort: siteResource.authDaemonPort ?? null,
@@ -98,6 +101,42 @@ export default async function ClientResourcesPage(
             };
         }
     );
+
+    // Prefetched in one batched call so the table doesn't fire a separate
+    // certificate request per visible row once it mounts on the client.
+    const certDomains = Array.from(
+        new Set(
+            internalResourceRows
+                .filter(
+                    (r) =>
+                        r.mode === "http" &&
+                        !r.alias &&
+                        r.ssl &&
+                        r.domainId &&
+                        r.fullDomain
+                )
+                .map((r) => r.fullDomain as string)
+        )
+    );
+
+    let initialCertificates: GetBatchedCertificateResponse | undefined;
+    if (build !== "oss" && certDomains.length > 0) {
+        try {
+            const certSearchParams = new URLSearchParams(
+                certDomains.map((domain) => ["domains", domain])
+            );
+            const certRes = await internal.get<
+                AxiosResponse<GetBatchedCertificateResponse>
+            >(
+                `/org/${params.orgId}/batched-certificates?${certSearchParams.toString()}`,
+                await authCookieHeader()
+            );
+            initialCertificates = certRes.data.data;
+        } catch {
+            // leave undefined so each row falls back to fetching its own
+        }
+    }
+
     return (
         <>
             <SettingsSectionTitle
@@ -116,6 +155,7 @@ export default async function ClientResourcesPage(
                         pageIndex: pagination.page - 1,
                         pageSize: pagination.pageSize
                     }}
+                    initialCertificates={initialCertificates}
                 />
             </OrgProvider>
         </>

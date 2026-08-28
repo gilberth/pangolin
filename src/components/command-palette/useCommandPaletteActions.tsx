@@ -11,6 +11,7 @@ import {
     KeyRound,
     MonitorUp,
     Plus,
+    Sparkles,
     SunMoon,
     UserPlus
 } from "lucide-react";
@@ -76,6 +77,12 @@ export function useCommandPaletteActions(
             }
         } else if (orgId) {
             actions.push({
+                id: "my-api-keys",
+                label: t("sidebarMyApiKeys"),
+                icon: <KeyRound className="size-4" />,
+                href: `/${orgId}/keys`
+            });
+            actions.push({
                 id: "create-site",
                 label: t("commandPaletteCreateSite"),
                 icon: <Plus className="size-4" />,
@@ -110,6 +117,18 @@ export function useCommandPaletteActions(
                 label: t("commandPaletteCreateApiKey"),
                 icon: <KeyRound className="size-4" />,
                 href: `/${orgId}/settings/api-keys/create`
+            });
+            actions.push({
+                id: "create-ai-provider",
+                label: t("commandPaletteCreateAiProvider"),
+                icon: <Sparkles className="size-4" />,
+                href: `/${orgId}/settings/ai-providers/create`
+            });
+            actions.push({
+                id: "create-virtual-api-key",
+                label: t("commandPaletteCreateVirtualApiKey"),
+                icon: <KeyRound className="size-4" />,
+                href: `/${orgId}/settings/virtual-api-keys/keys`
             });
 
             if (!env?.flags.disableEnterpriseFeatures) {

@@ -1,10 +1,12 @@
 import React from "react";
 import { cn } from "@app/lib/cn";
 import { ListUserOrgsResponse } from "@server/routers/org";
-import type {
-    CommandBarNavSection,
-    SidebarNavSection
+import {
+    orgLangingNavItems,
+    type CommandBarNavSection,
+    type SidebarNavSection
 } from "@app/app/navigation";
+import type { SidebarNavItem } from "@app/components/SidebarNav";
 import { LayoutSidebar } from "@app/components/LayoutSidebar";
 import { LayoutHeader } from "@app/components/LayoutHeader";
 import { LayoutMobileMenu } from "@app/components/LayoutMobileMenu";
@@ -46,6 +48,10 @@ export async function Layout({
         sidebarStateCookie === "collapsed" ||
         (sidebarStateCookie !== "expanded" && defaultSidebarCollapsed);
 
+    const launcherNavItems: SidebarNavItem[] = launcherMode
+        ? orgLangingNavItems
+        : [];
+
     return (
         <CommandPaletteProvider
             orgId={orgId}
@@ -77,6 +83,7 @@ export async function Layout({
                             orgId={orgId}
                             orgs={orgs}
                             navItems={navItems}
+                            launcherNavItems={launcherNavItems}
                             showSidebar={showSidebar}
                             showTopBar={showTopBar}
                             launcherMode={launcherMode}
@@ -92,6 +99,7 @@ export async function Layout({
                             orgId={orgId}
                             orgs={orgs}
                             showViewAsAdmin={showViewAsAdmin}
+                            launcherNavItems={launcherNavItems}
                         />
                     )}
 

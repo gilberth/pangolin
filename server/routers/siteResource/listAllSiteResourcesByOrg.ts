@@ -3,11 +3,13 @@ import {
     DB_TYPE,
     Label,
     SiteResource,
+    roleSiteResources,
     siteNetworks,
     siteResourceLabels,
     siteResources,
     sites,
-    labels
+    labels,
+    userSiteResources
 } from "@server/db";
 import response from "@server/lib/response";
 import logger from "@server/logger";
@@ -53,12 +55,12 @@ const listAllSiteResourcesByOrgQuerySchema = z.strictObject({
         }),
     query: z.string().optional(),
     mode: z
-        .enum(["host", "cidr", "http"])
+        .enum(["host", "cidr", "http", "ssh", "inference"])
         .optional()
         .catch(undefined)
         .openapi({
             type: "string",
-            enum: ["host", "cidr", "http"],
+            enum: ["host", "cidr", "http", "ssh", "inference"],
             description: "Filter site resources by mode"
         }),
     sort_by: z
@@ -86,6 +88,15 @@ const listAllSiteResourcesByOrgQuerySchema = z.strictObject({
         description:
             "When set, only site resources associated with this site (via network) are returned"
     }),
+    status: z
+        .enum(["pending", "approved"])
+        .optional()
+        .catch(undefined)
+        .openapi({
+            type: "string",
+            enum: ["pending", "approved"],
+            description: "Filter by site resource status"
+        }),
     labels: z
         .preprocess((val) => {
             if (val === undefined || val === null || val === "") {
@@ -221,6 +232,33 @@ registry.registerPath({
     method: "get",
     path: "/org/{orgId}/site-resources",
     description: "List all site resources for an organization.",
+    tags: [OpenAPITags.PrivateResourceLegacy],
+    request: {
+        params: listAllSiteResourcesByOrgParamsSchema,
+        query: listAllSiteResourcesByOrgQuerySchema
+    },
+    responses: {
+        200: {
+            description: "Successful response",
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        data: z.record(z.string(), z.any()).nullable(),
+                        success: z.boolean(),
+                        error: z.boolean(),
+                        message: z.string(),
+                        status: z.number()
+                    })
+                }
+            }
+        }
+    }
+});
+
+registry.registerPath({
+    method: "get",
+    path: "/org/{orgId}/private-resources",
+    description: "List all site resources for an organization.",
     tags: [OpenAPITags.PrivateResource],
     request: {
         params: listAllSiteResourcesByOrgParamsSchema,
@@ -283,10 +321,52 @@ export async function listAllSiteResourcesByOrg(
             sort_by,
             order,
             siteId,
+            status,
             labels: labelFilter
         } = parsedQuery.data;
 
-        const conditions = [and(eq(siteResources.orgId, orgId))];
+        let accessibleSiteResourceIds: number[];
+        if (req.user) {
+            const accessibleSiteResources = await db
+                .select({
+                    siteResourceId: sql<number>`COALESCE(${userSiteResources.siteResourceId}, ${roleSiteResources.siteResourceId})`
+                })
+                .from(userSiteResources)
+                .fullJoin(
+                    roleSiteResources,
+                    eq(
+                        userSiteResources.siteResourceId,
+                        roleSiteResources.siteResourceId
+                    )
+                )
+                .where(
+                    or(
+                        eq(userSiteResources.userId, req.user.userId),
+                        inArray(
+                            roleSiteResources.roleId,
+                            req.userOrgRoleIds ?? []
+                        )
+                    )
+                );
+            accessibleSiteResourceIds = accessibleSiteResources.map(
+                (row) => row.siteResourceId
+            );
+        } else {
+            const allOrgSiteResources = await db
+                .select({ siteResourceId: siteResources.siteResourceId })
+                .from(siteResources)
+                .where(eq(siteResources.orgId, orgId));
+            accessibleSiteResourceIds = allOrgSiteResources.map(
+                (row) => row.siteResourceId
+            );
+        }
+
+        const conditions = [
+            and(
+                eq(siteResources.orgId, orgId),
+                inArray(siteResources.siteResourceId, accessibleSiteResourceIds)
+            )
+        ];
 
         if (siteId != null) {
             // Keep inner joins here: filtering by a specific site implies the
@@ -313,6 +393,10 @@ export async function listAllSiteResourcesByOrg(
 
         if (mode) {
             conditions.push(eq(siteResources.mode, mode));
+        }
+
+        if (typeof status !== "undefined") {
+            conditions.push(eq(siteResources.status, status));
         }
 
         if (labelFilter && labelFilter.length > 0) {

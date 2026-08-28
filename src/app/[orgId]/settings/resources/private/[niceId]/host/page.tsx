@@ -20,16 +20,16 @@ import { useTranslations } from "next-intl";
 import { useActionState, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { PrivateResourceSitesField } from "../../PrivateResourceSitesField";
-import { PrivateResourceHostDestinationFields } from "../../PrivateResourceDestinationFields";
-import { PrivateResourcePortRanges } from "../../PrivateResourcePortRanges";
-import { buildSelectedSitesForResource } from "../../privateResourceUtils";
+import { PrivateResourceSitesField } from "@app/components/PrivateResourceSitesField";
+import { PrivateResourceHostDestinationFields } from "@app/components/PrivateResourceDestinationFields";
+import { PrivateResourcePortRanges } from "@app/components/PrivateResourcePortRanges";
+import { useSaveSiteResource } from "@app/hooks/useSaveSiteResource";
 import {
     asAnyControl,
     asAnySetValue,
     asAnyWatch
-} from "../../formControlUtils";
-import { useSaveSiteResource } from "../../useSaveSiteResource";
+} from "@app/lib/formControlUtils";
+import { buildSelectedSitesForResource } from "@app/lib/privateResourceUtils";
 
 export default function PrivateResourceHostPage() {
     const t = useTranslations();

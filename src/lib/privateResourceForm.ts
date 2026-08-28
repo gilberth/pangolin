@@ -1,9 +1,10 @@
 import { z } from "zod";
-import type { InternalResourceRow } from "@app/components/PrivateResourcesTable";
+import type { PrivateResourceRow } from "@app/components/PrivateResourcesTable";
+import { SiteResource } from "@server/db";
 
-export type PrivateResourceMode = "host" | "cidr" | "http" | "ssh";
+export type PrivateResourceMode = SiteResource["mode"];
 
-export type SiteResourceData = InternalResourceRow & {
+export type SiteResourceData = PrivateResourceRow & {
     enabled: boolean;
 };
 
@@ -20,7 +21,7 @@ export type PrivateResourceClient = {
 
 export type PrivateResourceFormValues = {
     name: string;
-    siteIds: number[];
+    siteIds?: number[];
     mode: PrivateResourceMode;
     destination: string | null;
     alias?: string | null;
@@ -41,6 +42,7 @@ export type PrivateResourceFormValues = {
     roles?: PrivateResourceAccessTag[];
     users?: PrivateResourceAccessTag[];
     clients?: PrivateResourceClient[];
+    providerIds?: number[];
 };
 
 export type SiteResourceAccess = {
@@ -162,10 +164,12 @@ export function buildCreateSiteResourcePayload(
 
     return {
         name: data.name,
-        siteIds: data.siteIds,
+        siteIds: data.siteIds ?? [],
         mode: data.mode,
-        destination: isNativeSsh ? undefined : (data.destination ?? undefined),
-        enabled: true,
+        destination:
+            isNativeSsh || data.mode === "inference"
+                ? undefined
+                : (data.destination ?? undefined),
         ...(data.mode === "http" && {
             scheme: data.scheme,
             ssl: data.ssl ?? false,
@@ -211,6 +215,18 @@ export function buildCreateSiteResourcePayload(
                     authDaemonPort: data.authDaemonPort
                 })
         }),
+        ...(data.mode === "inference" && {
+            aiProviders: (data.providerIds ?? []).map((providerId) => ({
+                providerId
+            })),
+            ssl: data.ssl ?? false,
+            domainId: data.httpConfigDomainId
+                ? data.httpConfigDomainId
+                : undefined,
+            subdomain: data.httpConfigSubdomain
+                ? data.httpConfigSubdomain
+                : undefined
+        }),
         ...((data.mode === "host" || data.mode === "cidr") && {
             tcpPortRangeString: data.tcpPortRangeString,
             udpPortRangeString: data.udpPortRangeString,
@@ -237,7 +253,9 @@ export function buildUpdateSiteResourcePayload(
         enabled: data.enabled,
         ...(isNativeSsh
             ? { destination: null, destinationPort: null }
-            : { destination: data.destination ?? undefined }),
+            : data.mode !== "inference"
+              ? { destination: data.destination ?? undefined }
+              : {}),
         ...(data.mode === "http" && {
             scheme: data.scheme,
             ssl: data.ssl ?? false,
@@ -280,6 +298,21 @@ export function buildUpdateSiteResourcePayload(
             ...(data.authDaemonMode === "remote" && {
                 authDaemonPort: data.authDaemonPort || null
             })
+        }),
+        ...(data.mode === "inference" && {
+            alias:
+                data.alias &&
+                typeof data.alias === "string" &&
+                data.alias.trim()
+                    ? data.alias
+                    : null,
+            ssl: data.ssl ?? false,
+            domainId: data.httpConfigDomainId
+                ? data.httpConfigDomainId
+                : undefined,
+            subdomain: data.httpConfigSubdomain
+                ? data.httpConfigSubdomain
+                : undefined
         }),
         ...((data.mode === "host" || data.mode === "cidr") && {
             tcpPortRangeString: data.tcpPortRangeString,
@@ -332,18 +365,33 @@ export function siteResourceToFormValues(
     };
 }
 
-export function createGeneralFormSchema(t: TranslateFn) {
-    return z.object({
-        name: z
-            .string()
-            .min(1, t("editInternalResourceDialogNameRequired"))
-            .max(255, t("editInternalResourceDialogNameMaxLength")),
-        niceId: z
-            .string()
-            .min(1)
-            .max(255)
-            .regex(/^[a-zA-Z0-9-]+$/)
-    });
+export function createGeneralFormSchema(
+    t: TranslateFn,
+    options?: { requireAlias?: boolean }
+) {
+    return z
+        .object({
+            name: z
+                .string()
+                .min(1, t("editInternalResourceDialogNameRequired"))
+                .max(255, t("editInternalResourceDialogNameMaxLength")),
+            niceId: z
+                .string()
+                .min(1)
+                .max(255)
+                .regex(/^[a-zA-Z0-9-]+$/),
+            enabled: z.boolean(),
+            alias: z.string().nullish()
+        })
+        .superRefine((data, ctx) => {
+            if (options?.requireAlias && !data.alias?.trim()) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: t("aiResourceAliasRequired"),
+                    path: ["alias"]
+                });
+            }
+        });
 }
 
 export function createAccessFormSchema() {
@@ -372,10 +420,8 @@ export function createCreateFormSchema(t: TranslateFn) {
                 .string()
                 .min(1, t("createInternalResourceDialogNameRequired"))
                 .max(255, t("createInternalResourceDialogNameMaxLength")),
-            siteIds: z
-                .array(z.number().int().positive())
-                .min(1, t("createInternalResourceDialogPleaseSelectSite")),
-            mode: z.enum(["host", "cidr", "http", "ssh"]),
+            siteIds: z.array(z.number().int().positive()).optional(),
+            mode: z.enum(["host", "cidr", "http", "ssh", "inference"]),
             destination: z.string().nullish(),
             alias: z.string().nullish(),
             destinationPort: z
@@ -402,14 +448,26 @@ export function createCreateFormSchema(t: TranslateFn) {
             pamMode: z.enum(["passthrough", "push"]).optional().nullable(),
             tcpPortRangeString: createPortRangeStringSchema(t),
             udpPortRangeString: createPortRangeStringSchema(t),
-            disableIcmp: z.boolean().optional()
+            disableIcmp: z.boolean().optional(),
+            providerIds: z.array(z.number().int().positive()).optional()
         })
         .superRefine((data, ctx) => {
             const isNativeSsh =
                 data.mode === "ssh" && data.authDaemonMode === "native";
             const trimmedDestination = data.destination?.trim();
             if (
+                data.mode !== "inference" &&
+                (!data.siteIds || data.siteIds.length < 1)
+            ) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: t("createInternalResourceDialogPleaseSelectSite"),
+                    path: ["siteIds"]
+                });
+            }
+            if (
                 data.mode !== "ssh" &&
+                data.mode !== "inference" &&
                 (!trimmedDestination || trimmedDestination.length < 1)
             ) {
                 ctx.addIssue({
@@ -484,6 +542,7 @@ function destinationRefine(
     const isNativeSsh = data.mode === "ssh" && data.authDaemonMode === "native";
     const trimmedDestination = data.destination?.trim();
     if (
+        data.mode !== "inference" &&
         !isNativeSsh &&
         (!trimmedDestination || trimmedDestination.length < 1)
     ) {
@@ -552,6 +611,25 @@ export function createHostFormSchema(t: TranslateFn) {
             authDaemonPort: z.number().int().positive().optional().nullable()
         })
         .superRefine((data, ctx) => destinationRefine(data, ctx, t));
+}
+
+export function createInferenceFormSchema(t: TranslateFn) {
+    return z
+        .object({
+            mode: z.literal("inference"),
+            alias: z.string().nullish(),
+            providerIds: z.array(z.number().int().positive()).optional()
+        })
+        .superRefine((data, ctx) => {
+            const trimmedAlias = data.alias?.trim();
+            if (!trimmedAlias) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: t("aiResourceAliasRequired"),
+                    path: ["alias"]
+                });
+            }
+        });
 }
 
 export function createCidrFormSchema(t: TranslateFn) {

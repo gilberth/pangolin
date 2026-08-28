@@ -9,17 +9,15 @@ import {
     FormMessage
 } from "@app/components/ui/form";
 
-import { toast } from "@app/hooks/useToast";
 import { useTranslations } from "next-intl";
 
-import { useRef } from "react";
 import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
 import { RolesSelector, type SelectedRole } from "./roles-selector";
 
 type OrgRolesTagFieldProps<TFieldValues extends FieldValues> = {
     form: Pick<
         UseFormReturn<TFieldValues>,
-        "control" | "getValues" | "setValue"
+        "control" | "getValues" | "setValue" | "clearErrors"
     >;
     orgId: string;
     /** Field in the form that holds Tag[] (role tags). Default: `"roles"`. */
@@ -42,46 +40,6 @@ export default function OrgRolesTagField<TFieldValues extends FieldValues>({
     disabled
 }: OrgRolesTagFieldProps<TFieldValues>) {
     const t = useTranslations();
-    const isPopoverOpenRef = useRef(false);
-    const lastValidRolesRef = useRef<SelectedRole[]>(
-        (form.getValues(name) as SelectedRole[]) ?? []
-    );
-
-    function validateRolesSelection() {
-        const current = form.getValues(name) as SelectedRole[];
-
-        if (current.length === 0 && lastValidRolesRef.current.length > 0) {
-            form.setValue(name, lastValidRolesRef.current as never, {
-                shouldDirty: true
-            });
-            toast({
-                variant: "destructive",
-                title: t("accessRoleRequired"),
-                description: t("accessRoleSelectPlease")
-            });
-            return false;
-        }
-
-        if (current.length > 0) {
-            lastValidRolesRef.current = current;
-        }
-
-        return true;
-    }
-
-    function handlePopoverOpenChange(open: boolean) {
-        isPopoverOpenRef.current = open;
-
-        if (open) {
-            const current = form.getValues(name) as SelectedRole[];
-            if (current.length > 0) {
-                lastValidRolesRef.current = current;
-            }
-            return;
-        }
-
-        validateRolesSelection();
-    }
 
     function setRoleTags(nextValue: SelectedRole[]) {
         const prev = form.getValues(name) as SelectedRole[];
@@ -99,15 +57,14 @@ export default function OrgRolesTagField<TFieldValues extends FieldValues>({
             form.setValue(name, [prev[prev.length - 1]] as never, {
                 shouldDirty: true
             });
+            form.clearErrors(name);
             return;
         }
 
         form.setValue(name, next as never, { shouldDirty: true });
 
-        if (next.length > 0 && !isPopoverOpenRef.current) {
-            lastValidRolesRef.current = next;
-        } else if (!isPopoverOpenRef.current) {
-            validateRolesSelection();
+        if (next.length > 0) {
+            form.clearErrors(name);
         }
     }
 
@@ -117,9 +74,6 @@ export default function OrgRolesTagField<TFieldValues extends FieldValues>({
             name={name}
             render={({ field }) => {
                 const selectedRoles = (field.value ?? []) as SelectedRole[];
-                if (!isPopoverOpenRef.current && selectedRoles.length > 0) {
-                    lastValidRolesRef.current = selectedRoles;
-                }
 
                 return (
                     <FormItem className="flex flex-col items-start">
@@ -129,7 +83,6 @@ export default function OrgRolesTagField<TFieldValues extends FieldValues>({
                                 orgId={orgId}
                                 selectedRoles={selectedRoles}
                                 onSelectRoles={setRoleTags}
-                                onPopoverOpenChange={handlePopoverOpenChange}
                                 disabled={disabled}
                             />
                         </FormControl>

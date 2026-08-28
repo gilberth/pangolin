@@ -29,7 +29,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { useActionState, useEffect } from "react";
 import { useForm } from "react-hook-form";
-import { PrivateResourceAccessFields } from "../../PrivateResourceAccessFields";
+import { PrivateResourceAccessFields } from "@app/components/PrivateResourceAccessFields";
 
 export default function PrivateResourceAccessPage() {
     const t = useTranslations();
