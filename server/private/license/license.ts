@@ -14,7 +14,7 @@
 import { db, HostMeta, sites, users } from "@server/db";
 import { hostMeta, licenseKey } from "@server/db";
 import logger from "@server/logger";
-import NodeCache from "node-cache";
+import { createLocalCache } from "@server/lib/createLocalCache";
 import { validateJWT } from "./licenseJwt";
 import { count, eq } from "drizzle-orm";
 import moment from "moment";
@@ -66,8 +66,8 @@ export class License {
     private validationServerUrl = `${this.serverBaseUrl}/api/v1/license/enterprise/validate`;
     private activationServerUrl = `${this.serverBaseUrl}/api/v1/license/enterprise/activate`;
 
-    private statusCache = new NodeCache();
-    private licenseKeyCache = new NodeCache();
+    private statusCache = createLocalCache();
+    private licenseKeyCache = createLocalCache();
 
     private statusKey = "status";
     private serverSecret!: string;
@@ -125,6 +125,15 @@ rQIDAQAB
             if (status.isLicenseValid) {
                 return true;
             }
+        }
+        return false;
+    }
+
+    public async hasTier(tiers: LicenseKeyTier[]): Promise<boolean> {
+        const status = await this.check();
+        if (status.isHostLicensed && status.isLicenseValid) {
+            return status.tier !== undefined &&
+                tiers.includes(status.tier as LicenseKeyTier);
         }
         return false;
     }
