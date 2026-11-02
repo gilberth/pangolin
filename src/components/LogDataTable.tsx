@@ -319,7 +319,6 @@ export function LogDataTable<TData, TValue>({
     const pageIndex = table.getState().pagination.pageIndex;
     useEffect(() => {
         setExpandedRows(new Set());
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pageIndex]);
 
     const handleTabChange = (value: string) => {

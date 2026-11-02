@@ -21,19 +21,24 @@ import * as policy from "#private/routers/policy";
 import * as eventStreamingDestination from "#private/routers/eventStreamingDestination";
 import * as alertRule from "#private/routers/alertRule";
 import * as healthChecks from "#private/routers/healthChecks";
-
+import * as resource from "#private/routers/resource";
+import * as customDnsRecord from "#private/routers/customDnsRecord";
 import {
     verifyApiKeyHasAction,
+    verifyApiKeyDomainAccess,
     verifyApiKeyIsRoot,
     verifyApiKeyOrgAccess,
     verifyApiKeyIdpAccess,
     verifyApiKeyRoleAccess,
     verifyApiKeyUserAccess,
+    verifyApiKeyClientAccess,
     verifyApiKeySiteProvisioningKeyAccess,
     verifyApiKeyResourcePolicyAccess,
-    verifyLimits
+    verifyLimits,
+    verifyApiKeyResourceAccess
 } from "@server/middlewares";
 import * as user from "#private/routers/user";
+import * as client from "#private/routers/client";
 import {
     verifyValidSubscription,
     verifyValidLicense
@@ -176,6 +181,49 @@ authenticated.get(
     exportAiSessionLogs
 );
 
+authenticated.get(
+    "/org/:orgId/domain/:domainId/custom-dns-records",
+    verifyValidLicense,
+    verifyApiKeyOrgAccess,
+    verifyApiKeyDomainAccess,
+    verifyApiKeyHasAction(ActionsEnum.listCustomDnsRecords),
+    customDnsRecord.listCustomDnsRecords
+);
+
+authenticated.put(
+    "/org/:orgId/domain/:domainId/custom-dns-record",
+    verifyValidLicense,
+    verifyValidSubscription(tierMatrix.customDnsRecords),
+    verifyApiKeyOrgAccess,
+    verifyApiKeyDomainAccess,
+    verifyLimits,
+    verifyApiKeyHasAction(ActionsEnum.createCustomDnsRecord),
+    logActionAudit(ActionsEnum.createCustomDnsRecord),
+    customDnsRecord.createCustomDnsRecord
+);
+
+authenticated.post(
+    "/org/:orgId/domain/:domainId/custom-dns-record/:customDnsRecordId",
+    verifyValidLicense,
+    verifyValidSubscription(tierMatrix.customDnsRecords),
+    verifyApiKeyOrgAccess,
+    verifyApiKeyDomainAccess,
+    verifyApiKeyHasAction(ActionsEnum.updateCustomDnsRecord),
+    logActionAudit(ActionsEnum.updateCustomDnsRecord),
+    customDnsRecord.updateCustomDnsRecord
+);
+
+authenticated.delete(
+    "/org/:orgId/domain/:domainId/custom-dns-record/:customDnsRecordId",
+    verifyValidLicense,
+    verifyValidSubscription(tierMatrix.customDnsRecords),
+    verifyApiKeyOrgAccess,
+    verifyApiKeyDomainAccess,
+    verifyApiKeyHasAction(ActionsEnum.deleteCustomDnsRecord),
+    logActionAudit(ActionsEnum.deleteCustomDnsRecord),
+    customDnsRecord.deleteCustomDnsRecord
+);
+
 authenticated.put(
     "/org/:orgId/idp/oidc",
     verifyValidLicense,
@@ -244,6 +292,36 @@ authenticated.delete(
     verifyApiKeyHasAction(ActionsEnum.removeUserRole),
     logActionAudit(ActionsEnum.removeUserRole),
     user.removeUserRole
+);
+
+authenticated.post(
+    "/client/:clientId/add-role/:roleId",
+    verifyApiKeyClientAccess,
+    verifyApiKeyRoleAccess,
+    verifyLimits,
+    verifyApiKeyHasAction(ActionsEnum.addClientRole),
+    logActionAudit(ActionsEnum.addClientRole),
+    client.addClientRole
+);
+
+authenticated.delete(
+    "/client/:clientId/remove-role/:roleId",
+    verifyApiKeyClientAccess,
+    verifyApiKeyRoleAccess,
+    verifyLimits,
+    verifyApiKeyHasAction(ActionsEnum.removeClientRole),
+    logActionAudit(ActionsEnum.removeClientRole),
+    client.removeClientRole
+);
+
+authenticated.post(
+    "/client/:clientId/roles",
+    verifyApiKeyClientAccess,
+    verifyApiKeyRoleAccess,
+    verifyLimits,
+    verifyApiKeyHasAction(ActionsEnum.setClientRoles),
+    logActionAudit(ActionsEnum.setClientRoles),
+    client.setClientRoles
 );
 
 authenticated.put(

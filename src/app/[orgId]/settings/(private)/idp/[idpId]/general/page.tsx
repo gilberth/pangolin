@@ -46,6 +46,7 @@ import { AxiosResponse } from "axios";
 import { ListRolesResponse } from "@server/routers/role";
 import AutoProvisionConfigWidget from "@app/components/AutoProvisionConfigWidget";
 import IdpAutoProvisionUsersDescription from "@app/components/IdpAutoProvisionUsersDescription";
+import IdpIdentifierChangeDialog from "@app/components/IdpIdentifierChangeDialog";
 import { PaidFeaturesAlert } from "@app/components/PaidFeaturesAlert";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
 import {
@@ -75,6 +76,12 @@ export default function GeneralPage() {
     >([createMappingBuilderRule()]);
     const [rawRoleExpression, setRawRoleExpression] = useState("");
     const [variant, setVariant] = useState<"oidc" | "google" | "azure">("oidc");
+    const [originalIdentifierPath, setOriginalIdentifierPath] = useState("");
+    const [identifierConfirmOpen, setIdentifierConfirmOpen] = useState(false);
+    const [pendingPayload, setPendingPayload] = useState<Record<
+        string,
+        unknown
+    > | null>(null);
 
     const dashboardRedirectUrl = `${env.app.dashboardUrl}/auth/idp/${idpId}/oidc/callback`;
     const [redirectUrl, setRedirectUrl] = useState(
@@ -184,6 +191,9 @@ export default function GeneralPage() {
                     const data = res.data.data;
                     const roleMapping = data.idpOrg.roleMapping;
                     const idpVariant = data.idpOidcConfig?.variant || "oidc";
+                    setOriginalIdentifierPath(
+                        data.idpOidcConfig?.identifierPath ?? "sub"
+                    );
                     setRedirectUrl(res.data.data.redirectUrl);
 
                     // Set the variant
@@ -378,18 +388,56 @@ export default function GeneralPage() {
                 };
             }
 
-            const res = await api.post(
-                `/org/${orgId}/idp/${idpId}/oidc`,
-                payload
-            );
+            const nextIdentifierPath =
+                variant === "oidc"
+                    ? (data as OidcFormValues).identifierPath
+                    : undefined;
 
-            if (res.status === 200) {
-                toast({
-                    title: t("success"),
-                    description: t("idpUpdatedDescription")
-                });
-                router.refresh();
+            if (
+                typeof nextIdentifierPath === "string" &&
+                nextIdentifierPath !== originalIdentifierPath
+            ) {
+                setPendingPayload(payload);
+                setIdentifierConfirmOpen(true);
+                return;
             }
+
+            await persistIdp(payload);
+        } catch (e) {
+            toast({
+                title: t("error"),
+                description: formatAxiosError(e),
+                variant: "destructive"
+            });
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    async function persistIdp(payload: Record<string, unknown>) {
+        const res = await api.post(`/org/${orgId}/idp/${idpId}/oidc`, payload);
+
+        if (res.status === 200) {
+            if (typeof payload.identifierPath === "string") {
+                setOriginalIdentifierPath(payload.identifierPath);
+            }
+            toast({
+                title: t("success"),
+                description: t("idpUpdatedDescription")
+            });
+            router.refresh();
+        }
+    }
+
+    async function confirmIdentifierChange() {
+        if (!pendingPayload) {
+            return;
+        }
+
+        setLoading(true);
+        try {
+            await persistIdp(pendingPayload);
+            setPendingPayload(null);
         } catch (e) {
             toast({
                 title: t("error"),
@@ -407,6 +455,16 @@ export default function GeneralPage() {
 
     return (
         <>
+            <IdpIdentifierChangeDialog
+                open={identifierConfirmOpen}
+                setOpen={(open) => {
+                    setIdentifierConfirmOpen(open);
+                    if (!open) {
+                        setPendingPayload(null);
+                    }
+                }}
+                onConfirm={confirmIdentifierChange}
+            />
             <SettingsContainer>
                 <SettingsSection>
                     <SettingsSectionHeader>

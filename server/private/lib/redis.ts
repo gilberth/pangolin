@@ -158,7 +158,7 @@ class RedisManager {
             this.writeClient = new Redis({
                 ...masterConfig,
                 enableReadyCheck: false,
-                maxRetriesPerRequest: 3,
+                maxRetriesPerRequest: 50,
                 keepAlive: 30000,
                 connectTimeout: this.connectionTimeout,
                 commandTimeout: this.commandTimeout
@@ -169,7 +169,7 @@ class RedisManager {
                 this.readClient = new Redis({
                     ...replicaConfig!,
                     enableReadyCheck: false,
-                    maxRetriesPerRequest: 3,
+                    maxRetriesPerRequest: 50,
                     keepAlive: 30000,
                     connectTimeout: this.connectionTimeout,
                     commandTimeout: this.commandTimeout
@@ -186,7 +186,7 @@ class RedisManager {
             this.publisher = new Redis({
                 ...masterConfig,
                 enableReadyCheck: false,
-                maxRetriesPerRequest: 3,
+                maxRetriesPerRequest: 50,
                 keepAlive: 30000,
                 connectTimeout: this.connectionTimeout,
                 commandTimeout: this.commandTimeout
@@ -196,7 +196,7 @@ class RedisManager {
             this.subscriber = new Redis({
                 ...(this.hasReplicas ? replicaConfig! : masterConfig),
                 enableReadyCheck: false,
-                maxRetriesPerRequest: 3,
+                maxRetriesPerRequest: 50,
                 keepAlive: 30000,
                 connectTimeout: this.connectionTimeout,
                 commandTimeout: this.commandTimeout
@@ -901,7 +901,9 @@ class RegionalRedisManager {
     // if the configured host doesn't match that pattern (e.g. local dev),
     // in which case callers should fall back to the primary for reads.
     private getReplicaHost(primaryHost: string): string | null {
-        const match = primaryHost.match(/^redis\.([^.]+)\.svc\.cluster\.local$/);
+        const match = primaryHost.match(
+            /^redis\.([^.]+)\.svc\.cluster\.local$/
+        );
         if (!match) return null;
         const namespace = match[1];
         return `redis-1.redis-headless.${namespace}.svc.cluster.local`;
@@ -912,7 +914,7 @@ class RegionalRedisManager {
         const baseOpts = {
             ...cfg,
             enableReadyCheck: false,
-            maxRetriesPerRequest: 3,
+            maxRetriesPerRequest: 50,
             keepAlive: 10000,
             connectTimeout: this.connectionTimeout,
             commandTimeout: this.commandTimeout

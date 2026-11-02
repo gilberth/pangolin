@@ -1,6 +1,6 @@
 import { configFilePath1, configFilePath2 } from "@server/lib/consts";
 import fs from "fs";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 
 export default async function migration() {
     console.log("Running setup script 1.0.0-beta.6...");

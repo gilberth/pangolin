@@ -378,7 +378,6 @@ function EditAttachmentCredenza({
         setModelSearch("");
         pendingSeedRef.current = false;
         // Only re-init when opening or switching which attachment is edited.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open, attachment.providerId]);
 
     useEffect(() => {

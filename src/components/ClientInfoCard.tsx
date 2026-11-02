@@ -11,8 +11,25 @@ import {
 import IdpTypeBadge from "@app/components/IdpTypeBadge";
 import { getUserDisplayName } from "@app/lib/getUserDisplayName";
 import { useTranslations } from "next-intl";
+import {
+    productUpdatesQueries,
+    type LatestVersionResponse
+} from "@app/lib/queries";
+import { useQuery } from "@tanstack/react-query";
+import semver from "semver";
+import { InfoPopup } from "@app/components/ui/info-popup";
 
 type ClientInfoCardProps = {};
+
+const agentVersionMap: Record<string, string> = {
+    "Pangolin Windows": "windows",
+    "Pangolin Android": "android",
+    "Pangolin iOS": "ios",
+    "Pangolin iPadOS": "ios",
+    "Pangolin macOS": "mac",
+    "Pangolin CLI": "cli",
+    "Olm CLI": "olm"
+};
 
 export default function SiteInfoCard({}: ClientInfoCardProps) {
     const { client, updateClient } = useClientContext();
@@ -24,14 +41,58 @@ export default function SiteInfoCard({}: ClientInfoCardProps) {
         username: client.userUsername
     });
 
+    const data = useQuery(productUpdatesQueries.latestVersion(true));
+    const latestPlatformVersions = data.data?.data;
+
+    // agentVersion was added after olmVersion, and older olm clients report
+    // the app version in olmVersion, so fall back to it for clients that have
+    // not re-registered yet.
+    const agentVersion = client.agentVersion ?? client.olmVersion;
+
+    let updateAvailable = false;
+    if (client.agent && agentVersion && latestPlatformVersions) {
+        const agent = agentVersionMap[
+            client.agent
+        ] as keyof LatestVersionResponse;
+
+        if (agent in latestPlatformVersions) {
+            const latestAgentVersion = latestPlatformVersions[agent];
+
+            updateAvailable = Boolean(
+                semver.valid(agentVersion) &&
+                semver.lt(agentVersion, latestAgentVersion.latestVersion)
+            );
+        }
+    }
+
+    const cols =
+        2 + (userDisplayName ? 1 : 0) + (client.agent && agentVersion ? 1 : 0);
+
     return (
         <Alert>
             <AlertDescription>
-                <InfoSections cols={userDisplayName ? 3 : 2}>
+                <InfoSections cols={cols}>
                     <InfoSection>
                         <InfoSectionTitle>{t("name")}</InfoSectionTitle>
                         <InfoSectionContent>{client.name}</InfoSectionContent>
                     </InfoSection>
+                    {client.agent && agentVersion ? (
+                        <InfoSection>
+                            <InfoSectionTitle>{t("agent")}</InfoSectionTitle>
+                            <InfoSectionContent>
+                                <div className="flex items-center gap-2">
+                                    <span>
+                                        {client.agent + " v" + agentVersion}
+                                    </span>
+                                    {updateAvailable && (
+                                        <InfoPopup
+                                            info={t("updateAvailableInfo")}
+                                        />
+                                    )}
+                                </div>
+                            </InfoSectionContent>
+                        </InfoSection>
+                    ) : null}
                     {userDisplayName ? (
                         <InfoSection>
                             <InfoSectionTitle>{t("user")}</InfoSectionTitle>

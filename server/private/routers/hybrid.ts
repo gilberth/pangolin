@@ -96,10 +96,19 @@ import semver from "semver";
 import { maxmindAsnLookup } from "@server/db/maxmindAsn";
 import { checkOrgAccessPolicy } from "@server/lib/checkOrgAccessPolicy";
 import { sanitizeString } from "@server/lib/sanitize";
+import {
+    getRedirectsByHost,
+    getWhitelistEmail,
+    type RedirectByHost
+} from "@server/db/queries/verifySessionQueries";
 
 // Zod schemas for request validation
 const getResourceByDomainParamsSchema = z.strictObject({
     domain: z.string().min(1, "Domain is required")
+});
+
+const getRedirectsByHostParamsSchema = z.strictObject({
+    host: z.string().min(1, "Host is required")
 });
 
 const getUserSessionParamsSchema = z.strictObject({
@@ -812,6 +821,44 @@ hybridRouter.get(
                 createHttpError(
                     HttpCode.INTERNAL_SERVER_ERROR,
                     "Failed to get resource by domain"
+                )
+            );
+        }
+    }
+);
+
+hybridRouter.get(
+    "/redirects/host/:host",
+    async (req: Request, res: Response, next: NextFunction) => {
+        try {
+            const parsedParams = getRedirectsByHostParamsSchema.safeParse(
+                req.params
+            );
+            if (!parsedParams.success) {
+                return next(
+                    createHttpError(
+                        HttpCode.BAD_REQUEST,
+                        fromError(parsedParams.error).toString()
+                    )
+                );
+            }
+
+            const { host } = parsedParams.data;
+            const redirects = await getRedirectsByHost(host);
+
+            return response<RedirectByHost[]>(res, {
+                data: redirects,
+                success: true,
+                error: false,
+                message: "Redirects retrieved successfully",
+                status: HttpCode.OK
+            });
+        } catch (error) {
+            logger.error(error);
+            return next(
+                createHttpError(
+                    HttpCode.INTERNAL_SERVER_ERROR,
+                    "Failed to get redirects by host"
                 )
             );
         }
@@ -1835,8 +1882,19 @@ hybridRouter.post(
                 resourceId
             );
 
+            // Lets the node forward the whitelisted email downstream as
+            // Remote-Email, same as verifySession does locally
+            const whitelistEmail = result.resourceSession
+                ? await getWhitelistEmail(
+                      result.resourceSession.whitelistId,
+                      result.resourceSession.policyWhitelistId
+                  )
+                : null;
+
             // this is for backward compatibility with nodes that did not have the policy id checking
-            const modifiedResult: ResourceSessionValidationResult = {
+            const modifiedResult: ResourceSessionValidationResult & {
+                whitelistEmail: string | null;
+            } = {
                 ...result,
                 resourceSession: result.resourceSession
                     ? {
@@ -1855,7 +1913,8 @@ hybridRouter.post(
                               result.resourceSession.whitelistId ??
                               null
                       }
-                    : null
+                    : null,
+                whitelistEmail
             };
 
             return response(res, {
@@ -2478,7 +2537,12 @@ hybridRouter.post(
                 destinations: destinations
             });
         } catch (error) {
-            logger.error(error);
+            if (!(
+                error instanceof Error &&
+                error.message === "Exit node not allowed"
+            )) {
+                logger.error(error);
+            }
             return next(
                 createHttpError(
                     HttpCode.INTERNAL_SERVER_ERROR,

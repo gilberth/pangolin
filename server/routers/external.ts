@@ -22,6 +22,7 @@ import * as newt from "./newt";
 import * as olm from "./olm";
 import * as ssh from "./ssh";
 import * as serverInfo from "./serverInfo";
+import * as reKey from "./re-key";
 import HttpCode from "@server/types/HttpCode";
 import {
     verifyAccessTokenAccess,
@@ -62,6 +63,7 @@ import { createStore } from "#dynamic/lib/rateLimitStore";
 import { checkRoundTripMessage } from "./ws";
 import * as labels from "@server/routers/labels";
 import * as aiProvider from "@server/routers/aiProvider";
+import * as redirect from "@server/routers/redirect";
 import * as aiBudget from "@server/routers/aiBudget";
 import * as virtualApiKey from "@server/routers/virtualApiKey";
 import * as certificates from "@server/routers/certificates";
@@ -87,6 +89,12 @@ authenticated.get("/org/checkId", org.checkId);
 authenticated.put("/org", getUserOrgs, org.createOrg);
 
 authenticated.get("/orgs", verifyUserIsServerAdmin, org.listOrgs);
+authenticated.get("/admin/orgs", verifyUserIsServerAdmin, org.adminListOrgs);
+authenticated.delete(
+    "/admin/org/:orgId",
+    verifyUserIsServerAdmin,
+    org.adminDeleteOrg
+);
 authenticated.get("/user/:userId/orgs", verifyIsLoggedInUser, org.listUserOrgs);
 
 authenticated.get(
@@ -378,6 +386,13 @@ authenticated.get(
     verifySiteResourceAccess,
     verifyUserHasAction(ActionsEnum.getSiteResource),
     siteResource.getSiteResource
+);
+
+authenticated.get(
+    "/site-resource/:siteResourceId/blueprint",
+    verifySiteResourceAccess,
+    verifyUserHasAction(ActionsEnum.getSiteResource),
+    siteResource.exportSiteResourceBlueprint
 );
 
 authenticated.post(
@@ -758,6 +773,13 @@ authenticated.get(
     verifyUserHasAction(ActionsEnum.getResource),
     resource.getResource
 );
+
+authenticated.get(
+    "/resource/:resourceId/blueprint",
+    verifyResourceAccess,
+    verifyUserHasAction(ActionsEnum.getResource),
+    resource.exportResourceBlueprint
+);
 authenticated.get(
     "/org/:orgId/resource/:niceId",
     verifyOrgAccess,
@@ -1054,6 +1076,28 @@ authenticated.put(
     verifyUserHasAction(ActionsEnum.setResourcePolicyRules),
     logActionAudit(ActionsEnum.setResourcePolicyRules),
     policy.setResourcePolicyRules
+);
+
+authenticated.put(
+    "/resource-policy/:resourcePolicyId/mtls/certificate",
+    verifyResourcePolicyAccess,
+    verifyLimits,
+    verifyUserHasAction(ActionsEnum.updateResourcePolicy),
+    logActionAudit(ActionsEnum.updateResourcePolicy),
+    policy.createResourcePolicyMtlsCertificate
+);
+authenticated.get(
+    "/resource-policy/:resourcePolicyId/mtls/certificates",
+    verifyResourcePolicyAccess,
+    verifyUserHasAction(ActionsEnum.getResourcePolicy),
+    policy.listResourcePolicyMtlsCertificates
+);
+authenticated.delete(
+    "/resource-policy/:resourcePolicyId/mtls/certificate/:mtlsCertificateId",
+    verifyResourcePolicyAccess,
+    verifyUserHasAction(ActionsEnum.updateResourcePolicy),
+    logActionAudit(ActionsEnum.updateResourcePolicy),
+    policy.deleteResourcePolicyMtlsCertificate
 );
 
 authenticated.post(
@@ -1378,6 +1422,12 @@ if (build !== "saas") {
         user.adminGeneratePasswordResetCode
     );
 
+    authenticated.post(
+        "/user/:userId/server-admin",
+        verifyUserIsServerAdmin,
+        user.adminSetServerAdmin
+    );
+
     authenticated.delete(
         "/user/:userId",
         verifyUserIsServerAdmin,
@@ -1620,6 +1670,50 @@ authenticated.delete(
     verifyUserHasAction(ActionsEnum.deleteAiProvider),
     logActionAudit(ActionsEnum.deleteAiProvider),
     aiProvider.deleteAiProvider
+);
+
+authenticated.put(
+    "/org/:orgId/redirect",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.createRedirect),
+    logActionAudit(ActionsEnum.createRedirect),
+    redirect.createRedirect
+);
+
+authenticated.get(
+    "/org/:orgId/redirects",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.listRedirects),
+    redirect.listRedirects
+);
+
+authenticated.get(
+    "/org/:orgId/redirects/:redirectId",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.getRedirect),
+    redirect.getRedirect
+);
+authenticated.get(
+    "/org/:orgId/redirect/:niceId",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.getRedirect),
+    redirect.getRedirect
+);
+
+authenticated.post(
+    "/org/:orgId/redirects/:redirectId",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.updateRedirect),
+    logActionAudit(ActionsEnum.updateRedirect),
+    redirect.updateRedirect
+);
+
+authenticated.delete(
+    "/org/:orgId/redirects/:redirectId",
+    verifyOrgAccess,
+    verifyUserHasAction(ActionsEnum.deleteRedirect),
+    logActionAudit(ActionsEnum.deleteRedirect),
+    redirect.deleteRedirect
 );
 
 authenticated.put(
@@ -1899,6 +1993,52 @@ authenticated.post(
     verifyUserHasAction(ActionsEnum.restartCertificate),
     logActionAudit(ActionsEnum.restartCertificate),
     certificates.restartCertificate
+);
+
+authenticated.post(
+    "/re-key/:clientId/regenerate-client-secret",
+    verifyClientAccess, // this is first to set the org id
+    verifyLimits,
+    verifyUserHasAction(ActionsEnum.reGenerateSecret),
+    reKey.reGenerateClientSecret
+);
+
+authenticated.post(
+    "/re-key/:siteId/regenerate-site-secret",
+    verifySiteAccess, // this is first to set the org id
+    verifyLimits,
+    verifyUserHasAction(ActionsEnum.reGenerateSecret),
+    reKey.reGenerateSiteSecret
+);
+
+authenticated.put(
+    "/re-key/:orgId/regenerate-remote-exit-node-secret",
+    verifyOrgAccess,
+    verifyLimits,
+    verifyUserHasAction(ActionsEnum.reGenerateSecret),
+    reKey.reGenerateExitNodeSecret
+);
+
+authenticated.put(
+    "/resource/:resourceId/mtls/certificate",
+    verifyResourceAccess,
+    verifyLimits,
+    verifyUserHasAction(ActionsEnum.createResourceMtlsCertificate),
+    logActionAudit(ActionsEnum.createResourceMtlsCertificate),
+    resource.createResourceMtlsCertificate
+);
+authenticated.get(
+    "/resource/:resourceId/mtls/certificates",
+    verifyResourceAccess,
+    verifyUserHasAction(ActionsEnum.listResourceMtlsCertificates),
+    resource.listResourceMtlsCertificates
+);
+authenticated.delete(
+    "/resource/:resourceId/mtls/certificate/:mtlsCertificateId",
+    verifyResourceAccess,
+    verifyUserHasAction(ActionsEnum.deleteResourceMtlsCertificate),
+    logActionAudit(ActionsEnum.deleteResourceMtlsCertificate),
+    resource.deleteResourceMtlsCertificate
 );
 
 // Auth routes

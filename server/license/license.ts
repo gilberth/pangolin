@@ -4,7 +4,7 @@ import { setHostMeta } from "@server/lib/hostMeta";
 const keyTypes = ["host"] as const;
 export type LicenseKeyType = (typeof keyTypes)[number];
 
-const keyTiers = ["personal", "enterprise"] as const;
+const keyTiers = ["personal", "enterprise", "tier1", "tier2"] as const;
 export type LicenseKeyTier = (typeof keyTiers)[number];
 
 export type LicenseStatus = {
@@ -16,6 +16,8 @@ export type LicenseStatus = {
     usedSites?: number;
     maxUsers?: number;
     usedUsers?: number;
+    maxMachines?: number;
+    usedMachines?: number;
 };
 
 export type LicenseKeyCache = {
@@ -28,12 +30,13 @@ export type LicenseKeyCache = {
     terminateAt?: Date;
     quantity?: number;
     quantity_2?: number;
+    quantity_3?: number;
 };
 
 export class License {
     private serverSecret!: string;
 
-    constructor(private hostMeta: HostMeta) { }
+    constructor(private hostMeta: HostMeta) {}
 
     public async check(): Promise<LicenseStatus> {
         return {
@@ -48,6 +51,10 @@ export class License {
     }
 
     public async isUnlocked() {
+        return false;
+    }
+
+    public async hasTier(tier: LicenseKeyTier[]) {
         return false;
     }
 }

@@ -36,7 +36,8 @@ function getActionsCategories(root: boolean) {
             [t("createOrgUser")]: "createOrgUser",
             [t("actionApplyBlueprint")]: "applyBlueprint",
             [t("actionListBlueprints")]: "listBlueprints",
-            [t("actionGetBlueprint")]: "getBlueprint"
+            [t("actionGetBlueprint")]: "getBlueprint",
+            [t("actionReGenerateSecret")]: "reGenerateSecret"
         },
 
         Domain: {
@@ -46,7 +47,19 @@ function getActionsCategories(root: boolean) {
             [t("actionUpdateOrgDomain")]: "updateOrgDomain",
             [t("actionDeleteOrgDomain")]: "deleteOrgDomain",
             [t("actionGetDNSRecords")]: "getDNSRecords",
-            [t("actionRestartOrgDomain")]: "restartOrgDomain"
+            [t("actionRestartOrgDomain")]: "restartOrgDomain",
+            [t("actionListCustomDnsRecords")]: "listCustomDnsRecords",
+            [t("actionCreateCustomDnsRecord")]: "createCustomDnsRecord",
+            [t("actionUpdateCustomDnsRecord")]: "updateCustomDnsRecord",
+            [t("actionDeleteCustomDnsRecord")]: "deleteCustomDnsRecord"
+        },
+
+        Redirect: {
+            [t("actionCreateRedirect")]: "createRedirect",
+            [t("actionDeleteRedirect")]: "deleteRedirect",
+            [t("actionGetRedirect")]: "getRedirect",
+            [t("actionListRedirects")]: "listRedirects",
+            [t("actionUpdateRedirect")]: "updateRedirect"
         },
 
         Site: {
@@ -101,7 +114,10 @@ function getActionsCategories(root: boolean) {
             [t("actionUpdateRole")]: "updateRole",
             [t("actionListAllowedRoleResources")]: "listRoleResources",
             [t("actionAddUserRole")]: "addUserRole",
-            [t("actionRemoveUserRole")]: "removeUserRole"
+            [t("actionRemoveUserRole")]: "removeUserRole",
+            [t("actionAddClientRole")]: "addClientRole",
+            [t("actionRemoveClientRole")]: "removeClientRole",
+            [t("actionSetClientRoles")]: "setClientRoles"
         },
         "Access Token": {
             [t("actionGenerateAccessToken")]: "generateAccessToken",

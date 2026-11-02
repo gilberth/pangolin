@@ -3,7 +3,6 @@ import { InferSelectModel, sql } from "drizzle-orm";
 import {
     bigint,
     boolean,
-    check,
     index,
     integer,
     pgTable,
@@ -78,7 +77,8 @@ export const orgs = pgTable("orgs", {
         "settingsEnableGlobalNewtAutoUpdate"
     )
         .notNull()
-        .default(false)
+        .default(false),
+    settingsJitModeLimit: integer("settingsJitModeLimit").notNull().default(250)
 });
 
 export const orgDomains = pgTable("orgDomains", {
@@ -180,13 +180,18 @@ export const resources = pgTable(
         applyRules: boolean("applyRules"),
         enabled: boolean("enabled").notNull().default(true),
         stickySession: boolean("stickySession").notNull().default(false),
+        loadBalancingStrategy: varchar("loadBalancingStrategy", { length: 32 })
+            .$type<"wrr" | "p2c" | "hrw" | "leasttime">()
+            .notNull()
+            .default("wrr"), // traefik http loadBalancer.strategy
         tlsServerName: varchar("tlsServerName"),
         setHostHeader: varchar("setHostHeader"),
         enableProxy: boolean("enableProxy").default(true),
         skipToIdpId: integer("skipToIdpId").references(() => idp.idpId, {
             onDelete: "set null"
         }),
-        headers: text("headers"), // comma-separated list of headers to add to the request
+        requestHeaders: text("requestHeaders"),
+        responseHeaders: text("responseHeaders"),
         proxyProtocol: boolean("proxyProtocol").notNull().default(false),
         proxyProtocolVersion: integer("proxyProtocolVersion").default(1),
         maintenanceModeEnabled: boolean("maintenanceModeEnabled")
@@ -198,6 +203,10 @@ export const resources = pgTable(
         maintenanceTitle: text("maintenanceTitle"),
         maintenanceMessage: text("maintenanceMessage"),
         maintenanceEstimatedTime: text("maintenanceEstimatedTime"),
+        mtlsEnabled: boolean("mtlsEnabled").notNull().default(false),
+        forwardIdentityHeaders: boolean("forwardIdentityHeaders")
+            .notNull()
+            .default(true),
         postAuthPath: text("postAuthPath"),
         health: varchar("health").default("unknown"), // "healthy", "unhealthy", "unknown"
         wildcard: boolean("wildcard").notNull().default(false),
@@ -226,6 +235,41 @@ export const resources = pgTable(
         index("idx_resources_orgid_niceid").on(t.orgId, t.niceId)
     ]
 );
+
+export const redirects = pgTable("redirects", {
+    redirectId: serial("redirectId").primaryKey(),
+    orgId: varchar("orgId")
+        .references(() => orgs.orgId, {
+            onDelete: "cascade"
+        })
+        .notNull(),
+    resourceId: integer("resourceId").references(() => resources.resourceId, {
+        onDelete: "cascade"
+    }),
+    domainId: varchar("domainId").references(() => domains.domainId, {
+        onDelete: "cascade"
+    }),
+    niceId: text("niceId").notNull(),
+    name: varchar("name").notNull(),
+    subdomain: varchar("subdomain"),
+    destinationHost: varchar("destinationHost").notNull(), // scheme://host[:port]
+    pathMatchType: varchar("pathMatchType")
+        .$type<"exact" | "prefix" | "regex">()
+        .notNull()
+        .default("regex"), // exact, prefix, regex
+    matchPath: varchar("matchPath"),
+    rewritePath: varchar("rewritePath"), // if set, rewrites the path to this value,
+    //  else, the original path will be kept
+    rewritePathType: varchar("rewritePathType").$type<
+        "exact" | "prefix" | "regex" | "stripPrefix"
+    >(), // exact, prefix, regex, stripPrefix
+    priority: integer("priority").default(100),
+    permanent: boolean("permanent").notNull().default(false),
+    // Only consulted for domain-attached redirects; resource-attached ones
+    // inherit the resource's ssl setting.
+    ssl: boolean("ssl").notNull().default(true),
+    enabled: boolean("enabled").notNull().default(true)
+});
 
 export const resourceAiProviders = pgTable(
     "resourceAiProviders",
@@ -262,16 +306,20 @@ export const resourceAiModels = pgTable(
     (t) => [primaryKey({ columns: [t.resourceId, t.modelId] })]
 );
 
-export const labels = pgTable("labels", {
-    labelId: serial("labelId").primaryKey(),
-    name: varchar("name").notNull(),
-    color: varchar("color").notNull(),
-    orgId: varchar("orgId")
-        .references(() => orgs.orgId, {
-            onDelete: "cascade"
-        })
-        .notNull()
-});
+export const labels = pgTable(
+    "labels",
+    {
+        labelId: serial("labelId").primaryKey(),
+        name: varchar("name").notNull(),
+        color: varchar("color").notNull(),
+        orgId: varchar("orgId")
+            .references(() => orgs.orgId, {
+                onDelete: "cascade"
+            })
+            .notNull()
+    },
+    (t) => [index("idx_labels_orgid").on(t.orgId)]
+);
 
 export const launcherViews = pgTable("launcherViews", {
     viewId: serial("viewId").primaryKey(),
@@ -454,6 +502,7 @@ export const exitNodes = pgTable("exitNodes", {
     endpoint: varchar("endpoint").notNull(),
     publicKey: varchar("publicKey").notNull(),
     listenPort: integer("listenPort").notNull(),
+    relayPort: integer("relayPort").notNull().default(21820),
     reachableAt: varchar("reachableAt"),
     maxConnections: integer("maxConnections"),
     online: boolean("online").notNull().default(false),
@@ -486,8 +535,8 @@ export const siteResources = pgTable(
         name: varchar("name").notNull(),
         ssl: boolean("ssl").notNull().default(false),
         mode: varchar("mode")
-            .$type<"host" | "cidr" | "http" | "ssh" | "inference">()
-            .notNull(), // "host" | "cidr" | "http"
+            .$type<"host" | "cidr" | "http" | "ssh" | "inference" | "gateway">()
+            .notNull(),
         scheme: varchar("scheme").$type<"http" | "https">(), // only for when we are doing https or http mode
         proxyPort: integer("proxyPort"), // only for port mode
         destinationPort: integer("destinationPort"), // only for port mode
@@ -678,6 +727,8 @@ export const newts = pgTable(
         secretHash: varchar("secretHash").notNull(),
         dateCreated: varchar("dateCreated").notNull(),
         version: varchar("version"),
+        agent: varchar("agent"), // either newt or cli
+        agentVersion: varchar("agentVersion"),
         siteId: integer("siteId").references(() => sites.siteId, {
             onDelete: "cascade"
         })
@@ -693,15 +744,19 @@ export const twoFactorBackupCodes = pgTable("twoFactorBackupCodes", {
     codeHash: varchar("codeHash").notNull()
 });
 
-export const sessions = pgTable("session", {
-    sessionId: varchar("id").primaryKey(),
-    userId: varchar("userId")
-        .notNull()
-        .references(() => users.userId, { onDelete: "cascade" }),
-    expiresAt: bigint("expiresAt", { mode: "number" }).notNull(),
-    issuedAt: bigint("issuedAt", { mode: "number" }),
-    deviceAuthUsed: boolean("deviceAuthUsed").notNull().default(false)
-});
+export const sessions = pgTable(
+    "session",
+    {
+        sessionId: varchar("id").primaryKey(),
+        userId: varchar("userId")
+            .notNull()
+            .references(() => users.userId, { onDelete: "cascade" }),
+        expiresAt: bigint("expiresAt", { mode: "number" }).notNull(),
+        issuedAt: bigint("issuedAt", { mode: "number" }),
+        deviceAuthUsed: boolean("deviceAuthUsed").notNull().default(false)
+    },
+    (t) => [index("idx_sessions_userid").on(t.userId)]
+);
 
 export const newtSessions = pgTable("newtSession", {
     sessionId: varchar("id").primaryKey(),
@@ -711,19 +766,26 @@ export const newtSessions = pgTable("newtSession", {
     expiresAt: bigint("expiresAt", { mode: "number" }).notNull()
 });
 
-export const userOrgs = pgTable("userOrgs", {
-    userId: varchar("userId")
-        .notNull()
-        .references(() => users.userId, { onDelete: "cascade" }),
-    orgId: varchar("orgId")
-        .references(() => orgs.orgId, {
-            onDelete: "cascade"
-        })
-        .notNull(),
-    isOwner: boolean("isOwner").notNull().default(false),
-    autoProvisioned: boolean("autoProvisioned").default(false),
-    pamUsername: varchar("pamUsername") // cleaned username for ssh and such
-});
+export const userOrgs = pgTable(
+    "userOrgs",
+    {
+        userId: varchar("userId")
+            .notNull()
+            .references(() => users.userId, { onDelete: "cascade" }),
+        orgId: varchar("orgId")
+            .references(() => orgs.orgId, {
+                onDelete: "cascade"
+            })
+            .notNull(),
+        isOwner: boolean("isOwner").notNull().default(false),
+        autoProvisioned: boolean("autoProvisioned").default(false),
+        pamUsername: varchar("pamUsername") // cleaned username for ssh and such
+    },
+    (t) => [
+        index("idx_userOrgs_userid").on(t.userId),
+        index("idx_userOrgs_orgid").on(t.orgId)
+    ]
+);
 
 export const emailVerificationCodes = pgTable("emailVerificationCodes", {
     codeId: serial("id").primaryKey(),
@@ -751,22 +813,26 @@ export const actions = pgTable("actions", {
     description: varchar("description")
 });
 
-export const roles = pgTable("roles", {
-    roleId: serial("roleId").primaryKey(),
-    orgId: varchar("orgId")
-        .references(() => orgs.orgId, {
-            onDelete: "cascade"
-        })
-        .notNull(),
-    isAdmin: boolean("isAdmin"),
-    name: varchar("name").notNull(),
-    description: varchar("description"),
-    requireDeviceApproval: boolean("requireDeviceApproval").default(false),
-    sshSudoMode: varchar("sshSudoMode", { length: 32 }).default("full"), // "none" | "full" | "commands"
-    sshSudoCommands: text("sshSudoCommands").default("[]"),
-    sshCreateHomeDir: boolean("sshCreateHomeDir").default(true),
-    sshUnixGroups: text("sshUnixGroups").default("[]")
-});
+export const roles = pgTable(
+    "roles",
+    {
+        roleId: serial("roleId").primaryKey(),
+        orgId: varchar("orgId")
+            .references(() => orgs.orgId, {
+                onDelete: "cascade"
+            })
+            .notNull(),
+        isAdmin: boolean("isAdmin"),
+        name: varchar("name").notNull(),
+        description: varchar("description"),
+        requireDeviceApproval: boolean("requireDeviceApproval").default(false),
+        sshSudoMode: varchar("sshSudoMode", { length: 32 }).default("full"), // "none" | "full" | "commands"
+        sshSudoCommands: text("sshSudoCommands").default("[]"),
+        sshCreateHomeDir: boolean("sshCreateHomeDir").default(true),
+        sshUnixGroups: text("sshUnixGroups").default("[]")
+    },
+    (t) => [index("idx_roles_orgid").on(t.orgId)]
+);
 
 export const userOrgRoles = pgTable(
     "userOrgRoles",
@@ -782,6 +848,27 @@ export const userOrgRoles = pgTable(
             .references(() => roles.roleId, { onDelete: "cascade" })
     },
     (t) => [unique().on(t.userId, t.orgId, t.roleId)]
+);
+
+// roles assigned to machine clients (clients with no userId) so they can be
+// granted access to site resources through roleSiteResources like users are
+export const clientOrgRoles = pgTable(
+    "clientOrgRoles",
+    {
+        clientId: integer("clientId")
+            .notNull()
+            .references(() => clients.clientId, { onDelete: "cascade" }),
+        orgId: varchar("orgId")
+            .notNull()
+            .references(() => orgs.orgId, { onDelete: "cascade" }),
+        roleId: integer("roleId")
+            .notNull()
+            .references(() => roles.roleId, { onDelete: "cascade" })
+    },
+    (t) => [
+        unique().on(t.clientId, t.orgId, t.roleId),
+        index("idx_clientorgroles_roleid").on(t.roleId)
+    ]
 );
 
 export const roleActions = pgTable(
@@ -1116,6 +1203,7 @@ export const resourceRules = pgTable("resourceRules", {
             | "COUNTRY_IS_NOT"
             | "ASN"
             | "REGION"
+            | "METHOD"
         >()
         .notNull(), // CIDR, PATH, IP
     value: varchar("value").notNull()
@@ -1140,6 +1228,7 @@ export const resourcePolicyRules = pgTable("resourcePolicyRules", {
             | "COUNTRY_IS_NOT"
             | "ASN"
             | "REGION"
+            | "METHOD"
         >()
         .notNull(),
     value: varchar("value").notNull()
@@ -1158,6 +1247,7 @@ export const resourcePolicies = pgTable(
         emailWhitelistEnabled: boolean("emailWhitelistEnabled")
             .notNull()
             .default(false),
+        mtlsEnabled: boolean("mtlsEnabled").notNull().default(false),
         idpId: integer("idpId").references(() => idp.idpId, {
             onDelete: "set null"
         }),
@@ -1398,6 +1488,7 @@ export const olms = pgTable(
         dateCreated: varchar("dateCreated").notNull(),
         version: text("version"),
         agent: text("agent"),
+        agentVersion: text("agentVersion"),
         name: varchar("name"),
         clientId: integer("clientId").references(() => clients.clientId, {
             // we will switch this depending on the current org it wants to connect to
@@ -1409,7 +1500,10 @@ export const olms = pgTable(
         }),
         archived: boolean("archived").notNull().default(false)
     },
-    (t) => [index("idx_olms_clientid").on(t.clientId)]
+    (t) => [
+        index("idx_olms_clientid").on(t.clientId),
+        index("idx_olms_userid").on(t.userId)
+    ]
 );
 
 export const currentFingerprint = pgTable("currentFingerprint", {
@@ -1936,87 +2030,6 @@ export const aiBudgetBreachEvents = pgTable(
     ]
 );
 
-// Logs the aggregated prompt + response for a single AI gateway request, for
-// session replay. One row per request (not per streaming chunk). `sessionId`
-// is a fresh random id per row for now - no cross-request correlation yet,
-// but the column exists so a future pass can link multiple rows into a real
-// multi-turn session.
-export const aiSessionLog = pgTable(
-    "aiSessionLog",
-    {
-        id: serial("id").primaryKey(),
-        sessionId: varchar("sessionId").notNull(),
-        orgId: varchar("orgId").references(() => orgs.orgId, {
-            onDelete: "cascade"
-        }),
-        providerId: integer("providerId").references(
-            () => aiProviders.providerId,
-            { onDelete: "set null" }
-        ),
-        capability: varchar("capability").notNull(),
-        resourceId: integer("resourceId").references(
-            () => resources.resourceId,
-            { onDelete: "set null" }
-        ),
-        siteResourceId: integer("siteResourceId").references(
-            () => siteResources.siteResourceId,
-            { onDelete: "set null" }
-        ),
-        userId: varchar("userId").references(() => users.userId, {
-            onDelete: "set null"
-        }),
-        virtualApiKeyId: varchar("virtualApiKeyId").references(
-            () => virtualApiKeys.virtualApiKeyId,
-            { onDelete: "set null" }
-        ),
-        requestedModel: varchar("requestedModel"),
-        isStream: boolean("isStream").notNull().default(false),
-        requestBody: text("requestBody"),
-        responseBody: text("responseBody"),
-        // Capability-agnostic message transcript (JSON-encoded
-        // NormalizedAiMessage[] from server/lib/aiMessageNormalization.ts),
-        // computed at write time so search/display never need per-capability
-        // parsing logic. Null when normalization couldn't recognize the
-        // shape - callers fall back to requestBody/responseBody.
-        normalizedRequest: text("normalizedRequest"),
-        normalizedResponse: text("normalizedResponse"),
-        // True if any of the request/response (raw or normalized) fields
-        // were cut short at AI_SESSION_LOG_MAX_BODY_CHARS before storage.
-        truncated: boolean("truncated").notNull().default(false),
-        statusCode: integer("statusCode"),
-        createdAt: bigint("createdAt", { mode: "number" }).notNull() // epoch seconds
-    },
-    (t) => [
-        index("idx_ai_session_log_org_created").on(t.orgId, t.createdAt),
-        index("idx_ai_session_log_org_provider_created").on(
-            t.orgId,
-            t.providerId,
-            t.createdAt
-        ),
-        index("idx_ai_session_log_org_resource_created").on(
-            t.orgId,
-            t.resourceId,
-            t.createdAt
-        ),
-        index("idx_ai_session_log_org_site_resource_created").on(
-            t.orgId,
-            t.siteResourceId,
-            t.createdAt
-        ),
-        index("idx_ai_session_log_org_user_created").on(
-            t.orgId,
-            t.userId,
-            t.createdAt
-        ),
-        index("idx_ai_session_log_org_virtual_api_key_created").on(
-            t.orgId,
-            t.virtualApiKeyId,
-            t.createdAt
-        ),
-        index("idx_ai_session_log_session").on(t.sessionId)
-    ]
-);
-
 export const certificates = pgTable("certificates", {
     certId: serial("certId").primaryKey(),
     domain: varchar("domain", { length: 255 }).notNull().unique(),
@@ -2035,6 +2048,43 @@ export const certificates = pgTable("certificates", {
     certFile: text("certFile"),
     keyFile: text("keyFile")
 });
+
+export const resourceMtlsCertificates = pgTable("resourceMtlsCertificates", {
+    mtlsCertificateId: serial("mtlsCertificateId").primaryKey(),
+    resourceId: integer("resourceId")
+        .notNull()
+        .references(() => resources.resourceId, { onDelete: "cascade" }),
+    name: varchar("name"),
+    certificate: text("certificate").notNull(),
+    subject: varchar("subject"),
+    issuer: varchar("issuer"),
+    serialNumber: varchar("serialNumber"),
+    fingerprint: varchar("fingerprint"),
+    notBefore: bigint("notBefore", { mode: "number" }),
+    notAfter: bigint("notAfter", { mode: "number" }),
+    createdAt: bigint("createdAt", { mode: "number" }).notNull()
+});
+
+export const resourcePolicyMtlsCertificates = pgTable(
+    "resourcePolicyMtlsCertificates",
+    {
+        mtlsCertificateId: serial("mtlsCertificateId").primaryKey(),
+        resourcePolicyId: integer("resourcePolicyId")
+            .notNull()
+            .references(() => resourcePolicies.resourcePolicyId, {
+                onDelete: "cascade"
+            }),
+        name: varchar("name"),
+        certificate: text("certificate").notNull(),
+        subject: varchar("subject"),
+        issuer: varchar("issuer"),
+        serialNumber: varchar("serialNumber"),
+        fingerprint: varchar("fingerprint"),
+        notBefore: bigint("notBefore", { mode: "number" }),
+        notAfter: bigint("notAfter", { mode: "number" }),
+        createdAt: bigint("createdAt", { mode: "number" }).notNull()
+    }
+);
 
 export type Org = InferSelectModel<typeof orgs>;
 export type User = InferSelectModel<typeof users>;
@@ -2062,6 +2112,7 @@ export type UserInvite = InferSelectModel<typeof userInvites>;
 export type UserInviteRole = InferSelectModel<typeof userInviteRoles>;
 export type UserOrg = InferSelectModel<typeof userOrgs>;
 export type UserOrgRole = InferSelectModel<typeof userOrgRoles>;
+export type ClientOrgRole = InferSelectModel<typeof clientOrgRoles>;
 export type ResourceSession = InferSelectModel<typeof resourceSessions>;
 export type ResourcePincode = InferSelectModel<typeof resourcePincode>;
 export type ResourcePassword = InferSelectModel<typeof resourcePassword>;
@@ -2124,12 +2175,12 @@ export type ResourcePolicy = InferSelectModel<typeof resourcePolicies>;
 export type RolePolicy = InferSelectModel<typeof rolePolicies>;
 export type UserPolicy = InferSelectModel<typeof userPolicies>;
 export type ResourcePolicyRule = InferSelectModel<typeof resourcePolicyRules>;
+export type Redirect = InferSelectModel<typeof redirects>;
 export type AiProvider = InferSelectModel<typeof aiProviders>;
 export type AiModel = InferSelectModel<typeof aiModels>;
 export type AiBudget = InferSelectModel<typeof aiBudgets>;
 export type AiUsageRecord = InferSelectModel<typeof aiUsageRecords>;
 export type AiBudgetBreachEvent = InferSelectModel<typeof aiBudgetBreachEvents>;
-export type AiSessionLog = InferSelectModel<typeof aiSessionLog>;
 export type ResourceAiProvider = InferSelectModel<typeof resourceAiProviders>;
 export type SiteResourceAiProvider = InferSelectModel<
     typeof siteResourceAiProviders
@@ -2137,3 +2188,9 @@ export type SiteResourceAiProvider = InferSelectModel<
 export type ResourceAiModel = InferSelectModel<typeof resourceAiModels>;
 export type SiteResourceAiModel = InferSelectModel<typeof siteResourceAiModels>;
 export type Certificate = InferSelectModel<typeof certificates>;
+export type ResourceMtlsCertificate = InferSelectModel<
+    typeof resourceMtlsCertificates
+>;
+export type ResourcePolicyMtlsCertificate = InferSelectModel<
+    typeof resourcePolicyMtlsCertificates
+>;

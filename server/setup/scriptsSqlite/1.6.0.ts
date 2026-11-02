@@ -1,7 +1,7 @@
 import { APP_PATH, configFilePath1, configFilePath2 } from "@server/lib/consts";
 import Database from "better-sqlite3";
 import fs from "fs";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import path from "path";
 
 const version = "1.6.0";

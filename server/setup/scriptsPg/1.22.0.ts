@@ -3,7 +3,7 @@ import { db } from "@server/db/pg/driver";
 import { APP_PATH } from "@server/lib/consts";
 import { sql } from "drizzle-orm";
 import fs from "fs";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import path from "path";
 import z from "zod";
 import { fromZodError } from "zod-validation-error";

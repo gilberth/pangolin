@@ -2,8 +2,11 @@ import { z } from "zod";
 import { existsSync } from "node:fs";
 import { portRangeStringSchema } from "@server/lib/ip";
 import { MaintenanceSchema } from "#dynamic/lib/blueprints/MaintenanceSchema";
+import { MtlsSchema } from "#dynamic/lib/blueprints/MtlsSchema";
+import { resourceModeSupportsMtls } from "@server/lib/mtlsModes";
 import { isValidRegionId } from "@server/db/regions";
-import { wildcardSubdomainSchema } from "@server/lib/schemas";
+import { isValidHttpMethodList } from "@server/lib/validators";
+import { routePathSchema, wildcardSubdomainSchema } from "@server/lib/schemas";
 import config from "@server/lib/config";
 import {
     aiBudgetEnforcementSchema,
@@ -29,8 +32,35 @@ export const SiteSchema = z.object({
     "docker-socket-enabled": z.boolean().optional().default(true)
 });
 
+// A malformed hostname (e.g. stray whitespace) is silently accepted here but
+// fails to parse as a URL when newt builds the health check request, which
+// takes the target out of the routing pool and breaks the resource entirely
+// (see #3677). Validate eagerly so blueprints reject it up front instead.
+const healthCheckHostnameSchema = z
+    .string()
+    .trim()
+    .min(1)
+    .refine((val) => !/\s/.test(val), {
+        message: "Hostname must not contain whitespace"
+    })
+    .refine(
+        (val) => {
+            if (z.union([z.ipv4(), z.ipv6()]).safeParse(val).success) {
+                return true;
+            }
+            const hostnameRegex =
+                /^(?:[a-zA-Z0-9_](?:[a-zA-Z0-9_-]{0,61}[a-zA-Z0-9_])?\.)*[a-zA-Z0-9_](?:[a-zA-Z0-9_-]{0,61}[a-zA-Z0-9_])?$/;
+            return hostnameRegex.test(val);
+        },
+        {
+            message:
+                "Hostname must be a valid IP address or hostname (no spaces or invalid characters)"
+        }
+    );
+
 export const TargetHealthCheckSchema = z.object({
-    hostname: z.string(),
+    name: z.string().optional(),
+    hostname: healthCheckHostnameSchema,
     port: z.int().min(1).max(65535),
     enabled: z.boolean().optional().default(true),
     path: z.string().optional().default("/"),
@@ -61,7 +91,7 @@ export const TargetSchema = z.object({
     port: z.int().min(1).max(65535),
     enabled: z.boolean().optional().default(true),
     "internal-port": z.int().min(1).max(65535).optional(),
-    path: z.string().optional(),
+    path: routePathSchema.optional(),
     "path-match": z.enum(["exact", "prefix", "regex"]).optional().nullable(),
     healthcheck: TargetHealthCheckSchema.optional(),
     rewritePath: z.string().optional(), // deprecated alias
@@ -95,13 +125,41 @@ export const AuthSchema = z.object({
         }),
     "sso-users": z.array(z.string()).optional().default([]),
     "whitelist-users": z.array(z.email()).optional().default([]),
-    "auto-login-idp": z.int().positive().optional()
+    "auto-login-idp": z.int().positive().optional(),
+    mtls: MtlsSchema.optional()
 });
+
+// The shape MtlsSchema has where mTLS is supported; the open-source schema is
+// empty, so callers read the fields through this type.
+export type BlueprintMtls = {
+    enabled?: boolean;
+    "ca-certificates"?: string[];
+};
+
+/**
+ * A resource's mTLS settings: under 'auth' like the other auth methods, or
+ * the deprecated top-level 'mtls'.
+ */
+export function getBlueprintResourceMtls(resource: {
+    auth?: { mtls?: unknown };
+    mtls?: unknown;
+}): BlueprintMtls | undefined {
+    return (resource.auth?.mtls ?? resource.mtls) as BlueprintMtls | undefined;
+}
 
 export const RuleSchema = z
     .object({
         action: z.enum(["allow", "deny", "pass"]),
-        match: z.enum(["cidr", "path", "ip", "country", "asn", "region"]),
+        match: z.enum([
+            "cidr",
+            "path",
+            "ip",
+            "country",
+            "country_is_not",
+            "asn",
+            "region",
+            "method"
+        ]),
         value: z.coerce.string(),
         priority: z.int().optional(),
         enabled: z.boolean().optional().default(true)
@@ -136,7 +194,7 @@ export const RuleSchema = z
     )
     .refine(
         (rule) => {
-            if (rule.match === "country") {
+            if (rule.match === "country" || rule.match === "country_is_not") {
                 if (!hasMaxmindCountryDb) {
                     return false;
                 }
@@ -180,6 +238,19 @@ export const RuleSchema = z
             path: ["value"],
             message:
                 "Value must be a valid UN M.49 region or subregion ID when match is 'region'"
+        }
+    )
+    .refine(
+        (rule) => {
+            if (rule.match === "method") {
+                return isValidHttpMethodList(rule.value);
+            }
+            return true;
+        },
+        {
+            path: ["value"],
+            message:
+                "Value must be a comma-separated list of HTTP methods when match is 'method', e.g. 'POST,PUT'"
         }
     );
 
@@ -257,6 +328,24 @@ export const AuthDaemonSchema = z
         }
     );
 
+// A full-domain must be made of hostname labels ("*" is allowed as a label;
+// where it may appear is checked by the resource schemas). Anything else
+// would end up in a Traefik Host() rule and certificate requests verbatim.
+const fullDomainSchema = z
+    .string()
+    .refine(
+        (val) =>
+            val === "" ||
+            val
+                .split(".")
+                .every(
+                    (label) =>
+                        label === "*" ||
+                        /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$/.test(label)
+                ),
+        { message: "full-domain must be a valid hostname" }
+    );
+
 // Schema for individual resource
 export const PublicResourceSchema = z
     .object({
@@ -270,16 +359,25 @@ export const PublicResourceSchema = z
         policy: z.string().optional(),
         ssl: z.boolean().optional(),
         scheme: z.enum(["http", "https"]).optional(),
-        "full-domain": z.string().optional(),
+        "full-domain": fullDomainSchema.optional(),
         "proxy-port": z.int().min(1).max(65535).optional(),
         enabled: z.boolean().optional(),
         targets: z.array(TargetSchema.nullable()).optional().default([]),
         auth: AuthSchema.optional(),
         "host-header": z.string().optional(),
+        "forward-identity-headers": z.boolean().optional(),
         "tls-server-name": z.string().optional(),
-        headers: z.array(HeaderSchema).optional(),
+        "load-balancing-strategy": z
+            .enum(["wrr", "p2c", "hrw", "leasttime"])
+            .optional(),
+        "request-headers": z.array(HeaderSchema).optional(),
+        "response-headers": z.array(HeaderSchema).optional(),
+        headers: z.array(HeaderSchema).optional(), // deprecated alias for request-headers
+        requestHeaders: z.array(HeaderSchema).optional(), // deprecated alias for request-headers
+        responseHeaders: z.array(HeaderSchema).optional(), // deprecated alias for response-headers
         rules: z.array(RuleSchema).optional(),
         maintenance: MaintenanceSchema.optional(),
+        mtls: MtlsSchema.optional(), // deprecated alias for auth.mtls
         "auth-daemon": AuthDaemonSchema.optional(),
         "proxy-protocol": z.boolean().optional(),
         "proxy-protocol-version": z.int().min(1).optional(),
@@ -392,6 +490,56 @@ export const PublicResourceSchema = z
         {
             path: ["full-domain"],
             error: "When protocol is 'http', 'ssh', 'rdp', 'vnc', or 'inference', a 'full-domain' must be provided"
+        }
+    )
+    .refine(
+        (resource) => {
+            if (
+                isTargetsOnlyResource(resource) ||
+                !getBlueprintResourceMtls(resource)?.enabled
+            ) {
+                return true;
+            }
+
+            return resourceModeSupportsMtls(resource.mode ?? resource.protocol);
+        },
+        {
+            path: ["auth", "mtls"],
+            error: "mTLS is only supported when mode is 'http', 'ssh', 'rdp', 'vnc' or 'inference'"
+        }
+    )
+    .refine(
+        (resource) => {
+            if (
+                isTargetsOnlyResource(resource) ||
+                !getBlueprintResourceMtls(resource)?.enabled
+            ) {
+                return true;
+            }
+
+            return resource.ssl !== false;
+        },
+        {
+            path: ["auth", "mtls"],
+            error: "mTLS requires 'ssl' to be enabled"
+        }
+    )
+    .refine(
+        (resource) => {
+            if (
+                isTargetsOnlyResource(resource) ||
+                !getBlueprintResourceMtls(resource)?.enabled
+            ) {
+                return true;
+            }
+
+            const caCertificates =
+                getBlueprintResourceMtls(resource)?.["ca-certificates"];
+            return (caCertificates?.length ?? 0) > 0;
+        },
+        {
+            path: ["auth", "mtls", "ca-certificates"],
+            error: "mTLS requires at least one entry in 'ca-certificates'"
         }
     )
     .refine(
@@ -561,7 +709,18 @@ export function isTargetsOnlyResource(resource: any): boolean {
 export const PrivateResourceSchema = z
     .object({
         name: z.string().min(1).max(255),
-        mode: z.enum(["host", "cidr", "http", "ssh", "inference"]),
+        // "exit-node" is accepted as an alias for "gateway" (matches the UI naming)
+        mode: z
+            .enum([
+                "host",
+                "cidr",
+                "http",
+                "ssh",
+                "inference",
+                "gateway",
+                "exit-node"
+            ])
+            .transform((mode) => (mode === "exit-node" ? "gateway" : mode)),
         site: z.string().optional(), // DEPRECATED IN FAVOR OF sites
         sites: z.array(z.string()).optional().default([]),
         // protocol: z.enum(["tcp", "udp"]).optional(),
@@ -572,7 +731,7 @@ export const PrivateResourceSchema = z
         "tcp-ports": portRangeStringSchema.optional().default("*"),
         "udp-ports": portRangeStringSchema.optional().default("*"),
         "disable-icmp": z.boolean().optional().default(false),
-        "full-domain": z.string().optional(),
+        "full-domain": fullDomainSchema.optional(),
         ssl: z.boolean().optional(),
         scheme: z.enum(["http", "https"]).optional().nullable(),
         alias: z
@@ -601,13 +760,15 @@ export const PrivateResourceSchema = z
     })
     .refine(
         (data) => {
-            // destination is optional only for ssh+native or inference; required for everything else
+            // destination is optional only for ssh+native, inference, or gateway
+            // (gateway always routes the whole subnet, so destination is ignored); required for everything else
             const isNativeSSH =
                 data.mode === "ssh" &&
                 (data["auth-daemon"] === undefined ||
                     data["auth-daemon"].mode === "native");
             if (
                 data.mode !== "inference" &&
+                data.mode !== "gateway" &&
                 !isNativeSSH &&
                 !data.destination
             ) {
@@ -618,7 +779,7 @@ export const PrivateResourceSchema = z
         {
             path: ["destination"],
             message:
-                "destination is required unless mode is 'ssh' with auth-daemon mode 'native', or mode is 'inference'"
+                "destination is required unless mode is 'ssh' with auth-daemon mode 'native', 'inference', or 'gateway'"
         }
     )
     .refine(
@@ -717,47 +878,62 @@ export const PrivateResourceSchema = z
 
 export const ResourcePolicyRuleSchema = RuleSchema;
 
-export const ResourcePolicySchema = z.object({
-    name: z.string().min(1).max(255),
-    sso: z.boolean().optional().default(true),
-    "auto-login-idp": z.int().positive().optional().nullable(),
-    "sso-roles": z
-        .array(z.string())
-        .optional()
-        .default([])
-        .refine((roles) => !roles.includes("Admin"), {
-            error: "Admin role cannot be included in sso-roles"
-        }),
-    "sso-users": z.array(z.string()).optional().default([]),
-    password: z.string().min(4).max(100).optional().nullable(),
-    pincode: z
-        .string()
-        .regex(/^\d{6}$/)
-        .optional()
-        .nullable(),
-    "basic-auth": z
-        .object({
-            user: z.string().min(4).max(100),
-            password: z.string().min(4).max(100),
-            "extended-compatibility": z.boolean().default(true)
-        })
-        .optional()
-        .nullable(),
-    "email-whitelist-enabled": z.boolean().optional().default(false),
-    "whitelist-users": z
-        .array(
-            z.email().or(
-                z.string().regex(/^\*@[\w.-]+\.[a-zA-Z]{2,}$/, {
-                    error: "Invalid email address. Wildcard (*) must be the entire local part."
-                })
+export const ResourcePolicySchema = z
+    .object({
+        name: z.string().min(1).max(255),
+        sso: z.boolean().optional().default(true),
+        "auto-login-idp": z.int().positive().optional().nullable(),
+        "sso-roles": z
+            .array(z.string())
+            .optional()
+            .default([])
+            .refine((roles) => !roles.includes("Admin"), {
+                error: "Admin role cannot be included in sso-roles"
+            }),
+        "sso-users": z.array(z.string()).optional().default([]),
+        password: z.string().min(4).max(100).optional().nullable(),
+        pincode: z
+            .string()
+            .regex(/^\d{6}$/)
+            .optional()
+            .nullable(),
+        "basic-auth": z
+            .object({
+                user: z.string().min(4).max(100),
+                password: z.string().min(4).max(100),
+                "extended-compatibility": z.boolean().default(true)
+            })
+            .optional()
+            .nullable(),
+        "email-whitelist-enabled": z.boolean().optional().default(false),
+        "whitelist-users": z
+            .array(
+                z.email().or(
+                    z.string().regex(/^\*@[\w.-]+\.[a-zA-Z]{2,}$/, {
+                        error: "Invalid email address. Wildcard (*) must be the entire local part."
+                    })
+                )
             )
-        )
-        .transform((v) => v.map((e) => e.toLowerCase()))
-        .optional()
-        .default([]),
-    "apply-rules": z.boolean().optional().default(false),
-    rules: z.array(ResourcePolicyRuleSchema).optional().default([])
-});
+            .transform((v) => v.map((e) => e.toLowerCase()))
+            .optional()
+            .default([]),
+        "apply-rules": z.boolean().optional().default(false),
+        rules: z.array(ResourcePolicyRuleSchema).optional().default([]),
+        mtls: MtlsSchema.optional()
+    })
+    .refine(
+        (policy) => {
+            const mtls = policy.mtls as BlueprintMtls | undefined;
+            if (!mtls?.enabled) {
+                return true;
+            }
+            return (mtls["ca-certificates"]?.length ?? 0) > 0;
+        },
+        {
+            path: ["mtls", "ca-certificates"],
+            error: "mTLS requires at least one entry in 'ca-certificates'"
+        }
+    );
 export type ResourcePolicyData = z.infer<typeof ResourcePolicySchema>;
 
 // Schema for the entire configuration object
@@ -765,25 +941,20 @@ export const ConfigSchema = z
     .object({
         "proxy-resources": z
             .record(z.string(), PublicResourceSchema)
-            .optional()
             .prefault({}),
         "public-resources": z
             .record(z.string(), PublicResourceSchema)
-            .optional()
             .prefault({}),
         "client-resources": z
             .record(z.string(), PrivateResourceSchema)
-            .optional()
             .prefault({}),
         "private-resources": z
             .record(z.string(), PrivateResourceSchema)
-            .optional()
             .prefault({}),
         "public-policies": z
             .record(z.string(), ResourcePolicySchema)
-            .optional()
             .prefault({}),
-        sites: z.record(z.string(), SiteSchema).optional().prefault({})
+        sites: z.record(z.string(), SiteSchema).prefault({})
     })
     .transform((data) => {
         // Merge public-resources into proxy-resources

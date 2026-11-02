@@ -48,6 +48,13 @@ import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
 import { tierMatrix } from "@server/lib/billing/tierMatrix";
 import { isSubscribed } from "#dynamic/lib/isSubscribed";
 import { applyInlinePolicyFields } from "./inlinePolicyFields";
+import {
+    clearMtls,
+    countMtlsCertificates,
+    getResourceMtlsOwner,
+    isMtlsEnabled
+} from "@server/lib/mtls";
+import { resourceModeSupportsMtls } from "@server/lib/mtlsModes";
 
 const updateResourceParamsSchema = z.strictObject({
     resourceId: z.coerce.number().int().positive()
@@ -89,8 +96,20 @@ const updateHttpResourceBodySchema = z
         domainId: z.string().optional(),
         enabled: z.boolean().optional(),
         stickySession: z.boolean().optional(),
+        loadBalancingStrategy: z
+            .enum(["wrr", "p2c", "hrw", "leasttime"])
+            .optional()
+            .describe(
+                "How requests are distributed across targets: wrr (weighted round robin, default), p2c (power of two choices), hrw (highest random weight / client IP hashing), leasttime (lowest response time)."
+            ),
         tlsServerName: z.string().nullable().optional(),
         setHostHeader: z.string().nullable().optional(),
+        forwardIdentityHeaders: z
+            .boolean()
+            .optional()
+            .describe(
+                "Whether to forward the authenticated user's identity to the backend in the Remote-User, Remote-Email, Remote-Name, Remote-Role, and Remote-User-Id headers."
+            ),
         skipToIdpId: z
             .int()
             .positive()
@@ -102,6 +121,14 @@ const updateHttpResourceBodySchema = z
         headers: z
             .array(z.strictObject({ name: z.string(), value: z.string() }))
             .nullable()
+            .optional(), // deprecated alias for requestHeaders
+        requestHeaders: z
+            .array(z.strictObject({ name: z.string(), value: z.string() }))
+            .nullable()
+            .optional(),
+        responseHeaders: z
+            .array(z.strictObject({ name: z.string(), value: z.string() }))
+            .nullable()
             .optional(),
         // Maintenance mode fields
         maintenanceModeEnabled: z.boolean().optional(),
@@ -109,6 +136,12 @@ const updateHttpResourceBodySchema = z
         maintenanceTitle: z.string().max(255).nullable().optional(),
         maintenanceMessage: z.string().max(2000).nullable().optional(),
         maintenanceEstimatedTime: z.string().max(100).nullable().optional(),
+        mtlsEnabled: z
+            .boolean()
+            .optional()
+            .describe(
+                "Require clients to present a certificate signed by one of the resource's trusted CA certificates. Requires SSL and at least one CA certificate. When no shared resource policy is assigned (resourcePolicyId is null), updates the resource's inline policy. When a shared policy is assigned, this applies to this resource only if the shared policy does not enable mTLS itself."
+            ),
         postAuthPath: z.string().nullable().optional(),
         // SSH settings
         pamMode: z.enum(["passthrough", "push"]).optional(),
@@ -163,12 +196,13 @@ const updateHttpResourceBodySchema = z
     )
     .refine(
         (data) => {
-            if (data.headers) {
-                // HTTP header names must be valid token characters (RFC 7230)
-                const validHeaderName = /^[a-zA-Z0-9!#$%&'*+\-.^_`|~]+$/;
-                return data.headers.every((h) => validHeaderName.test(h.name));
-            }
-            return true;
+            const validHeaderName = /^[a-zA-Z0-9!#$%&'*+\-.^_`|~]+$/;
+            const allHeaders = [
+                ...(data.headers ?? []),
+                ...(data.requestHeaders ?? []),
+                ...(data.responseHeaders ?? [])
+            ];
+            return allHeaders.every((h) => validHeaderName.test(h.name));
         },
         {
             error: "Header names may only contain valid HTTP token characters (letters, digits, and !#$%&'*+-.^_`|~)."
@@ -176,14 +210,13 @@ const updateHttpResourceBodySchema = z
     )
     .refine(
         (data) => {
-            if (data.headers) {
-                // HTTP header values must be visible ASCII or horizontal whitespace, no control chars (RFC 7230)
-                const validHeaderValue = /^[\t\x20-\x7E]*$/;
-                return data.headers.every((h) =>
-                    validHeaderValue.test(h.value)
-                );
-            }
-            return true;
+            const validHeaderValue = /^[\t\x20-\x7E]*$/;
+            const allHeaders = [
+                ...(data.headers ?? []),
+                ...(data.requestHeaders ?? []),
+                ...(data.responseHeaders ?? [])
+            ];
+            return allHeaders.every((h) => validHeaderValue.test(h.value));
         },
         {
             error: "Header values may only contain printable ASCII characters and horizontal whitespace."
@@ -191,16 +224,17 @@ const updateHttpResourceBodySchema = z
     )
     .refine(
         (data) => {
-            if (data.headers) {
-                // Reject Traefik template syntax {{word}} in names or values
-                const templatePattern = /\{\{[^}]+\}\}/;
-                return data.headers.every(
-                    (h) =>
-                        !templatePattern.test(h.name) &&
-                        !templatePattern.test(h.value)
-                );
-            }
-            return true;
+            const templatePattern = /\{\{[^}]+\}\}/;
+            const allHeaders = [
+                ...(data.headers ?? []),
+                ...(data.requestHeaders ?? []),
+                ...(data.responseHeaders ?? [])
+            ];
+            return allHeaders.every(
+                (h) =>
+                    !templatePattern.test(h.name) &&
+                    !templatePattern.test(h.value)
+            );
         },
         {
             error: "Header names and values must not contain template expressions such as {{value}}."
@@ -382,6 +416,26 @@ export async function updateResource(
     }
 }
 
+// a resource may only be assigned a shared (global) policy from its own org
+async function getAssignableResourcePolicy(
+    resourcePolicyId: number,
+    orgId: string
+) {
+    const [policy] = await db
+        .select()
+        .from(resourcePolicies)
+        .where(
+            and(
+                eq(resourcePolicies.resourcePolicyId, resourcePolicyId),
+                eq(resourcePolicies.orgId, orgId),
+                eq(resourcePolicies.scope, "global")
+            )
+        )
+        .limit(1);
+
+    return policy;
+}
+
 async function clearResourceSpecificSettings(
     resourceId: number,
     orgId: string,
@@ -396,7 +450,7 @@ async function clearResourceSpecificSettings(
     if (adminRole.length === 0) {
         throw new Error(`Admin role not found for org ${orgId}`);
     }
-    // remove the resource specific pincode, password, header auth, rules, nad whitelist entries so that the resource will fall back to the policy settings
+    // remove the resource specific pincode, password, header auth, rules, whitelist entries and mTLS so that the resource will fall back to the policy settings
     await Promise.all([
         trx
             .delete(resourcePassword)
@@ -421,6 +475,7 @@ async function clearResourceSpecificSettings(
         trx
             .delete(resourceRules)
             .where(eq(resourceRules.resourceId, resourceId)),
+        clearMtls({ type: "resource", resourceId }, trx),
         // delete the roles and the users as well
         trx
             .delete(userResources)
@@ -478,16 +533,10 @@ async function updateHttpResource(
             );
         }
 
-        const [existingPolicy] = await db
-            .select()
-            .from(resourcePolicies)
-            .where(
-                eq(
-                    resourcePolicies.resourcePolicyId,
-                    updateData.resourcePolicyId
-                )
-            )
-            .limit(1);
+        const existingPolicy = await getAssignableResourcePolicy(
+            updateData.resourcePolicyId,
+            resource.orgId
+        );
 
         if (!existingPolicy) {
             return next(
@@ -499,8 +548,45 @@ async function updateHttpResource(
         }
     }
 
+    const mtlsOwner = getResourceMtlsOwner(resource);
+    const effectiveSsl = updateData.ssl ?? resource.ssl;
+    const effectiveMtlsEnabled =
+        updateData.mtlsEnabled ?? (await isMtlsEnabled(mtlsOwner));
+
+    if (updateData.mtlsEnabled === true) {
+        if (!resourceModeSupportsMtls(resource.mode)) {
+            return next(
+                createHttpError(
+                    HttpCode.BAD_REQUEST,
+                    "mTLS is not supported on TCP/UDP resources."
+                )
+            );
+        }
+
+        if ((await countMtlsCertificates(mtlsOwner)) === 0) {
+            return next(
+                createHttpError(
+                    HttpCode.BAD_REQUEST,
+                    "Add at least one trusted CA certificate before enabling mTLS."
+                )
+            );
+        }
+    }
+
+    if (effectiveMtlsEnabled && !effectiveSsl) {
+        return next(
+            createHttpError(
+                HttpCode.BAD_REQUEST,
+                "mTLS requires SSL to be enabled for this resource. Disable mTLS before turning SSL off."
+            )
+        );
+    }
+
     // catch when the resource policy changes or gets cleared
-    if (resource.resourcePolicyId != updateData.resourcePolicyId) {
+    if (
+        updateData.resourcePolicyId !== undefined &&
+        resource.resourcePolicyId !== updateData.resourcePolicyId
+    ) {
         await clearResourceSpecificSettings(
             resource.resourceId,
             resource.orgId,
@@ -695,12 +781,31 @@ async function updateHttpResource(
         await createCertificate(domainId, fullDomain, db);
     }
 
-    let headers = undefined;
-    if (updateData.headers) {
-        headers = JSON.stringify(updateData.headers);
-    } else if (updateData.headers === null) {
-        headers = null;
+    let requestHeaders = undefined;
+    const mergedRequestHeaders = [
+        ...(updateData.headers ?? []),
+        ...(updateData.requestHeaders ?? [])
+    ];
+    if (
+        updateData.headers !== undefined ||
+        updateData.requestHeaders !== undefined
+    ) {
+        requestHeaders =
+            mergedRequestHeaders.length > 0
+                ? JSON.stringify(mergedRequestHeaders)
+                : null;
     }
+
+    let responseHeaders = undefined;
+    if (updateData.responseHeaders) {
+        responseHeaders = JSON.stringify(updateData.responseHeaders);
+    } else if (updateData.responseHeaders === null) {
+        responseHeaders = null;
+    }
+
+    updateData.headers = undefined;
+    updateData.requestHeaders = undefined;
+    updateData.responseHeaders = undefined;
 
     if (!isLicensed) {
         updateData.maintenanceModeEnabled = undefined;
@@ -721,6 +826,7 @@ async function updateHttpResource(
             emailWhitelistEnabled,
             applyRules,
             skipToIdpId,
+            mtlsEnabled,
             ...resourceOnlyDataRest
         } = updateData;
 
@@ -738,6 +844,7 @@ async function updateHttpResource(
             policyUpdate.emailWhitelistEnabled = emailWhitelistEnabled;
         if (applyRules !== undefined) policyUpdate.applyRules = applyRules;
         if (skipToIdpId !== undefined) policyUpdate.idpId = skipToIdpId;
+        if (mtlsEnabled !== undefined) policyUpdate.mtlsEnabled = mtlsEnabled;
 
         if (Object.keys(policyUpdate).length > 0) {
             await db
@@ -754,7 +861,7 @@ async function updateHttpResource(
 
         const updatedResource = await db
             .update(resources)
-            .set({ ...resourceOnlyData, headers })
+            .set({ ...resourceOnlyData, requestHeaders, responseHeaders })
             .where(eq(resources.resourceId, resource.resourceId))
             .returning();
 
@@ -778,7 +885,7 @@ async function updateHttpResource(
 
     const updatedResource = await db
         .update(resources)
-        .set({ ...updateData, headers })
+        .set({ ...updateData, requestHeaders, responseHeaders })
         .where(eq(resources.resourceId, resource.resourceId))
         .returning();
 
@@ -826,6 +933,35 @@ async function updateRawResource(
 
     const updateData = parsedBody.data;
     let updatedResource: Resource | null = null;
+
+    if (updateData.resourcePolicyId != null) {
+        const isLicensed = await isLicensedOrSubscribed(
+            resource.orgId,
+            tierMatrix.resourcePolicies
+        );
+        if (!isLicensed) {
+            return next(
+                createHttpError(
+                    HttpCode.FORBIDDEN,
+                    "Resource policies are not supported on your current plan. Please upgrade to access this feature."
+                )
+            );
+        }
+
+        const existingPolicy = await getAssignableResourcePolicy(
+            updateData.resourcePolicyId,
+            resource.orgId
+        );
+
+        if (!existingPolicy) {
+            return next(
+                createHttpError(
+                    HttpCode.NOT_FOUND,
+                    `Resource policy with ID ${updateData.resourcePolicyId} not found`
+                )
+            );
+        }
+    }
 
     const [existingResource] = await db
         .select()

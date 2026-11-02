@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import path from "path";
 import { APP_PATH, configFilePath1, configFilePath2 } from "@server/lib/consts";
 import fs from "fs";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 
 const version = "1.5.0";
 const location = path.join(APP_PATH, "db", "db.sqlite");

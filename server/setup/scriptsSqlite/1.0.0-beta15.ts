@@ -1,7 +1,7 @@
 import { db } from "../../db/sqlite";
 import { configFilePath1, configFilePath2 } from "@server/lib/consts";
 import fs from "fs";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import { sql } from "drizzle-orm";
 import { domains, orgDomains, resources } from "@server/db";
 

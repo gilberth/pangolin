@@ -31,7 +31,7 @@ export async function addPeer(
             .where(eq(newts.siteId, siteId))
             .limit(1);
         if (!newt) {
-            throw new Error(`Site found for site ${siteId}`);
+            throw new Error(`Newt not found for site ${siteId}`);
         }
         newtId = newt.newtId;
     }
@@ -98,6 +98,37 @@ export async function deletePeer(
     return site;
 }
 
+export async function addPeersBatch(
+    peers: {
+        siteId: number;
+        newtId: string;
+        peer: {
+            publicKey: string;
+            allowedIps: string[];
+            endpoint: string;
+        };
+    }[]
+) {
+    if (peers.length === 0) {
+        return;
+    }
+
+    await sendToClientsBatch(
+        peers.map((peer) => ({
+            clientId: peer.newtId,
+            message: {
+                type: "newt/wg/peer/add",
+                data: peer.peer
+            },
+            options: { incrementConfigVersion: true }
+        }))
+    ).catch((error) => {
+        logger.warn(`Error sending batched newt peer additions:`, error);
+    });
+
+    logger.info(`Added ${peers.length} peer(s) to newts (batch)`);
+}
+
 export async function deletePeersBatch(
     peers: {
         siteId: number;
@@ -125,6 +156,40 @@ export async function deletePeersBatch(
     });
 
     logger.info(`Deleted ${peers.length} peer(s) from newts (batch)`);
+}
+
+export async function updatePeersBatch(
+    peers: {
+        siteId: number;
+        publicKey: string;
+        newtId: string;
+        peer: {
+            allowedIps?: string[];
+            endpoint?: string;
+        };
+    }[]
+) {
+    if (peers.length === 0) {
+        return;
+    }
+
+    await sendToClientsBatch(
+        peers.map((peer) => ({
+            clientId: peer.newtId,
+            message: {
+                type: "newt/wg/peer/update",
+                data: {
+                    publicKey: peer.publicKey,
+                    ...peer.peer
+                }
+            },
+            options: { incrementConfigVersion: true }
+        }))
+    ).catch((error) => {
+        logger.warn(`Error sending batched newt peer updates:`, error);
+    });
+
+    logger.info(`Updated ${peers.length} peer(s) on newts (batch)`);
 }
 
 export async function updatePeer(

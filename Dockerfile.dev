@@ -1,10 +1,12 @@
-FROM node:24.18.1-alpine
+# Mirror of docker.io/library/node, kept in sync by
+# .github/workflows/mirror-node.yml
+FROM ghcr.io/fosrl/node:24.22.1-alpine
 
 WORKDIR /app
 
 RUN apk add --no-cache python3 make g++
 
-COPY package*.json ./
+COPY package*.json .npmrc ./
 
 # Install dependencies
 RUN npm ci

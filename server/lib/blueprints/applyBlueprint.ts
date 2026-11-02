@@ -121,25 +121,37 @@ export async function applyBlueprint({
                             (hc) => hc.targetId === target.targetId
                         );
 
-                    if (["http", "tcp", "udp"].includes(target.mode)) {
-                        await addProxyTargets(
-                            site.newt.newtId,
-                            [target],
-                            matchingHealthcheck
-                                ? [matchingHealthcheck]
-                                : [],
-                            result.proxyResource.mode === "udp"
-                                ? "udp"
-                                : "tcp",
-                            site.newt.version
-                        );
-                    } else if (
-                        ["ssh", "rdp", "vnc"].includes(target.mode)
-                    ) {
-                        await sendBrowserGatewayTargets(
-                            site.newt.newtId,
-                            [target],
-                            site.newt.version
+                    // The DB writes for all resources have already committed
+                    // by this point, so a push failure for one target (e.g.
+                    // a newt rejecting a malformed health check) must not
+                    // abort pushing the rest, and must not mark the whole
+                    // blueprint as failed when the config was actually
+                    // persisted successfully.
+                    try {
+                        if (["http", "tcp", "udp"].includes(target.mode)) {
+                            await addProxyTargets(
+                                site.newt.newtId,
+                                [target],
+                                matchingHealthcheck
+                                    ? [matchingHealthcheck]
+                                    : [],
+                                result.proxyResource.mode === "udp"
+                                    ? "udp"
+                                    : "tcp",
+                                site.newt.version
+                            );
+                        } else if (
+                            ["ssh", "rdp", "vnc"].includes(target.mode)
+                        ) {
+                            await sendBrowserGatewayTargets(
+                                site.newt.newtId,
+                                [target],
+                                site.newt.version
+                            );
+                        }
+                    } catch (e) {
+                        logger.error(
+                            `Failed to push target ${target.targetId} to newt on site ${site.sites.siteId}. Error: ${e}`
                         );
                     }
                 }

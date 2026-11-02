@@ -78,13 +78,16 @@ export default function GenerateLicenseKeysTable({
             );
             toast({
                 title: t("success"),
-                description: "Instance name cleared successfully"
+                description: "Server ID cleared successfully"
             });
             await refreshData();
         } catch (error) {
             toast({
                 title: t("error"),
-                description: formatAxiosError(error, "Failed to clear instance name"),
+                description: formatAxiosError(
+                    error,
+                    "Failed to clear server ID"
+                ),
                 variant: "destructive"
             });
         } finally {
@@ -198,9 +201,16 @@ export default function GenerateLicenseKeysTable({
             },
             cell: ({ row }) => {
                 const tier = row.original.tier;
-                return tier === "enterprise"
-                    ? t("licenseTierEnterprise")
-                    : t("licenseTierPersonal");
+                switch (tier) {
+                    case "enterprise":
+                        return t("licenseTierEnterprise");
+                    case "tier1":
+                        return t("licenseTierTier1");
+                    case "tier2":
+                        return t("licenseTierTier2");
+                    default:
+                        return t("licenseTierPersonal");
+                }
             }
         },
         {
@@ -243,6 +253,27 @@ export default function GenerateLicenseKeysTable({
             cell: ({ row }) => {
                 const sites = row.original.sites;
                 return sites === -1 ? "∞" : sites;
+            }
+        },
+        {
+            accessorKey: "machines",
+            friendlyName: t("machineClients"),
+            header: ({ column }) => {
+                return (
+                    <Button
+                        variant="ghost"
+                        onClick={() =>
+                            column.toggleSorting(column.getIsSorted() === "asc")
+                        }
+                    >
+                        {t("machineClients")}
+                        <ArrowUpDown className="ml-2 h-4 w-4" />
+                    </Button>
+                );
+            },
+            cell: ({ row }) => {
+                const machines = row.original.machines;
+                return machines === -1 ? "∞" : machines;
             }
         },
         {
@@ -291,7 +322,7 @@ export default function GenerateLicenseKeysTable({
                                         clearInstanceName(key.licenseKey)
                                     }
                                 >
-                                    Clear Instance Name
+                                    {t("clearInstanceName")}
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>

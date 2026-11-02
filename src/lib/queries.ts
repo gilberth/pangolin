@@ -1,3 +1,8 @@
+import {
+    getAiBudgetScopeListPath,
+    type AiBudgetScope
+} from "@app/lib/aiBudgetScope";
+import type { AiProviderType } from "@app/lib/aiProviderDefaults";
 import type { LauncherQueryFilters } from "@app/lib/launcherSearchParams";
 import { buildLauncherSearchParams } from "@app/lib/launcherSearchParams";
 import { build } from "@server/build";
@@ -5,15 +10,21 @@ import {
     StatusHistoryResponse,
     type BatchedStatusHistoryResponse
 } from "@server/lib/statusHistory";
+import type { ListAiBudgetsByScopeResponse } from "@server/routers/aiBudget/types";
+import type {
+    ListAiModelsResponse,
+    ListAiProvidersResponse,
+    ListCatalogModelsResponse
+} from "@server/routers/aiProvider/types";
 import type { ListAlertRulesResponse } from "@server/routers/alertRule/types";
 import type {
-    QueryRequestAnalyticsResponse,
     QueryAiUsageFilterOptionsResponse,
     QueryAiUsageOverviewResponse,
     QueryAiUsageProvidersResponse,
     QueryAiUsageResourcesResponse,
     QueryAiUsageUsersRolesResponse,
-    QueryAiUsageVirtualApiKeysResponse
+    QueryAiUsageVirtualApiKeysResponse,
+    QueryRequestAnalyticsResponse
 } from "@server/routers/auditLogs";
 import type {
     QueryAccessAuditLogResponse,
@@ -32,8 +43,10 @@ import type {
     ListDomainsResponse
 } from "@server/routers/domain";
 import type { GetDomainResponse } from "@server/routers/domain/getDomain";
+import type { ListCustomDnsRecordsResponse } from "@server/routers/customDnsRecord/types";
 import { ListHealthChecksResponse } from "@server/routers/healthChecks/types";
 import type { ListOrgLabelsResponse } from "@server/routers/labels/types";
+import type { ListLauncherAiModelsResponse } from "@server/routers/launcher/listLauncherAiModels";
 import type {
     LauncherResource,
     ListLauncherGroupsResponse,
@@ -43,9 +56,11 @@ import type {
     ListLauncherSitesResponse,
     ListLauncherViewsResponse
 } from "@server/routers/launcher/types";
-import type { ListLauncherAiModelsResponse } from "@server/routers/launcher/listLauncherAiModels";
-import type { ListMyVirtualApiKeysResponse } from "@server/routers/virtualApiKey/types";
-import type { GetResourcePolicyResponse } from "@server/routers/policy";
+import type {
+    GetResourcePolicyResponse,
+    ListResourcePolicyMtlsCertificatesResponse
+} from "@server/routers/policy";
+import type { ListRemoteExitNodesResponse } from "@server/routers/remoteExitNode/types";
 import type {
     GetResourcePoliciesResponse,
     GetResourceWhitelistResponse,
@@ -59,7 +74,6 @@ import type {
 import type { GetResourceResponse } from "@server/routers/resource/getResource";
 import type { GetResourceAuthInfoResponse } from "@server/routers/resource/getResourceAuthInfo";
 import type { ListResourcePoliciesResponse } from "@server/routers/resource/types";
-import type { ListRemoteExitNodesResponse } from "@server/routers/remoteExitNode/types";
 import type { ListRolesResponse } from "@server/routers/role";
 import type { ListSitesResponse } from "@server/routers/site";
 import type {
@@ -71,18 +85,8 @@ import type {
 } from "@server/routers/siteResource";
 import type { GetSiteResourceResponse } from "@server/routers/siteResource/getSiteResource";
 import type { ListTargetsResponse } from "@server/routers/target";
-import type {
-    ListAiModelsResponse,
-    ListAiProvidersResponse,
-    ListCatalogModelsResponse
-} from "@server/routers/aiProvider/types";
-import type { AiProviderType } from "@app/lib/aiProviderDefaults";
-import type { ListAiBudgetsByScopeResponse } from "@server/routers/aiBudget/types";
-import {
-    getAiBudgetScopeListPath,
-    type AiBudgetScope
-} from "@app/lib/aiBudgetScope";
 import type { ListUsersResponse } from "@server/routers/user";
+import type { ListMyVirtualApiKeysResponse } from "@server/routers/virtualApiKey/types";
 import type ResponseT from "@server/types/Response";
 import {
     infiniteQueryOptions,
@@ -926,6 +930,27 @@ export const orgQueries = {
 
                 return res.data.data;
             }
+        }),
+    resourcePolicyMtlsCertificates: ({
+        resourcePolicyId
+    }: {
+        resourcePolicyId: number;
+    }) =>
+        queryOptions({
+            queryKey: [
+                "RESOURCE_POLICY",
+                resourcePolicyId,
+                "MTLS_CERTIFICATES"
+            ] as const,
+            queryFn: async ({ signal, meta }) => {
+                const res = await meta!.api.get<
+                    AxiosResponse<ListResourcePolicyMtlsCertificatesResponse>
+                >(`/resource-policy/${resourcePolicyId}/mtls/certificates`, {
+                    signal
+                });
+
+                return res.data.data.certificates;
+            }
         })
 };
 
@@ -1000,7 +1025,8 @@ export const httpLogsFiltersSchema = z.object({
     actor: z.string().optional().catch(undefined),
     method: z.string().optional().catch(undefined),
     reason: z.string().optional().catch(undefined),
-    path: z.string().optional().catch(undefined)
+    path: z.string().optional().catch(undefined),
+    ip: z.array(z.string()).optional().catch(undefined)
 });
 
 export type HttpLogFilters = z.output<typeof httpLogsFiltersSchema>;
@@ -1026,7 +1052,8 @@ export const accessLogsFiltersSchema = z.object({
     action: z.string().optional().catch(undefined),
     location: z.string().optional().catch(undefined),
     actor: z.string().optional().catch(undefined),
-    type: z.string().optional().catch(undefined)
+    type: z.string().optional().catch(undefined),
+    ip: z.array(z.string()).optional().catch(undefined)
 });
 
 export type AccessLogFilters = z.output<typeof accessLogsFiltersSchema>;
@@ -1139,10 +1166,13 @@ export const logQueries = {
         queryOptions({
             queryKey: ["REQUEST_LOGS", orgId, "ALL", filters] as const,
             queryFn: async ({ signal, meta }) => {
-                const { page, pageSize, ...rest } = filters;
+                const { page, pageSize, ip, ...rest } = filters;
+                const sp = new URLSearchParams(
+                    (ip ?? []).map((ip) => ["ip", ip])
+                );
                 const res = await meta!.api.get<
                     AxiosResponse<QueryRequestAuditLogResponse>
-                >(`/org/${orgId}/logs/request`, {
+                >(`/org/${orgId}/logs/request?${sp.toString()}`, {
                     params: {
                         ...rest,
                         limit: pageSize,
@@ -1164,10 +1194,13 @@ export const logQueries = {
         queryOptions({
             queryKey: ["ACCESS_LOGS", orgId, "ALL", filters] as const,
             queryFn: async ({ signal, meta }) => {
-                const { page, pageSize, ...rest } = filters;
+                const { page, pageSize, ip, ...rest } = filters;
+                const sp = new URLSearchParams(
+                    (ip ?? []).map((ip) => ["ip", ip])
+                );
                 const res = await meta!.api.get<
                     AxiosResponse<QueryAccessAuditLogResponse>
-                >(`/org/${orgId}/logs/access`, {
+                >(`/org/${orgId}/logs/access?${sp.toString()}`, {
                     params: {
                         ...rest,
                         limit: pageSize,
@@ -1846,6 +1879,30 @@ export const domainQueries = {
                 return res.data.data;
             },
             refetchInterval: durationToMs(10, "seconds")
+        }),
+    listCustomDnsRecords: ({
+        orgId,
+        domainId
+    }: {
+        orgId: string;
+        domainId: string;
+    }) =>
+        queryOptions({
+            queryKey: [
+                "ORG",
+                orgId,
+                "DOMAIN",
+                domainId,
+                "CUSTOM_DNS_RECORDS"
+            ] as const,
+            queryFn: async ({ signal, meta }) => {
+                const res = await meta!.api.get<
+                    AxiosResponse<ListCustomDnsRecordsResponse>
+                >(`/org/${orgId}/domain/${domainId}/custom-dns-records`, {
+                    signal
+                });
+                return res.data.data.records;
+            }
         })
 };
 

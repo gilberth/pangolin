@@ -4,7 +4,7 @@ import { configFilePath1, configFilePath2 } from "@server/lib/consts";
 import { encrypt } from "@server/lib/crypto";
 import { generateCA } from "@server/lib/sshCA";
 import fs from "fs";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 
 const version = "1.16.0";
 

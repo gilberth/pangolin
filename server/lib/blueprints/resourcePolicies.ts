@@ -13,15 +13,23 @@ import {
     userPolicies,
     users
 } from "@server/db";
-import { eq, and, or } from "drizzle-orm";
-import { Config, ResourcePolicyData } from "./types";
+import { eq, and } from "drizzle-orm";
+import { BlueprintMtls, Config, ResourcePolicyData } from "./types";
 import logger from "@server/logger";
 import { getUniqueResourcePolicyName } from "@server/db/names";
 import { hashPassword } from "@server/auth/password";
 import { idpExistsForOrg } from "@server/lib/idp/idpExistsForOrg";
-import { isValidCIDR, isValidIP, isValidUrlGlobPattern } from "../validators";
+import {
+    isValidCIDR,
+    isValidHttpMethodList,
+    isValidIP,
+    isValidUrlGlobPattern,
+    ResourceRuleMatchType
+} from "../validators";
 import { isLicensedOrSubscribed } from "#dynamic/lib/isLicencedOrSubscribed";
 import { tierMatrix } from "../billing/tierMatrix";
+import { findOrgUsersByIdentifier } from "./findOrgUser";
+import { syncMtlsCertificates } from "../mtls";
 
 export type ResourcePoliciesResults = {
     resourcePolicyId: number;
@@ -65,6 +73,13 @@ export async function updateResourcePolicies(
                 throw new Error(
                     `Invalid URL glob pattern provided in resource policy '${policyNiceId}': ${rule.value}`
                 );
+            } else if (
+                rule.match === "method" &&
+                !isValidHttpMethodList(rule.value)
+            ) {
+                throw new Error(
+                    `Invalid HTTP method provided in resource policy '${policyNiceId}': ${rule.value}`
+                );
             }
         }
 
@@ -82,6 +97,8 @@ export async function updateResourcePolicies(
                 );
             }
         }
+
+        const mtls = policyData.mtls as BlueprintMtls | undefined;
 
         // Look up the admin role
         const [adminRole] = await trx
@@ -120,7 +137,9 @@ export async function updateResourcePolicies(
                         policyData["email-whitelist-enabled"] ??
                         policyData["whitelist-users"].length > 0,
                     applyRules:
-                        policyData["apply-rules"] || policyData.rules.length > 0
+                        policyData["apply-rules"] ||
+                        policyData.rules.length > 0,
+                    mtlsEnabled: mtls?.enabled
                 })
                 .where(
                     eq(
@@ -163,15 +182,7 @@ export async function updateResourcePolicies(
                 });
             }
 
-            // Sync header auth
-            await trx
-                .delete(resourcePolicyHeaderAuth)
-                .where(
-                    eq(
-                        resourcePolicyHeaderAuth.resourcePolicyId,
-                        resourcePolicyId
-                    )
-                );
+            // Sync header auth (hash before delete so delete+insert stay adjacent)
             if (policyData["basic-auth"]) {
                 const basicAuth = policyData["basic-auth"];
                 const headerAuthHash = await hashPassword(
@@ -179,12 +190,29 @@ export async function updateResourcePolicies(
                         `${basicAuth.user}:${basicAuth.password}`
                     ).toString("base64")
                 );
+                await trx
+                    .delete(resourcePolicyHeaderAuth)
+                    .where(
+                        eq(
+                            resourcePolicyHeaderAuth.resourcePolicyId,
+                            resourcePolicyId
+                        )
+                    );
                 await trx.insert(resourcePolicyHeaderAuth).values({
                     resourcePolicyId,
                     headerAuthHash,
                     extendedCompatibility:
                         basicAuth["extended-compatibility"] ?? true
                 });
+            } else {
+                await trx
+                    .delete(resourcePolicyHeaderAuth)
+                    .where(
+                        eq(
+                            resourcePolicyHeaderAuth.resourcePolicyId,
+                            resourcePolicyId
+                        )
+                    );
             }
 
             // Sync SSO roles
@@ -233,6 +261,7 @@ export async function updateResourcePolicies(
                     applyRules:
                         policyData["apply-rules"] ||
                         policyData.rules.length > 0,
+                    mtlsEnabled: mtls?.enabled ?? false,
                     scope: "global"
                 })
                 .returning();
@@ -326,6 +355,14 @@ export async function updateResourcePolicies(
             );
         }
 
+        if (mtls?.["ca-certificates"]) {
+            await syncMtlsCertificates(
+                { type: "policy", resourcePolicyId },
+                mtls["ca-certificates"],
+                trx
+            );
+        }
+
         results.push({ resourcePolicyId, niceId: policyNiceId });
     }
 
@@ -338,17 +375,8 @@ function getRuleAction(input: string): "ACCEPT" | "DROP" | "PASS" {
     return "PASS";
 }
 
-function getRuleMatch(
-    input: string
-): "CIDR" | "IP" | "PATH" | "COUNTRY" | "COUNTRY_IS_NOT" | "ASN" | "REGION" {
-    return input.toUpperCase() as
-        | "CIDR"
-        | "IP"
-        | "PATH"
-        | "COUNTRY"
-        | "COUNTRY_IS_NOT"
-        | "ASN"
-        | "REGION";
+function getRuleMatch(input: string): ResourceRuleMatchType {
+    return input.toUpperCase() as ResourceRuleMatchType;
 }
 
 async function syncRolePolicies(
@@ -466,34 +494,30 @@ async function syncUserPolicies(
         .where(eq(userPolicies.resourcePolicyId, policyId));
 
     for (const username of ssoUsers) {
-        const [user] = await trx
-            .select()
-            .from(users)
-            .innerJoin(userOrgs, eq(users.userId, userOrgs.userId))
-            .where(
-                and(
-                    or(eq(users.username, username), eq(users.email, username)),
-                    eq(userOrgs.orgId, orgId)
-                )
-            )
-            .limit(1);
+        const matchedUsers = await findOrgUsersByIdentifier(
+            trx,
+            orgId,
+            username
+        );
 
-        if (!user) {
+        if (matchedUsers.length === 0) {
             logger.warn(
                 `User '${username}' not found in org '${orgId}', skipping`
             );
             continue;
         }
 
-        const alreadyExists = existingUserPolicies.some(
-            (up) => up.userId === user.user.userId
-        );
+        for (const user of matchedUsers) {
+            const alreadyExists = existingUserPolicies.some(
+                (up) => up.userId === user.userId
+            );
 
-        if (!alreadyExists) {
-            await trx.insert(userPolicies).values({
-                userId: user.user.userId,
-                resourcePolicyId: policyId
-            });
+            if (!alreadyExists) {
+                await trx.insert(userPolicies).values({
+                    userId: user.userId,
+                    resourcePolicyId: policyId
+                });
+            }
         }
     }
 
@@ -536,29 +560,25 @@ async function addUserPolicies(
     trx: Transaction
 ) {
     for (const username of ssoUsers) {
-        const [user] = await trx
-            .select()
-            .from(users)
-            .innerJoin(userOrgs, eq(users.userId, userOrgs.userId))
-            .where(
-                and(
-                    or(eq(users.username, username), eq(users.email, username)),
-                    eq(userOrgs.orgId, orgId)
-                )
-            )
-            .limit(1);
+        const matchedUsers = await findOrgUsersByIdentifier(
+            trx,
+            orgId,
+            username
+        );
 
-        if (!user) {
+        if (matchedUsers.length === 0) {
             logger.warn(
                 `User '${username}' not found in org '${orgId}', skipping`
             );
             continue;
         }
 
-        await trx.insert(userPolicies).values({
-            userId: user.user.userId,
-            resourcePolicyId: policyId
-        });
+        for (const user of matchedUsers) {
+            await trx.insert(userPolicies).values({
+                userId: user.userId,
+                resourcePolicyId: policyId
+            });
+        }
     }
 }
 

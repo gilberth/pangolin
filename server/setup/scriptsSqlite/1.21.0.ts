@@ -1,7 +1,7 @@
 import { APP_PATH } from "@server/lib/consts";
 import Database from "better-sqlite3";
 import fs from "fs";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import path from "path";
 import z from "zod";
 import { fromZodError } from "zod-validation-error";

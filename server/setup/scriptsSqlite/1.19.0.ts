@@ -3,7 +3,7 @@ import Database from "better-sqlite3";
 import z from "zod";
 import { fromZodError } from "zod-validation-error";
 import fs from "fs";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import path, { join } from "path";
 
 const version = "1.19.0";

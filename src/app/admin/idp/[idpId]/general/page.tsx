@@ -41,6 +41,7 @@ import {
 } from "@app/components/InfoSection";
 import CopyToClipboard from "@app/components/CopyToClipboard";
 import IdpTypeBadge from "@app/components/IdpTypeBadge";
+import IdpIdentifierChangeDialog from "@app/components/IdpIdentifierChangeDialog";
 import { useTranslations } from "next-intl";
 
 export default function GeneralPage() {
@@ -51,6 +52,12 @@ export default function GeneralPage() {
     const [loading, setLoading] = useState(false);
     const [initialLoading, setInitialLoading] = useState(true);
     const [variant, setVariant] = useState<"oidc" | "google" | "azure">("oidc");
+    const [originalIdentifierPath, setOriginalIdentifierPath] = useState("");
+    const [identifierConfirmOpen, setIdentifierConfirmOpen] = useState(false);
+    const [pendingPayload, setPendingPayload] = useState<Record<
+        string,
+        unknown
+    > | null>(null);
 
     const redirectUrl = `${env.app.dashboardUrl}/auth/idp/${idpId}/oidc/callback`;
     const t = useTranslations();
@@ -141,6 +148,9 @@ export default function GeneralPage() {
                             | "google"
                             | "azure") || "oidc";
                     setVariant(idpVariant);
+                    setOriginalIdentifierPath(
+                        data.idpOidcConfig?.identifierPath ?? "sub"
+                    );
 
                     let tenantId = "";
                     if (idpVariant === "azure" && data.idpOidcConfig?.authUrl) {
@@ -258,15 +268,56 @@ export default function GeneralPage() {
                 };
             }
 
-            const res = await api.post(`/idp/${idpId}/oidc`, payload);
+            const nextIdentifierPath =
+                variant === "oidc"
+                    ? (data as OidcFormValues).identifierPath
+                    : undefined;
 
-            if (res.status === 200) {
-                toast({
-                    title: t("success"),
-                    description: t("idpUpdatedDescription")
-                });
-                router.refresh();
+            if (
+                typeof nextIdentifierPath === "string" &&
+                nextIdentifierPath !== originalIdentifierPath
+            ) {
+                setPendingPayload(payload);
+                setIdentifierConfirmOpen(true);
+                return;
             }
+
+            await persistIdp(payload);
+        } catch (e) {
+            toast({
+                title: t("error"),
+                description: formatAxiosError(e),
+                variant: "destructive"
+            });
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    async function persistIdp(payload: Record<string, unknown>) {
+        const res = await api.post(`/idp/${idpId}/oidc`, payload);
+
+        if (res.status === 200) {
+            if (typeof payload.identifierPath === "string") {
+                setOriginalIdentifierPath(payload.identifierPath);
+            }
+            toast({
+                title: t("success"),
+                description: t("idpUpdatedDescription")
+            });
+            router.refresh();
+        }
+    }
+
+    async function confirmIdentifierChange() {
+        if (!pendingPayload) {
+            return;
+        }
+
+        setLoading(true);
+        try {
+            await persistIdp(pendingPayload);
+            setPendingPayload(null);
         } catch (e) {
             toast({
                 title: t("error"),
@@ -284,6 +335,16 @@ export default function GeneralPage() {
 
     return (
         <>
+            <IdpIdentifierChangeDialog
+                open={identifierConfirmOpen}
+                setOpen={(open) => {
+                    setIdentifierConfirmOpen(open);
+                    if (!open) {
+                        setPendingPayload(null);
+                    }
+                }}
+                onConfirm={confirmIdentifierChange}
+            />
             <SettingsContainer>
                 <SettingsSection>
                     <SettingsSectionHeader>

@@ -97,11 +97,11 @@ export async function exportConnectionAuditLogs(
 
         const baseQuery = queryConnection(data);
 
-        const log = await baseQuery.limit(data.limit).offset(data.offset);
+        const log = await baseQuery.limit(MAX_EXPORT_LIMIT);
 
         const csvData = generateCSV(log);
 
-        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader(
             "Content-Disposition",
             `attachment; filename="connection-audit-logs-${data.orgId}-${Date.now()}.csv"`

@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import { encodeBase32LowerCaseNoPadding } from "@oslojs/encoding";
 import { APP_PATH, configFilePath1, configFilePath2 } from "@server/lib/consts";
 

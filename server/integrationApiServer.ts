@@ -16,7 +16,7 @@ import { registry, openApiTags } from "./openApi";
 import fs from "fs";
 import path from "path";
 import { APP_PATH } from "./lib/consts";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import { z } from "zod";
 
 const dev = process.env.ENVIRONMENT !== "prod";

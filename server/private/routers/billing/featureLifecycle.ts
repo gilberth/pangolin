@@ -24,6 +24,7 @@ import {
     loginPageBrandingOrg,
     loginPageOrg,
     orgs,
+    resourcePolicies,
     resources,
     roles,
     siteResources,
@@ -31,9 +32,11 @@ import {
     siteProvisioningKeyOrg,
     siteProvisioningKeys,
     alertRules,
-    targetHealthCheck
+    targetHealthCheck,
+    customDnsRecords,
+    orgDomains
 } from "@server/db";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
 /**
  * Get the maximum allowed retention days for a given tier
@@ -295,10 +298,6 @@ async function disableFeature(
                 await disableAISessionLogs(orgId);
                 break;
 
-            case TierFeature.RotateCredentials:
-                await disableRotateCredentials(orgId);
-                break;
-
             case TierFeature.MaintenancePage:
                 await disablemaintenancePage(orgId);
                 break;
@@ -337,6 +336,10 @@ async function disableFeature(
 
             case TierFeature.StandaloneHealthChecks:
                 await disableStandaloneHealthChecks(orgId);
+                break;
+
+            case TierFeature.CustomDnsRecords:
+                await disableCustomDnsRecords(orgId);
                 break;
 
             default:
@@ -519,6 +522,27 @@ async function disablemaintenancePage(orgId: string): Promise<void> {
     logger.info(`Disabled maintenance page on all resources for org ${orgId}`);
 }
 
+// The uploaded CA certificates are kept so mTLS can be re-enabled on upgrade.
+async function disableMtls(orgId: string): Promise<void> {
+    await db
+        .update(resources)
+        .set({
+            mtlsEnabled: false
+        })
+        .where(eq(resources.orgId, orgId));
+
+    await db
+        .update(resourcePolicies)
+        .set({
+            mtlsEnabled: false
+        })
+        .where(eq(resourcePolicies.orgId, orgId));
+
+    logger.info(
+        `Disabled mTLS on all resources and resource policies for org ${orgId}`
+    );
+}
+
 async function disableDevicePosture(orgId: string): Promise<void> {}
 
 async function disableTwoFactorEnforcement(orgId: string): Promise<void> {
@@ -555,6 +579,25 @@ async function disableAlertingRules(orgId: string): Promise<void> {
         .where(eq(alertRules.orgId, orgId));
 
     logger.info(`Disabled all alert rules for org ${orgId}`);
+}
+
+async function disableCustomDnsRecords(orgId: string): Promise<void> {
+    // Records are kept (just stop being served) so re-subscribing restores
+    // them by re-enabling
+    await db
+        .update(customDnsRecords)
+        .set({ enabled: false, updatedAt: Date.now() })
+        .where(
+            inArray(
+                customDnsRecords.domainId,
+                db
+                    .select({ domainId: orgDomains.domainId })
+                    .from(orgDomains)
+                    .where(eq(orgDomains.orgId, orgId))
+            )
+        );
+
+    logger.info(`Disabled all custom DNS records for org ${orgId}`);
 }
 
 async function disableStandaloneHealthChecks(orgId: string): Promise<void> {

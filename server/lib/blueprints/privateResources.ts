@@ -11,15 +11,14 @@ import {
     siteNetworks,
     siteResources,
     Transaction,
-    userOrgs,
-    users,
     userSiteResources,
     networks
 } from "@server/db";
 import { sites } from "@server/db";
-import { eq, and, ne, inArray, or, isNotNull } from "drizzle-orm";
+import { eq, and, ne, inArray, isNotNull } from "drizzle-orm";
 import { Config } from "./types";
 import { getOrCreateLabelIds, syncSiteResourceLabels } from "./labels";
+import { resolveOrgUserIds } from "./findOrgUser";
 import logger from "@server/logger";
 import { defaultRoleAllowedActions } from "@server/routers/role/createRole";
 import { getNextAvailableAliasAddress } from "../ip";
@@ -260,6 +259,11 @@ export async function updatePrivateResources(
             }
 
             const isInference = resourceData.mode === "inference";
+            const isGateway = resourceData.mode === "gateway";
+            // gateway resources always route the whole subnet with everything open
+            const effectiveDestination = isGateway
+                ? "0.0.0.0/0"
+                : resourceData.destination;
 
             // Update existing resource
             const [updatedResource] = await trx
@@ -269,23 +273,28 @@ export async function updatePrivateResources(
                     mode: resourceData.mode,
                     ssl: resourceSsl,
                     scheme: resourceData.scheme,
-                    destination: resourceData.destination,
+                    destination: effectiveDestination,
                     destinationPort: resourceData["destination-port"],
                     enabled: resourceEnabled,
                     alias: resourceData.alias || null,
-                    disableIcmp:
-                        resourceData["disable-icmp"] ||
-                        (resourceData.mode == "http" || isInference
-                            ? true
-                            : false), // default to true for http/inference resources, otherwise false
+                    disableIcmp: isGateway
+                        ? false // gateway always allows icmp
+                        : resourceData["disable-icmp"] ||
+                          (resourceData.mode == "http" || isInference
+                              ? true
+                              : false), // default to true for http/inference resources, otherwise false
                     tcpPortRangeString:
                         resourceData.mode == "http" || isInference
                             ? "443,80"
-                            : resourceData["tcp-ports"],
+                            : isGateway
+                              ? "*"
+                              : resourceData["tcp-ports"],
                     udpPortRangeString:
                         resourceData.mode == "http" || isInference
                             ? ""
-                            : resourceData["udp-ports"],
+                            : isGateway
+                              ? "*"
+                              : resourceData["udp-ports"],
                     fullDomain: resourceData["full-domain"] || null,
                     subdomain: domainInfo ? domainInfo.subdomain : null,
                     domainId: domainInfo ? domainInfo.domainId : null,
@@ -389,28 +398,22 @@ export async function updatePrivateResources(
                 .where(eq(userSiteResources.siteResourceId, siteResourceId));
 
             if (resourceData.users.length > 0) {
-                // get userIds from username
-                const usersToUpdate = await trx
-                    .select()
-                    .from(users)
-                    .innerJoin(userOrgs, eq(users.userId, userOrgs.userId))
-                    .where(
-                        and(
-                            or(
-                                inArray(users.username, resourceData.users),
-                                inArray(users.email, resourceData.users)
-                            ),
-                            eq(userOrgs.orgId, orgId)
-                        )
-                    );
+                const userIds = await resolveOrgUserIds(
+                    trx,
+                    orgId,
+                    resourceData.users
+                );
 
-                const userIds = usersToUpdate.map((user) => user.user.userId);
-
-                await trx
-                    .insert(userSiteResources)
-                    .values(
-                        userIds.map((userId) => ({ userId, siteResourceId }))
-                    );
+                if (userIds.length > 0) {
+                    await trx
+                        .insert(userSiteResources)
+                        .values(
+                            userIds.map((userId) => ({
+                                userId,
+                                siteResourceId
+                            }))
+                        );
+                }
             }
 
             // Get all admin role IDs for this org to exclude from deletion
@@ -536,6 +539,11 @@ export async function updatePrivateResources(
             }
 
             const isInference = resourceData.mode === "inference";
+            const isGateway = resourceData.mode === "gateway";
+            // gateway resources always route the whole subnet with everything open
+            const effectiveDestination = isGateway
+                ? "0.0.0.0/0"
+                : resourceData.destination;
 
             let domainInfo:
                 | { subdomain: string | null; domainId: string }
@@ -597,24 +605,29 @@ export async function updatePrivateResources(
                     mode: resourceData.mode,
                     ssl: resourceSsl,
                     scheme: resourceData.scheme,
-                    destination: resourceData.destination,
+                    destination: effectiveDestination,
                     destinationPort: resourceData["destination-port"],
                     enabled: resourceEnabled,
                     alias: resourceData.alias || null,
                     aliasAddress: aliasAddress,
-                    disableIcmp:
-                        resourceData["disable-icmp"] ||
-                        (resourceData.mode == "http" || isInference
-                            ? true
-                            : false), // default to true for http/inference resources, otherwise false
+                    disableIcmp: isGateway
+                        ? false // gateway always allows icmp
+                        : resourceData["disable-icmp"] ||
+                          (resourceData.mode == "http" || isInference
+                              ? true
+                              : false), // default to true for http/inference resources, otherwise false
                     tcpPortRangeString:
                         resourceData.mode == "http" || isInference
                             ? "443,80"
-                            : resourceData["tcp-ports"],
+                            : isGateway
+                              ? "*"
+                              : resourceData["tcp-ports"],
                     udpPortRangeString:
                         resourceData.mode == "http" || isInference
                             ? ""
-                            : resourceData["udp-ports"],
+                            : isGateway
+                              ? "*"
+                              : resourceData["udp-ports"],
                     fullDomain: resourceData["full-domain"] || null,
                     subdomain: domainInfo ? domainInfo.subdomain : null,
                     domainId: domainInfo ? domainInfo.domainId : null,
@@ -721,28 +734,22 @@ export async function updatePrivateResources(
             }
 
             if (resourceData.users.length > 0) {
-                // get userIds from username
-                const usersToUpdate = await trx
-                    .select()
-                    .from(users)
-                    .innerJoin(userOrgs, eq(users.userId, userOrgs.userId))
-                    .where(
-                        and(
-                            or(
-                                inArray(users.username, resourceData.users),
-                                inArray(users.email, resourceData.users)
-                            ),
-                            eq(userOrgs.orgId, orgId)
-                        )
-                    );
+                const userIds = await resolveOrgUserIds(
+                    trx,
+                    orgId,
+                    resourceData.users
+                );
 
-                const userIds = usersToUpdate.map((user) => user.user.userId);
-
-                await trx
-                    .insert(userSiteResources)
-                    .values(
-                        userIds.map((userId) => ({ userId, siteResourceId }))
-                    );
+                if (userIds.length > 0) {
+                    await trx
+                        .insert(userSiteResources)
+                        .values(
+                            userIds.map((userId) => ({
+                                userId,
+                                siteResourceId
+                            }))
+                        );
+                }
             }
 
             if (resourceData.machines.length > 0) {

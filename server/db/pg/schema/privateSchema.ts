@@ -26,7 +26,9 @@ import {
     sites,
     clients,
     sessions,
-    labels
+    labels,
+    aiProviders,
+    virtualApiKeys
 } from "./schema";
 
 export const dnsChallenge = pgTable("dnsChallenges", {
@@ -38,6 +40,36 @@ export const dnsChallenge = pgTable("dnsChallenges", {
     expiresAt: bigint("expiresAt", { mode: "number" }).notNull(),
     completed: boolean("completed").default(false)
 });
+
+// User-defined records served by the authoritative DNS server for a domain
+// delegated to Pangolin (type "ns"). fullDomain is the lowercase FQDN without
+// a trailing dot, precomputed so the DNS server can look records up directly.
+export const customDnsRecords = pgTable(
+    "customDnsRecords",
+    {
+        customDnsRecordId: serial("customDnsRecordId").primaryKey(),
+        domainId: varchar("domainId")
+            .notNull()
+            .references(() => domains.domainId, { onDelete: "cascade" }),
+        name: varchar("name", { length: 255 }).notNull(), // relative to the domain, "@" for the apex
+        fullDomain: varchar("fullDomain", { length: 255 }).notNull(),
+        type: varchar("type", { length: 10 })
+            .$type<"A" | "AAAA" | "CNAME" | "MX" | "NS" | "SRV" | "TXT">()
+            .notNull(),
+        values: text("values").notNull(), // JSON array of strings, one resource record each
+        ttl: integer("ttl").notNull().default(300),
+        priority: integer("priority"), // MX and SRV
+        weight: integer("weight"), // SRV
+        port: integer("port"), // SRV
+        enabled: boolean("enabled").notNull().default(true),
+        createdAt: bigint("createdAt", { mode: "number" }).notNull(),
+        updatedAt: bigint("updatedAt", { mode: "number" }).notNull()
+    },
+    (t) => [
+        index("idx_customDnsRecords_fullDomain").on(t.fullDomain),
+        index("idx_customDnsRecords_domainId").on(t.domainId)
+    ]
+);
 
 export const account = pgTable("account", {
     accountId: serial("accountId").primaryKey(),
@@ -614,10 +646,92 @@ export const trialNotifications = pgTable("trialNotifications", {
     sentAt: bigint("sentAt", { mode: "number" }).notNull()
 });
 
+// Logs the aggregated prompt + response for a single AI gateway request, for
+// session replay. One row per request (not per streaming chunk). `sessionId`
+// is a fresh random id per row for now - no cross-request correlation yet,
+// but the column exists so a future pass can link multiple rows into a real
+// multi-turn session.
+export const aiSessionLog = pgTable(
+    "aiSessionLog",
+    {
+        id: serial("id").primaryKey(),
+        sessionId: varchar("sessionId").notNull(),
+        orgId: varchar("orgId").references(() => orgs.orgId, {
+            onDelete: "cascade"
+        }),
+        providerId: integer("providerId").references(
+            () => aiProviders.providerId,
+            { onDelete: "set null" }
+        ),
+        capability: varchar("capability").notNull(),
+        resourceId: integer("resourceId").references(
+            () => resources.resourceId,
+            { onDelete: "set null" }
+        ),
+        siteResourceId: integer("siteResourceId").references(
+            () => siteResources.siteResourceId,
+            { onDelete: "set null" }
+        ),
+        userId: varchar("userId").references(() => users.userId, {
+            onDelete: "set null"
+        }),
+        virtualApiKeyId: varchar("virtualApiKeyId").references(
+            () => virtualApiKeys.virtualApiKeyId,
+            { onDelete: "set null" }
+        ),
+        requestedModel: varchar("requestedModel"),
+        isStream: boolean("isStream").notNull().default(false),
+        requestBody: text("requestBody"),
+        responseBody: text("responseBody"),
+        // Capability-agnostic message transcript (JSON-encoded
+        // NormalizedAiMessage[] from server/lib/aiMessageNormalization.ts),
+        // computed at write time so search/display never need per-capability
+        // parsing logic. Null when normalization couldn't recognize the
+        // shape - callers fall back to requestBody/responseBody.
+        normalizedRequest: text("normalizedRequest"),
+        normalizedResponse: text("normalizedResponse"),
+        // True if any of the request/response (raw or normalized) fields
+        // were cut short at AI_SESSION_LOG_MAX_BODY_CHARS before storage.
+        truncated: boolean("truncated").notNull().default(false),
+        statusCode: integer("statusCode"),
+        createdAt: bigint("createdAt", { mode: "number" }).notNull() // epoch seconds
+    },
+    (t) => [
+        index("idx_ai_session_log_org_created").on(t.orgId, t.createdAt),
+        index("idx_ai_session_log_org_provider_created").on(
+            t.orgId,
+            t.providerId,
+            t.createdAt
+        ),
+        index("idx_ai_session_log_org_resource_created").on(
+            t.orgId,
+            t.resourceId,
+            t.createdAt
+        ),
+        index("idx_ai_session_log_org_site_resource_created").on(
+            t.orgId,
+            t.siteResourceId,
+            t.createdAt
+        ),
+        index("idx_ai_session_log_org_user_created").on(
+            t.orgId,
+            t.userId,
+            t.createdAt
+        ),
+        index("idx_ai_session_log_org_virtual_api_key_created").on(
+            t.orgId,
+            t.virtualApiKeyId,
+            t.createdAt
+        ),
+        index("idx_ai_session_log_session").on(t.sessionId)
+    ]
+);
+
 export type Approval = InferSelectModel<typeof approvals>;
 export type Limit = InferSelectModel<typeof limits>;
 export type Account = InferSelectModel<typeof account>;
 export type DnsChallenge = InferSelectModel<typeof dnsChallenge>;
+export type CustomDnsRecord = InferSelectModel<typeof customDnsRecords>;
 export type Customer = InferSelectModel<typeof customers>;
 export type Subscription = InferSelectModel<typeof subscriptions>;
 export type SubscriptionItem = InferSelectModel<typeof subscriptionItems>;
@@ -660,3 +774,4 @@ export type AlertEmailRecipients = InferSelectModel<
 >;
 export type AlertWebhookActions = InferSelectModel<typeof alertWebhookActions>;
 export type TrialNotification = InferSelectModel<typeof trialNotifications>;
+export type AiSessionLog = InferSelectModel<typeof aiSessionLog>;

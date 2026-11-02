@@ -2,7 +2,7 @@ import { db } from "@server/db/pg/driver";
 import { configFilePath1, configFilePath2 } from "@server/lib/consts";
 import { sql } from "drizzle-orm";
 import fs from "fs";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 
 const version = "1.6.0";
 

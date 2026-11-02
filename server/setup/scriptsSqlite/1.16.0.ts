@@ -4,7 +4,7 @@ import { generateCA } from "@server/lib/sshCA";
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 
 const version = "1.16.0";
 

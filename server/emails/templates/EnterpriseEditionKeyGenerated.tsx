@@ -20,6 +20,7 @@ type EnterpriseEditionKeyGeneratedProps = {
     personalUseOnly: boolean;
     users: number;
     sites: number;
+    machines: number;
     modifySubscriptionLink?: string;
 };
 
@@ -28,6 +29,7 @@ export const EnterpriseEditionKeyGenerated = ({
     personalUseOnly,
     users,
     sites,
+    machines,
     modifySubscriptionLink
 }: EnterpriseEditionKeyGeneratedProps) => {
     const previewText = personalUseOnly
@@ -69,6 +71,10 @@ export const EnterpriseEditionKeyGenerated = ({
                                         {
                                             label: "Licensed sites",
                                             value: sites
+                                        },
+                                        {
+                                            label: "Licensed machine clients",
+                                            value: machines
                                         }
                                     ]}
                                 />
@@ -93,9 +99,8 @@ export const EnterpriseEditionKeyGenerated = ({
                         </EmailSection>
 
                         <EmailText>
-                            If you need to purchase additional license keys or
-                            modify your existing license, please reach out to
-                            our support team at{" "}
+                            For any questions or concerns regarding your license
+                            or billing, please reach out to support at{" "}
                             <a
                                 href="mailto:support@pangolin.net"
                                 className="text-primary font-medium"

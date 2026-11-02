@@ -46,15 +46,28 @@ import { encrypt } from "@server/lib/crypto";
 import logger from "@server/logger";
 import { defaultRoleAllowedActions } from "@server/routers/role/createRole";
 import { pickPort } from "@server/routers/target/helpers";
-import { and, asc, eq, isNotNull, ne, or } from "drizzle-orm";
+import { and, asc, eq, isNotNull, ne } from "drizzle-orm";
 import { tierMatrix } from "../billing/tierMatrix";
-import { isValidCIDR, isValidIP, isValidUrlGlobPattern } from "../validators";
-import { Config, isTargetsOnlyResource, TargetData } from "./types";
+import {
+    isValidCIDR,
+    isValidHttpMethodList,
+    isValidIP,
+    isValidUrlGlobPattern,
+    parseHttpMethodList
+} from "../validators";
+import {
+    Config,
+    getBlueprintResourceMtls,
+    isTargetsOnlyResource,
+    TargetData
+} from "./types";
 import { getOrCreateLabelIds, syncResourceLabels } from "./labels";
+import { findOrgUsersByIdentifier } from "./findOrgUser";
 import { LimitId } from "../billing";
 import { usageService } from "../billing/usageService";
 import { syncInferenceAiConfig } from "./aiProviders";
 import { syncAiBudgets } from "./aiBudgets";
+import { clearMtls, syncMtlsCertificates } from "../mtls";
 
 export type PublicResourcesResults = {
     proxyResource: Resource;
@@ -96,7 +109,8 @@ export async function updatePublicResources(
 
         async function createTarget( // reusable function to create a target
             resourceId: number,
-            targetData: TargetData
+            targetData: TargetData,
+            resourceName: string
         ) {
             const targetSiteId = targetData.site;
             let site: Partial<Site> | undefined;
@@ -184,10 +198,14 @@ export async function updatePublicResources(
                 ? JSON.stringify(healthcheckData.headers)
                 : null;
 
+            const healthCheckName =
+                healthcheckData?.name ||
+                `Resource ${resourceName} - ${targetData.hostname}:${targetData.port}`;
+
             const [newHealthcheck] = await trx
                 .insert(targetHealthCheck)
                 .values({
-                    name: `${targetData.hostname}:${targetData.port}`,
+                    name: healthCheckName,
                     siteId: site.siteId!,
                     targetId: newTarget.targetId,
                     orgId: orgId,
@@ -254,10 +272,25 @@ export async function updatePublicResources(
             resourceData.ssl == undefined || resourceData.ssl == null
                 ? true
                 : resourceData.ssl;
-        let headers = "";
-        if (resourceData.headers) {
-            headers = JSON.stringify(resourceData.headers);
-        }
+        // `headers` and `requestHeaders` are deprecated aliases for
+        // `request-headers`; `responseHeaders` for `response-headers`
+        const mergedRequestHeaders = [
+            ...(resourceData.headers ?? []),
+            ...(resourceData.requestHeaders ?? []),
+            ...(resourceData["request-headers"] ?? [])
+        ];
+        const requestHeaders =
+            mergedRequestHeaders.length > 0
+                ? JSON.stringify(mergedRequestHeaders)
+                : null;
+        const mergedResponseHeaders = [
+            ...(resourceData.responseHeaders ?? []),
+            ...(resourceData["response-headers"] ?? [])
+        ];
+        const responseHeaders =
+            mergedResponseHeaders.length > 0
+                ? JSON.stringify(mergedResponseHeaders)
+                : null;
 
         if (resourceData.policy) {
             const isLicensed = await isLicensedOrSubscribed(
@@ -388,15 +421,22 @@ export async function updatePublicResources(
                                 resourceData.auth?.["auto-login-idp"] || null,
                             ssl: resourceSsl,
                             setHostHeader: resourceData["host-header"] || null,
+                            forwardIdentityHeaders:
+                                resourceData["forward-identity-headers"] ??
+                                true,
                             tlsServerName:
                                 resourceData["tls-server-name"] || null,
+                            loadBalancingStrategy:
+                                resourceData["load-balancing-strategy"] ??
+                                "wrr",
                             emailWhitelistEnabled: resourceData.auth?.[
                                 "whitelist-users"
                             ]
                                 ? resourceData.auth["whitelist-users"].length >
                                   0
                                 : false,
-                            headers: headers || null,
+                            requestHeaders,
+                            responseHeaders,
                             applyRules:
                                 resourceData.rules &&
                                 resourceData.rules.length > 0,
@@ -415,6 +455,8 @@ export async function updatePublicResources(
                                 resourceData.maintenance?.message,
                             maintenanceEstimatedTime:
                                 resourceData.maintenance?.["estimated-time"],
+                            mtlsEnabled:
+                                getBlueprintResourceMtls(resourceData)?.enabled,
                             proxyProtocol:
                                 resourceData.mode === "tcp"
                                     ? (resourceData["proxy-protocol"] ?? false)
@@ -551,6 +593,21 @@ export async function updatePublicResources(
                             trx
                         );
                     }
+
+                    const mtlsCaCertificates =
+                        getBlueprintResourceMtls(resourceData)?.[
+                            "ca-certificates"
+                        ];
+                    if (mtlsCaCertificates) {
+                        await syncMtlsCertificates(
+                            {
+                                type: "resource",
+                                resourceId: existingResource.resourceId
+                            },
+                            mtlsCaCertificates,
+                            trx
+                        );
+                    }
                 } else {
                     // INLINE POLICY MODE: ensure inline policy exists
                     const inlinePolicyId = await ensureInlinePolicy(
@@ -590,9 +647,16 @@ export async function updatePublicResources(
                             enabled: resourceEnabled,
                             ssl: resourceSsl,
                             setHostHeader: resourceData["host-header"] || null,
+                            forwardIdentityHeaders:
+                                resourceData["forward-identity-headers"] ??
+                                true,
                             tlsServerName:
                                 resourceData["tls-server-name"] || null,
-                            headers: headers || null,
+                            loadBalancingStrategy:
+                                resourceData["load-balancing-strategy"] ??
+                                "wrr",
+                            requestHeaders,
+                            responseHeaders,
                             maintenanceModeEnabled:
                                 resourceData.maintenance?.enabled,
                             maintenanceModeType: resourceData.maintenance?.type,
@@ -670,7 +734,14 @@ export async function updatePublicResources(
                                     resourceWhitelist.resourceId,
                                     existingResource.resourceId
                                 )
-                            )
+                            ),
+                        clearMtls(
+                            {
+                                type: "resource",
+                                resourceId: existingResource.resourceId
+                            },
+                            trx
+                        )
                     ]);
 
                     // Update inline policy auth fields and policy-level tables
@@ -832,9 +903,14 @@ export async function updatePublicResources(
                         ? JSON.stringify(healthcheckData.headers)
                         : null;
 
+                    const healthCheckName =
+                        healthcheckData?.name ||
+                        `Resource ${existingResource.name} - ${targetData.hostname}:${targetData.port}`;
+
                     const [newHealthcheck] = await trx
                         .update(targetHealthCheck)
                         .set({
+                            name: healthCheckName,
                             hcEnabled: healthcheckData?.enabled || false,
                             hcPath: healthcheckData?.path,
                             hcScheme: healthcheckData?.scheme,
@@ -897,7 +973,11 @@ export async function updatePublicResources(
                         );
                     }
                 } else {
-                    await createTarget(existingResource.resourceId, targetData);
+                    await createTarget(
+                        existingResource.resourceId,
+                        targetData,
+                        existingResource.name
+                    );
                 }
             }
 
@@ -1213,9 +1293,14 @@ export async function updatePublicResources(
                     wildcard: domain ? domain.wildcard : false,
                     enabled: resourceEnabled,
                     setHostHeader: resourceData["host-header"] || null,
+                    forwardIdentityHeaders:
+                        resourceData["forward-identity-headers"] ?? true,
                     tlsServerName: resourceData["tls-server-name"] || null,
+                    loadBalancingStrategy:
+                        resourceData["load-balancing-strategy"] ?? "wrr",
                     ssl: resourceSsl,
-                    headers: headers || null,
+                    requestHeaders,
+                    responseHeaders,
                     applyRules:
                         resourceData.rules && resourceData.rules.length > 0,
                     pamMode: resourceData["auth-daemon"]?.pam || "passthrough",
@@ -1252,7 +1337,10 @@ export async function updatePublicResources(
                                   : false,
                               applyRules:
                                   resourceData.rules &&
-                                  resourceData.rules.length > 0
+                                  resourceData.rules.length > 0,
+                              mtlsEnabled:
+                                  getBlueprintResourceMtls(resourceData)
+                                      ?.enabled
                           }
                         : {})
                 })
@@ -1370,6 +1458,19 @@ export async function updatePublicResources(
                     );
                 }
 
+                const mtlsCaCertificates =
+                    getBlueprintResourceMtls(resourceData)?.["ca-certificates"];
+                if (mtlsCaCertificates) {
+                    await syncMtlsCertificates(
+                        {
+                            type: "resource",
+                            resourceId: newResource.resourceId
+                        },
+                        mtlsCaCertificates,
+                        trx
+                    );
+                }
+
                 // Rules into OLD resourceRules table
                 for (const [index, rule] of resourceData.rules?.entries() ||
                     []) {
@@ -1408,7 +1509,11 @@ export async function updatePublicResources(
                     // If targetData is null or an empty object, we can skip it
                     continue;
                 }
-                await createTarget(newResource.resourceId, targetData);
+                await createTarget(
+                    newResource.resourceId,
+                    targetData,
+                    newResource.name
+                );
             }
 
             await usageService.add(orgId, LimitId.PUBLIC_RESOURCES, 1, trx);
@@ -1452,6 +1557,10 @@ function getRuleValue(match: string, value: string) {
     if (match === "COUNTRY" || match === "COUNTRY_IS_NOT") {
         return value.toUpperCase();
     }
+    // normalize the method list so it is stored as "POST,PUT"
+    if (match === "METHOD") {
+        return parseHttpMethodList(value).join(",");
+    }
     return value;
 }
 
@@ -1471,6 +1580,10 @@ function validateRule(rule: any) {
     } else if (rule.match === "region") {
         if (!isValidRegionId(rule.value)) {
             throw new Error(`Invalid region ID provided: ${rule.value}`);
+        }
+    } else if (rule.match === "method") {
+        if (!isValidHttpMethodList(rule.value)) {
+            throw new Error(`Invalid HTTP method provided: ${rule.value}`);
         }
     }
 }
@@ -1563,31 +1676,27 @@ async function syncUserResources(
         .where(eq(userResources.resourceId, resourceId));
 
     for (const username of ssoUsers) {
-        const [user] = await trx
-            .select()
-            .from(users)
-            .innerJoin(userOrgs, eq(users.userId, userOrgs.userId))
-            .where(
-                and(
-                    or(eq(users.username, username), eq(users.email, username)),
-                    eq(userOrgs.orgId, orgId)
-                )
-            )
-            .limit(1);
+        const matchedUsers = await findOrgUsersByIdentifier(
+            trx,
+            orgId,
+            username
+        );
 
-        if (!user) {
+        if (matchedUsers.length === 0) {
             throw new Error(`User not found: ${username} in org ${orgId}`);
         }
 
-        const existingUserResource = existingUserResources.find(
-            (rr) => rr.userId === user.user.userId
-        );
+        for (const user of matchedUsers) {
+            const existingUserResource = existingUserResources.find(
+                (rr) => rr.userId === user.userId
+            );
 
-        if (!existingUserResource) {
-            await trx.insert(userResources).values({
-                userId: user.user.userId,
-                resourceId: resourceId
-            });
+            if (!existingUserResource) {
+                await trx.insert(userResources).values({
+                    userId: user.userId,
+                    resourceId: resourceId
+                });
+            }
         }
     }
 
@@ -1707,7 +1816,9 @@ async function syncInlinePolicyAuth(
     resourceData: any,
     trx: Transaction
 ) {
-    // Update policy-level SSO/whitelist/applyRules fields
+    const mtls = getBlueprintResourceMtls(resourceData);
+
+    // Update policy-level SSO/whitelist/applyRules/mTLS fields
     await trx
         .update(resourcePolicies)
         .set({
@@ -1716,9 +1827,19 @@ async function syncInlinePolicyAuth(
             emailWhitelistEnabled: resourceData.auth?.["whitelist-users"]
                 ? resourceData.auth["whitelist-users"].length > 0
                 : false,
-            applyRules: !!(resourceData.rules && resourceData.rules.length > 0)
+            applyRules: !!(resourceData.rules && resourceData.rules.length > 0),
+            mtlsEnabled: mtls?.enabled
         })
         .where(eq(resourcePolicies.resourcePolicyId, policyId));
+
+    // mTLS trusted CAs → resourcePolicyMtlsCertificates
+    if (mtls?.["ca-certificates"]) {
+        await syncMtlsCertificates(
+            { type: "policy", resourcePolicyId: policyId },
+            mtls["ca-certificates"],
+            trx
+        );
+    }
 
     // Password
     await trx
@@ -1835,13 +1956,9 @@ async function syncInlinePolicyRules(
                     .update(resourcePolicyRules)
                     .set({
                         action: getRuleAction(rule.action) as
-                            | "ACCEPT"
-                            | "DROP"
-                            | "PASS",
+                            "ACCEPT" | "DROP" | "PASS",
                         match: rule.match.toUpperCase() as
-                            | "CIDR"
-                            | "IP"
-                            | "PATH",
+                            "CIDR" | "IP" | "PATH",
                         value: getRuleValue(
                             rule.match.toUpperCase(),
                             rule.value
@@ -1855,9 +1972,7 @@ async function syncInlinePolicyRules(
             await trx.insert(resourcePolicyRules).values({
                 resourcePolicyId: policyId,
                 action: getRuleAction(rule.action) as
-                    | "ACCEPT"
-                    | "DROP"
-                    | "PASS",
+                    "ACCEPT" | "DROP" | "PASS",
                 match: rule.match.toUpperCase() as "CIDR" | "IP" | "PATH",
                 value: getRuleValue(rule.match.toUpperCase(), rule.value),
                 priority: intendedPriority
@@ -1955,31 +2070,27 @@ async function syncUserPolicies(
         .where(eq(userPolicies.resourcePolicyId, policyId));
 
     for (const username of ssoUsers) {
-        const [user] = await trx
-            .select()
-            .from(users)
-            .innerJoin(userOrgs, eq(users.userId, userOrgs.userId))
-            .where(
-                and(
-                    or(eq(users.username, username), eq(users.email, username)),
-                    eq(userOrgs.orgId, orgId)
-                )
-            )
-            .limit(1);
+        const matchedUsers = await findOrgUsersByIdentifier(
+            trx,
+            orgId,
+            username
+        );
 
-        if (!user) {
+        if (matchedUsers.length === 0) {
             throw new Error(`User not found: ${username} in org ${orgId}`);
         }
 
-        const existingUserPolicy = existingUserPoliciesList.find(
-            (up) => up.userId === user.user.userId
-        );
+        for (const user of matchedUsers) {
+            const existingUserPolicy = existingUserPoliciesList.find(
+                (up) => up.userId === user.userId
+            );
 
-        if (!existingUserPolicy) {
-            await trx.insert(userPolicies).values({
-                userId: user.user.userId,
-                resourcePolicyId: policyId
-            });
+            if (!existingUserPolicy) {
+                await trx.insert(userPolicies).values({
+                    userId: user.userId,
+                    resourcePolicyId: policyId
+                });
+            }
         }
     }
 
@@ -2063,6 +2174,7 @@ function checkIfHealthcheckChanged(
     if (existing && !incoming) return true;
     if (!existing || !incoming) return false;
 
+    if (existing.name !== incoming.name) return true;
     if (existing.hcEnabled !== incoming.hcEnabled) return true;
     if (existing.hcPath !== incoming.hcPath) return true;
     if (existing.hcScheme !== incoming.hcScheme) return true;
