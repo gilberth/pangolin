@@ -396,7 +396,7 @@ rQIDAQAB
             // Invalidate old cache and set new cache
             this.licenseKeyCache.flushAll();
             for (const [key, value] of newCache.entries()) {
-                this.licenseKeyCache.set<LicenseKeyCache>(key, value);
+                this.licenseKeyCache.set(key, value);
             }
         } catch (error) {
             logger.error("Error checking license status:");
